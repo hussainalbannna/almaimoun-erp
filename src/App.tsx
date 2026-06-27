@@ -16,14 +16,13 @@ import LPOView from './pages/lpos/LPOView';
 import LPODeliveries from './pages/lpos/LPODeliveries';
 import SupplierList from './pages/suppliers/SupplierList';
 import SupplierForm from './pages/suppliers/SupplierForm';
-import SupplierFormEdit from './pages/suppliers/SupplierForm'; // لتفادي أي لخطبة في تعديل الموردين
 import CustomerList from './pages/customers/CustomerList';
 import CustomerForm from './pages/customers/CustomerForm';
 import ContactsDirectory from './pages/contacts/ContactsDirectory';
 import DocumentsPage from './pages/documents/DocumentsPage';
 import Settings from './pages/settings/Settings';
 import ProjectList from './pages/projects/ProjectList';
-import ProjectStatement from './pages/projects/ProjectForm'; // قلبنا ملف الفورم القديم ليكون كشف الحساب الرسمي للعميل
+import ProjectForm from './pages/projects/ProjectForm';
 import ProjectDetail from './pages/projects/ProjectDetail';
 import VOForm from './pages/projects/VOForm';
 import ReceiptList from './pages/receipts/ReceiptList';
@@ -56,10 +55,11 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="reports" element={<ReportsPage />} />
               
-              {/* Projects & Client Statements */}
+              {/* Projects */}
               <Route path="projects" element={<ProjectList />} />
+              <Route path="projects/new" element={<ProjectForm />} />
               <Route path="projects/:id" element={<ProjectDetail />} />
-              <Route path="projects/:id/edit" element={<ProjectStatement />} /> {/* تحويل رابط التعديل ليفتح كشف الحساب والطباعة مباشرة */}
+              <Route path="projects/:id/edit" element={<ProjectForm />} />
               <Route path="projects/:projectId/vos/new" element={<VOForm />} />
               
               {/* Invoices */}
