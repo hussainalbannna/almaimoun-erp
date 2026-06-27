@@ -5,14 +5,14 @@ import {
   AlertTriangle, CheckCircle, TrendingUp, TrendingDown, 
   DollarSign, Briefcase, Users, ShoppingCart, Layers
 } from 'lucide-react';
-import { supabase } from '../../../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import type { 
   Project, ProjectMilestone, VariationOrder, DailyLog 
-} from '../../../types';
-import { formatCurrency, formatDate } from '../../../lib/utils';
-import { Button } from '../../../components/ui/Button';
-import { Badge } from '../../../components/ui/Badge';
-import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
+} from '../../types';
+import { formatCurrency, formatDate } from '../../lib/utils';
+import { Button } from '../../components/ui/Button';
+import { Badge } from '../../components/ui/Badge';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { toast } from 'react-hot-toast';
 
 const MILESTONE_STATUS_LABELS: Record<string, string> = {
@@ -39,21 +39,17 @@ export default function ProjectDetail() {
   const [vos, setVos] = useState<VariationOrder[]>([]);
   const [logs, setLogs] = useState<DailyLog[]>([]);
   const [tab, setTab] = useState<'milestones' | 'vos' | 'logs'>('milestones');
-  const [deleteVo, setDeleteVo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // مصاريف وتكاليف حقيقية مربوطة بالقاعدة
   const [boxExpenses, setBoxExpenses] = useState<number>(0);
   const [purchaseInvoicesSum, setPurchaseInvoicesSum] = useState<number>(0);
   const [subcontractorAgreedSum, setSubcontractorAgreedSum] = useState<number>(0);
-  const [subcontractorPaidSum, setSubcontractorPaidSum] = useState<number>(0);
   const [workersSalaryShare, setWorkersSalaryShare] = useState<number>(0);
 
   const load = async () => {
     if (!id) return;
     setLoading(true);
     try {
-      // 1. جلب البيانات الأساسية للمشروع والمراحل والتغييرات والتقارير
       const [pRes, mRes, vRes, lRes] = await Promise.all([
         supabase.from('projects').select('*').eq('id', id).single(),
         supabase.from('project_milestones').select('*').eq('project_id', id).order('sort_order', { ascending: true }),
@@ -66,7 +62,6 @@ export default function ProjectDetail() {
       if (vRes.data) setVos(vRes.data as VariationOrder[]);
       if (lRes.data) setLogs(lRes.data as DailyLog[]);
 
-      // 2. جلب جميع مصاريف الصندوق (دفتر الصندوق) المربوطة بهذا المشروع
       const { data: expensesData } = await supabase
         .from('accounts_payable')
         .select('amount')
@@ -74,7 +69,6 @@ export default function ProjectDetail() {
       const totalBox = (expensesData || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
       setBoxExpenses(totalBox);
 
-      // 3. جلب فواتير المشتريات والشيكات المربوطة بالمشروع
       const { data: piData } = await supabase
         .from('purchase_invoices')
         .select('amount')
@@ -82,24 +76,19 @@ export default function ProjectDetail() {
       const totalPI = (piData || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
       setPurchaseInvoicesSum(totalPI);
 
-      // 4. جلب عقود ومدفوعات مقاولي الباطن (السباك، الكهربائي، الحفار)
       const { data: subAssignData } = await supabase
         .from('subcontractor_assignments')
-        .select('agreed_amount, paid_amount')
+        .select('agreed_amount')
         .eq('project_id', id);
       
       const totalSubAgreed = (subAssignData || []).reduce((sum, item) => sum + Number(item.agreed_amount || 0), 0);
-      const totalSubPaid = (subAssignData || []).reduce((sum, item) => sum + Number(item.paid_amount || 0), 0);
       setSubcontractorAgreedSum(totalSubAgreed);
-      setSubcontractorPaidSum(totalSubPaid);
 
-      // 5. حساب حصة أجور العمال من التقارير اليومية وحضورهم بالموقع (تقديري وحقيقي)
       const { data: attendanceData } = await supabase
         .from('worker_attendance')
         .select('worker_id')
         .eq('project_id', id);
       
-      // كلفة تقديرية بناءً على أيام عمل العمال في هذا الموقع (مثال 15 دينار يومية العامل)
       const totalWorkersCost = (attendanceData || []).length * 15; 
       setWorkersSalaryShare(totalWorkersCost);
 
@@ -176,23 +165,16 @@ export default function ProjectDetail() {
   if (loading) return <div className="p-12 text-center text-slate-400">جاري تحميل الحسابات المالية...</div>;
   if (!project) return <div className="p-12 text-center text-slate-400">المشروع غير موجود</div>;
 
-  // الحسبة الذهبية لصافي الأرباح والخسائر للمشروع
   const contractValue = Number(project.contract_value || 0);
   const approvedVOs = vos.filter(v => v.status === 'approved' && v.billable).reduce((sum, v) => sum + Number(v.amount || 0), 0);
-  const totalRevenue = contractValue + approvedVOs; // إجمالي الدخل المتوقع مع أوامر التغيير
+  const totalRevenue = contractValue + approvedVOs;
 
-  // إجمالي التكاليف الفعلية الخارجة من جيبك
   const totalExpenses = boxExpenses + purchaseInvoicesSum + subcontractorAgreedSum + workersSalaryShare;
   const netProfit = totalRevenue - totalExpenses;
   const isProfitable = netProfit >= 0;
 
-  // المبالغ المفوتر والمدفوعة من الزبون
-  const invoicedAmount = milestones.filter(m => ['invoiced', 'paid'].includes(m.status)).reduce((sum, m) => sum + Number(m.amount || 0), 0);
-  const paidAmount = milestones.filter(m => m.status === 'paid').reduce((sum, m) => sum + Number(m.amount || 0), 0);
-
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-6 select-text">
-      {/* الهيدر */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/projects')} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg">
@@ -206,7 +188,6 @@ export default function ProjectDetail() {
         <Button variant="secondary" icon={<Edit size={16} />} onClick={() => navigate(`/projects/${id}/edit`)}>تعديل المشروع</Button>
       </div>
 
-      {/* لوحة الربحية وصافي الأرباح الفعلي */}
       <div className={`p-5 rounded-2xl border text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 ${isProfitable ? 'bg-gradient-to-r from-emerald-600 to-teal-600 border-emerald-500' : 'bg-gradient-to-r from-rose-600 to-red-600 border-rose-500'}`}>
         <div className="space-y-1">
           <div className="text-xs text-white/80 font-medium">صافي ربح / خسارة المشروع الفعلي</div>
@@ -228,7 +209,6 @@ export default function ProjectDetail() {
         </div>
       </div>
 
-      {/* بطاقات تفصيل التكاليف والدفعات */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
           <div className="text-xs text-slate-400 flex items-center gap-1"><DollarSign size={14} /> قيمة العقد الأصلي</div>
@@ -248,7 +228,6 @@ export default function ProjectDetail() {
         </div>
       </div>
 
-      {/* التبويبات والمحتوى الأسفل */}
       <div className="flex gap-2 p-1 bg-slate-100 rounded-xl w-fit">
         {(['milestones', 'vos', 'logs'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${tab === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>
@@ -257,7 +236,6 @@ export default function ProjectDetail() {
         ))}
       </div>
 
-      {/* محتوى التبويب المختار */}
       <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
         {tab === 'milestones' && (
           <div className="overflow-x-auto">
