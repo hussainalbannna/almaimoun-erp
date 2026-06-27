@@ -1,3 +1,6 @@
+// ═══════════════════════════════════════════
+//  إعدادات الشركة
+// ═══════════════════════════════════════════
 export interface CompanySettings {
   id: string
   name: string
@@ -21,6 +24,9 @@ export interface CompanySettings {
   updated_at: string
 }
 
+// ═══════════════════════════════════════════
+//  الموردون والعملاء
+// ═══════════════════════════════════════════
 export interface Supplier {
   id: string
   name: string
@@ -57,6 +63,9 @@ export interface Customer {
   updated_at: string
 }
 
+// ═══════════════════════════════════════════
+//  الفواتير
+// ═══════════════════════════════════════════
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled'
 
 export interface InvoiceItem {
@@ -95,6 +104,9 @@ export interface Invoice {
   items?: InvoiceItem[]
 }
 
+// ═══════════════════════════════════════════
+//  أوامر الشراء LPO
+// ═══════════════════════════════════════════
 export type LPOStatus = 'draft' | 'sent' | 'approved' | 'received' | 'cancelled'
 
 export interface LPOItem {
@@ -129,6 +141,7 @@ export interface LPO {
   payment_terms: string
   payment_type: string
   check_due_date: string | null
+  payment_due_date: string | null
   delivery_address: string
   created_at: string
   updated_at: string
@@ -154,6 +167,9 @@ export interface LPODeliveryItem {
   quantity_delivered: number
 }
 
+// ═══════════════════════════════════════════
+//  المستندات والذكاء الاصطناعي
+// ═══════════════════════════════════════════
 export interface Document {
   id: string
   name: string
@@ -198,8 +214,18 @@ export interface ExtractedDocumentData {
   client_phone?: string
   client_cpr?: string
   milestones?: Array<{ name: string; amount: number; percentage: number }>
+  // حقول العامل (لقراءة الهوية/الجواز تلقائياً)
+  cpr?: string
+  cpr_expiry?: string
+  passport_number?: string
+  passport_expiry?: string
+  nationality?: string
+  iban?: string
 }
 
+// ═══════════════════════════════════════════
+//  المشاريع
+// ═══════════════════════════════════════════
 export type ProjectStatus = 'active' | 'completed' | 'on_hold' | 'cancelled'
 
 export interface Project {
@@ -212,9 +238,16 @@ export interface Project {
   project_name: string
   location: string
   contract_value: number
+  estimated_cost: number
   start_date: string | null
   end_date: string | null
+  handover_date: string | null
+  warranty_months: number
   status: ProjectStatus
+  soil_type: string
+  building_permit: string
+  consultant_name: string
+  consultant_phone: string
   notes: string
   created_at: string
   updated_at: string
@@ -236,6 +269,9 @@ export interface ProjectMilestone {
   created_at: string
 }
 
+// ═══════════════════════════════════════════
+//  الإيصالات
+// ═══════════════════════════════════════════
 export interface Receipt {
   id: string
   receipt_number: string
@@ -256,6 +292,9 @@ export interface Receipt {
   updated_at: string
 }
 
+// ═══════════════════════════════════════════
+//  العمال
+// ═══════════════════════════════════════════
 export type WorkerType = 'company' | 'lmra'
 export type PayType = 'monthly' | 'daily'
 
@@ -264,6 +303,9 @@ export interface Worker {
   name: string
   name_en: string
   cpr: string
+  cpr_expiry: string | null
+  passport_number: string
+  passport_expiry: string | null
   nationality: string
   profession: string
   phone: string
@@ -275,10 +317,15 @@ export interface Worker {
   social_allowance: number
   actual_salary: number
   daily_rate: number
+  annual_leave_days: number
+  used_leave_days: number
   join_date: string | null
+  end_of_service_date: string | null
   visa_expiry: string | null
-  cpr_expiry: string | null
   status: 'active' | 'inactive'
+  emergency_name: string
+  emergency_phone: string
+  emergency_relation: string
   id_photo_url: string
   notes: string
   created_at: string
@@ -370,6 +417,23 @@ export interface WorkerDisciplinary {
   created_at: string
 }
 
+export type LeaveType = 'annual' | 'sick' | 'emergency' | 'unpaid' | 'hajj'
+
+export interface LeaveRequest {
+  id: string
+  worker_id: string
+  leave_type: LeaveType
+  start_date: string
+  end_date: string
+  days: number
+  status: 'pending' | 'approved' | 'rejected'
+  notes: string
+  created_at: string
+}
+
+// ═══════════════════════════════════════════
+//  التقارير اليومية
+// ═══════════════════════════════════════════
 export interface DailyLog {
   id: string
   project_id: string
@@ -377,6 +441,9 @@ export interface DailyLog {
   description: string
   material_requests: string
   inspector_meeting: boolean
+  weather: string
+  workers_count: number
+  converted_to_lpo: boolean
   photos: string[]
   additional_notes: string
   created_at: string
@@ -384,6 +451,9 @@ export interface DailyLog {
   workers?: Worker[]
 }
 
+// ═══════════════════════════════════════════
+//  أوامر التغيير
+// ═══════════════════════════════════════════
 export interface VariationOrder {
   id: string
   project_id: string
@@ -397,6 +467,9 @@ export interface VariationOrder {
   created_at: string
 }
 
+// ═══════════════════════════════════════════
+//  دفتر الصندوق
+// ═══════════════════════════════════════════
 export interface AccountsPayableEntry {
   id: string
   entry_date: string
@@ -412,6 +485,9 @@ export interface AccountsPayableEntry {
   created_at: string
 }
 
+// ═══════════════════════════════════════════
+//  فواتير المشتريات
+// ═══════════════════════════════════════════
 export type PurchasePaymentMethod = 'cash' | 'bank_transfer' | 'deferred_cheque'
 
 export interface PurchaseInvoice {
@@ -441,4 +517,122 @@ export interface PurchaseInvoiceDelivery {
   delivery_image_data: string
   notes: string
   created_at?: string
+}
+
+// ═══════════════════════════════════════════
+//  المقاولون من الباطن (جديد)
+// ═══════════════════════════════════════════
+export type SubcontractorSpecialty = 'excavation' | 'electrical' | 'plumbing' | 'finishing' | 'tiles' | 'other'
+
+export interface Subcontractor {
+  id: string
+  name: string
+  specialty: SubcontractorSpecialty
+  phone: string
+  whatsapp: string
+  cr_number: string
+  bank_iban: string
+  notes: string
+  status: 'active' | 'inactive'
+  created_at: string
+  updated_at: string
+}
+
+export interface SubcontractorAssignment {
+  id: string
+  subcontractor_id: string
+  project_id: string | null
+  project_name: string
+  scope: string
+  agreed_amount: number
+  paid_amount: number
+  start_date: string | null
+  end_date: string | null
+  status: 'active' | 'completed' | 'cancelled'
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SubcontractorPayment {
+  id: string
+  assignment_id: string
+  subcontractor_id: string
+  project_id: string | null
+  amount: number
+  payment_date: string
+  payment_method: 'cash' | 'bank_transfer' | 'cheque'
+  check_due_date: string | null
+  check_number: string
+  notes: string
+  created_at: string
+}
+
+// ═══════════════════════════════════════════
+//  الأصول والمعدات (جديد)
+// ═══════════════════════════════════════════
+export type AssetType = 'vehicle' | 'equipment' | 'scaffolding' | 'tool' | 'other'
+
+export interface Asset {
+  id: string
+  name: string
+  asset_type: AssetType
+  plate_number: string
+  serial_number: string
+  purchase_date: string | null
+  purchase_value: number
+  current_project_id: string | null
+  current_location: string
+  status: 'available' | 'in_use' | 'maintenance' | 'retired'
+  insurance_expiry: string | null
+  registration_expiry: string | null
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AssetMovement {
+  id: string
+  asset_id: string
+  project_id: string | null
+  project_name: string
+  from_location: string
+  to_location: string
+  movement_date: string
+  moved_by: string
+  notes: string
+  created_at: string
+}
+
+// ═══════════════════════════════════════════
+//  مواد العميل (جديد)
+// ═══════════════════════════════════════════
+export interface ClientMaterial {
+  id: string
+  project_id: string
+  material_name: string
+  quantity: number
+  unit: string
+  received: boolean
+  received_date: string | null
+  notes: string
+  created_at: string
+}
+
+// ═══════════════════════════════════════════
+//  قائمة ما قبل التسليم Punch List (جديد)
+// ═══════════════════════════════════════════
+export interface PunchListItem {
+  id: string
+  project_id: string
+  description: string
+  location: string
+  raised_by: string
+  raised_date: string
+  due_date: string | null
+  status: 'open' | 'in_progress' | 'resolved'
+  resolved_date: string | null
+  notes: string
+  created_at: string
+  updated_at: string
 }
