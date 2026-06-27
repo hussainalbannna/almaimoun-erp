@@ -1,18 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { 
-  ArrowLeft, Plus, FileText, Edit, Trash2, 
-  AlertTriangle, CheckCircle, TrendingUp, TrendingDown, 
-  DollarSign, Briefcase, Users, ShoppingCart, Layers
+  ArrowLeft, Plus, FileText, Edit, 
+  TrendingUp, TrendingDown, 
+  DollarSign, Briefcase, Users, ShoppingCart
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import type { 
   Project, ProjectMilestone, VariationOrder, DailyLog 
 } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/utils';
-import { Button } from '../../components/ui/Button';
-import { Badge } from '../../components/ui/Badge';
-import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import Button from '../../components/ui/Button';
+import Badge from '../../components/ui/Badge';
 import { toast } from 'react-hot-toast';
 
 const MILESTONE_STATUS_LABELS: Record<string, string> = {
@@ -185,7 +184,7 @@ export default function ProjectDetail() {
             <p className="text-sm text-slate-500">{project.client_name} - {project.location}</p>
           </div>
         </div>
-        <Button variant="secondary" icon={<Edit size={16} />} onClick={() => navigate(`/projects/${id}/edit`)}>تعديل المشروع</Button>
+        <Button variant="secondary" onClick={() => navigate(`/projects/${id}/edit`)}>تعديل المشروع</Button>
       </div>
 
       <div className={`p-5 rounded-2xl border text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 ${isProfitable ? 'bg-gradient-to-r from-emerald-600 to-teal-600 border-emerald-500' : 'bg-gradient-to-r from-rose-600 to-red-600 border-rose-500'}`}>
@@ -257,9 +256,9 @@ export default function ProjectDetail() {
                       <Badge color={MILESTONE_STATUS_COLORS[m.status] || 'gray'}>{MILESTONE_STATUS_LABELS[m.status] || m.status}</Badge>
                     </td>
                     <td className="p-3 flex gap-2">
-                      {m.status === 'pending' && <Button size="sm" onClick={() => updateMilestoneStatus(m.id, 'in_progress')}>تفعيل جاري</Button>}
-                      {m.status === 'in_progress' && <Button size="sm" onClick={() => updateMilestoneStatus(m.id, 'completed')}>اكتمال المرحلة</Button>}
-                      {m.status === 'completed' && <Button size="sm" icon={<Plus size={12} />} onClick={() => generateInvoice(m)}>إصدار الفاتورة</Button>}
+                      {m.status === 'pending' && <Button onClick={() => updateMilestoneStatus(m.id, 'in_progress')}>تفعيل جاري</Button>}
+                      {m.status === 'in_progress' && <Button onClick={() => updateMilestoneStatus(m.id, 'completed')}>اكتمال المرحلة</Button>}
+                      {m.status === 'completed' && <Button onClick={() => generateInvoice(m)}>إصدار الفاتورة</Button>}
                       {m.invoice_id && <Link to={`/invoices/${m.invoice_id}/view`} className="p-1.5 text-xs bg-blue-50 text-blue-600 rounded-lg flex items-center gap-1"><FileText size={14} /> عرض الفاتورة</Link>}
                     </td>
                   </tr>
@@ -273,7 +272,7 @@ export default function ProjectDetail() {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="font-bold text-slate-700">أوامر التغيير الإضافية</h3>
-              <Button size="sm" icon={<Plus size={14} />} onClick={() => navigate(`/projects/${id}/vos/new`)}>إضافة أمر تغيير جديد</Button>
+              <Button onClick={() => navigate(`/projects/${id}/vos/new`)}>إضافة أمر تغيير جديد</Button>
             </div>
             {vos.length === 0 ? (
               <p className="text-center text-slate-400 p-6 text-xs">لا توجد أوامر تغيير مسجلة لهذا المشروع</p>
