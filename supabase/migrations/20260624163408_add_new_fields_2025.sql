@@ -1,0 +1,6 @@
+
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS visa_expiry DATE;
+ALTER TABLE lpos ADD COLUMN IF NOT EXISTS check_due_date DATE;
+ALTER TABLE accounts_payable ADD COLUMN IF NOT EXISTS expense_type TEXT DEFAULT 'general';
+ALTER TABLE accounts_payable ADD COLUMN IF NOT EXISTS receipt_url TEXT DEFAULT '';
+ALTER TABLE lpos ADD COLUMN IF NOT EXISTS payment_due_date DATE;

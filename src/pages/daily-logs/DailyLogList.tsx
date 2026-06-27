@@ -1,0 +1,857 @@
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp } from 'lucide-react'
+import { supabase } from '../../lib/supabase'
+import type { DailyLog, Project, Worker } from '../../types'
+import { formatDate } from '../../lib/utils'
+import Button from '../../components/ui/Button'
+import Input from '../../components/ui/Input'
+import Select from '../../components/ui/Select'
+import Textarea from '../../components/ui/Textarea'
+import ConfirmDialog from '../../components/ui/ConfirmDialog'
+import toast from 'react-hot-toast'
+
+const EMPTY_FORM = (projectId = '') => ({
+  project_id: projectId,
+  log_date: new Date().toISOString().slice(0, 10),
+  description: '',
+  material_requests: '',
+  inspector_meeting: false,
+  additional_notes: '',
+  photos: [] as string[],
+})
+
+// ─── Print document generator ──────────────────────────────────────────────
+
+type PrintLog = DailyLog & { project_name?: string; worker_names?: string[] }
+
+function buildPrintHTML(logs: PrintLog[]): string {
+  const formatArabicDate = (d: string) => {
+    try {
+      return new Date(d).toLocaleDateString('ar-SA', {
+        year: 'numeric', month: 'long', day: 'numeric',
+      })
+    } catch { return d }
+  }
+
+  const photoGrid = (photos: string[]) => {
+    if (!photos?.length) return ''
+    const items = photos.map(src => `
+      <div style="break-inside:avoid;aspect-ratio:1;overflow:hidden;border-radius:6px;border:1px solid #e2e8f0;">
+        <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
+      </div>`).join('')
+    return `
+      <div class="section">
+        <div class="section-title">صور الموقع</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px;">
+          ${items}
+        </div>
+      </div>`
+  }
+
+  const logCards = logs.map((log, i) => `
+    <div class="report-card" ${i > 0 ? 'style="page-break-before:always;"' : ''}>
+      <!-- Corporate header -->
+      <div class="corp-header">
+        <div class="corp-title">مؤسسة الميمون للمقاولات</div>
+        <div class="corp-subtitle">Almaimoun Construction Est.</div>
+        <div class="doc-type">تقرير يومي للموقع</div>
+      </div>
+
+      <!-- Meta row -->
+      <div class="meta-row">
+        <div class="meta-item">
+          <span class="meta-label">التاريخ</span>
+          <span class="meta-value">${formatArabicDate(log.log_date)}</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">المشروع / العميل</span>
+          <span class="meta-value">${log.project_name ?? '—'}</span>
+        </div>
+        ${log.inspector_meeting ? `
+        <div class="meta-item">
+          <span class="meta-label">الاستشاري</span>
+          <span class="meta-value badge">تنسيق موعد فحص</span>
+        </div>` : ''}
+      </div>
+
+      <!-- Tasks description -->
+      <div class="section">
+        <div class="section-title">وصف الأعمال المنجزة</div>
+        <div class="section-body">${(log.description ?? '').replace(/\n/g, '<br/>')}</div>
+      </div>
+
+      ${log.material_requests ? `
+      <div class="section">
+        <div class="section-title">طلبات المواد</div>
+        <div class="section-body">${log.material_requests.replace(/\n/g, '<br/>')}</div>
+      </div>` : ''}
+
+      <!-- Workers list -->
+      ${(log.worker_names?.length ?? 0) > 0 ? `
+      <div class="section">
+        <div class="section-title">العمال المتواجدون في الموقع (${log.worker_names!.length})</div>
+        <div class="workers-grid">
+          ${log.worker_names!.map(n => `<div class="worker-chip">${n}</div>`).join('')}
+        </div>
+      </div>` : ''}
+
+      <!-- Additional notes -->
+      ${log.additional_notes ? `
+      <div class="section">
+        <div class="section-title">ملاحظات إضافية</div>
+        <div class="section-body notes-body">${log.additional_notes.replace(/\n/g, '<br/>')}</div>
+      </div>` : ''}
+
+      <!-- Photos -->
+      ${photoGrid(log.photos ?? [])}
+
+      <!-- Footer -->
+      <div class="footer">
+        <div>توقيع مشرف الموقع: ___________________________</div>
+        <div>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-SA')}</div>
+      </div>
+    </div>`).join('')
+
+  return `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>تقرير يومي — مؤسسة الميمون للمقاولات</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Cairo', 'Segoe UI', Arial, sans-serif;
+      direction: rtl;
+      background: #fff;
+      color: #1e293b;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .report-card {
+      max-width: 794px;
+      margin: 0 auto;
+      padding: 32px 40px 40px;
+    }
+
+    /* Corporate header */
+    .corp-header {
+      text-align: center;
+      border-bottom: 3px solid #1e3a5f;
+      padding-bottom: 18px;
+      margin-bottom: 22px;
+    }
+    .corp-title {
+      font-size: 24px;
+      font-weight: 800;
+      color: #1e3a5f;
+      letter-spacing: -0.5px;
+    }
+    .corp-subtitle {
+      font-size: 12px;
+      color: #64748b;
+      margin-top: 2px;
+      letter-spacing: 1px;
+    }
+    .doc-type {
+      display: inline-block;
+      margin-top: 10px;
+      background: #1e3a5f;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 20px;
+      border-radius: 20px;
+    }
+
+    /* Meta row */
+    .meta-row {
+      display: flex;
+      gap: 0;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+    .meta-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 10px 14px;
+      border-left: 1px solid #e2e8f0;
+    }
+    .meta-item:last-child { border-left: none; }
+    .meta-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 3px;
+    }
+    .meta-value {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+    .badge {
+      display: inline-block;
+      background: #dbeafe;
+      color: #1d4ed8;
+      padding: 1px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    /* Sections */
+    .section {
+      margin-bottom: 18px;
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: #1e3a5f;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      border-bottom: 1.5px solid #e2e8f0;
+      padding-bottom: 5px;
+      margin-bottom: 8px;
+    }
+    .section-body {
+      font-size: 13px;
+      color: #334155;
+      line-height: 1.75;
+      background: #f8fafc;
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+    .notes-body {
+      background: #fefce8;
+      border-right: 3px solid #eab308;
+    }
+
+    /* Workers */
+    .workers-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .worker-chip {
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    /* Footer */
+    .footer {
+      margin-top: 32px;
+      padding-top: 14px;
+      border-top: 1px dashed #cbd5e1;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+
+    /* Print overrides */
+    @media print {
+      @page { margin: 15mm 12mm; }
+      html, body { background: white !important; margin: 0; }
+      .report-card { padding: 0; max-width: 100%; }
+      .corp-title { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+  ${logCards}
+</body>
+</html>`
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
+
+export default function DailyLogList() {
+  const [searchParams] = useSearchParams()
+  const prefillProject = searchParams.get('project') ?? ''
+  const printRef = useRef<HTMLDivElement>(null)
+
+  const [projects, setProjects] = useState<Project[]>([])
+  const [workers, setWorkers] = useState<Worker[]>([])
+  const [logs, setLogs] = useState<(DailyLog & { project_name?: string })[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filterProject, setFilterProject] = useState(prefillProject)
+  const [showForm, setShowForm] = useState(!!prefillProject)
+  const [saving, setSaving] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [selectedWorkers, setSelectedWorkers] = useState<string[]>([])
+  const [expandedLog, setExpandedLog] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const photoInputRef = useRef<HTMLInputElement>(null)
+
+  const [form, setForm] = useState(EMPTY_FORM(prefillProject))
+
+  const load = async () => {
+    setLoading(true)
+    const [pRes, wRes, lRes] = await Promise.all([
+      supabase.from('projects').select('id, project_name').order('project_name'),
+      supabase.from('workers').select('id, name, branch').eq('status', 'active').order('name'),
+      supabase.from('daily_logs').select('*').order('log_date', { ascending: false }).limit(200),
+    ])
+    const ps = (pRes.data ?? []) as Project[]
+    setProjects(ps)
+    setWorkers((wRes.data ?? []) as Worker[])
+    const logData = (lRes.data ?? []) as DailyLog[]
+    setLogs(logData.map(l => ({ ...l, project_name: ps.find(p => p.id === l.project_id)?.project_name })))
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const resetForm = () => {
+    setForm(EMPTY_FORM(prefillProject))
+    setSelectedWorkers([])
+    setEditingId(null)
+    setShowForm(false)
+  }
+
+  const openEdit = async (log: DailyLog) => {
+    setForm({
+      project_id: log.project_id,
+      log_date: log.log_date,
+      description: log.description,
+      material_requests: log.material_requests ?? '',
+      inspector_meeting: log.inspector_meeting ?? false,
+      additional_notes: log.additional_notes ?? '',
+      photos: log.photos ?? [],
+    })
+    const { data } = await supabase.from('daily_log_workers').select('worker_id').eq('log_id', log.id)
+    setSelectedWorkers((data ?? []).map((r: { worker_id: string }) => r.worker_id))
+    setEditingId(log.id)
+    setShowForm(true)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // ── Photo handling ──────────────────────────────────────────────────────
+
+  const fileToDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => reject(new Error('فشل قراءة الملف'))
+      reader.readAsDataURL(file)
+    })
+
+  const handlePhotoFiles = async (files: FileList | File[]) => {
+    const accepted = Array.from(files).filter(f => f.type.startsWith('image/'))
+    if (accepted.length === 0) return
+    setPhotoUploading(true)
+    try {
+      const dataUrls = await Promise.all(accepted.map(fileToDataUrl))
+      setForm(prev => ({ ...prev, photos: [...prev.photos, ...dataUrls] }))
+    } catch {
+      toast.error('حدث خطأ أثناء معالجة الصور')
+    } finally {
+      setPhotoUploading(false)
+    }
+  }
+
+  const removePhoto = (idx: number) => {
+    setForm(prev => ({ ...prev, photos: prev.photos.filter((_, i) => i !== idx) }))
+  }
+
+  // ── Save / Delete ───────────────────────────────────────────────────────
+
+  const syncAttendance = async (logId: string, logDate: string, projectId: string, workerIds: string[]) => {
+    const projectName = projects.find(p => p.id === projectId)?.project_name ?? ''
+    // Remove old auto-attendance records for this log
+    await supabase.from('worker_attendance').delete().eq('log_id', logId)
+    // Insert attendance records for each selected worker
+    if (workerIds.length > 0) {
+      const records = workerIds.map(wid => ({
+        worker_id: wid,
+        attendance_date: logDate,
+        status: 'present' as const,
+        project_id: projectId,
+        project_name: projectName,
+        source: 'auto_log' as const,
+        log_id: logId,
+        notes: '',
+      }))
+      await supabase.from('worker_attendance').upsert(records, { onConflict: 'worker_id,attendance_date' })
+    }
+  }
+
+  const handleSave = async () => {
+    if (!form.project_id) { toast.error('يجب اختيار المشروع'); return }
+    if (!form.description.trim()) { toast.error('يجب إدخال وصف الأعمال'); return }
+    setSaving(true)
+    try {
+      const payload = {
+        project_id: form.project_id,
+        log_date: form.log_date,
+        description: form.description,
+        material_requests: form.material_requests,
+        inspector_meeting: form.inspector_meeting,
+        additional_notes: form.additional_notes,
+        photos: form.photos,
+      }
+      let logId: string
+      if (editingId) {
+        const { error } = await supabase.from('daily_logs').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editingId)
+        if (error) throw error
+        logId = editingId
+        await supabase.from('daily_log_workers').delete().eq('log_id', logId)
+      } else {
+        const { data, error } = await supabase.from('daily_logs').insert(payload).select().single()
+        if (error) throw error
+        logId = (data as DailyLog).id
+      }
+      for (const wid of selectedWorkers) {
+        await supabase.from('daily_log_workers').insert({ log_id: logId, worker_id: wid })
+      }
+      // Auto-sync attendance records
+      await syncAttendance(logId, form.log_date, form.project_id, selectedWorkers)
+      toast.success(editingId ? 'تم تحديث التقرير' : 'تم تسجيل التقرير اليومي')
+      resetForm()
+      load()
+    } catch {
+      toast.error('حدث خطأ أثناء الحفظ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setDeletingId(deleteTarget)
+    setDeleteTarget(null)
+    const { error } = await supabase.from('daily_logs').delete().eq('id', deleteTarget)
+    if (error) {
+      toast.error('حدث خطأ أثناء الحذف')
+    } else {
+      toast.success('تم حذف التقرير')
+      setLogs(prev => prev.filter(l => l.id !== deleteTarget))
+    }
+    setDeletingId(null)
+  }
+
+  // ── Print ───────────────────────────────────────────────────────────────
+
+  const resolveWorkerNames = async (logId: string): Promise<string[]> => {
+    const { data } = await supabase
+      .from('daily_log_workers')
+      .select('worker_id')
+      .eq('log_id', logId)
+    if (!data?.length) return []
+    const ids = data.map((r: { worker_id: string }) => r.worker_id)
+    return workers.filter(w => ids.includes(w.id)).map(w => w.name)
+  }
+
+  const openPrintWindow = (html: string) => {
+    // Create a hidden iframe — avoids popup blockers entirely
+    const iframe = document.createElement('iframe')
+    iframe.setAttribute('aria-hidden', 'true')
+    iframe.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none;'
+    document.body.appendChild(iframe)
+
+    const doc = iframe.contentDocument ?? iframe.contentWindow?.document
+    if (!doc) { document.body.removeChild(iframe); return }
+
+    doc.open()
+    doc.write(html)
+    doc.close()
+
+    const cleanup = () => {
+      if (document.body.contains(iframe)) document.body.removeChild(iframe)
+    }
+
+    // Inject a parent-level @media print rule that hides the app shell
+    // so if any browser decides to print the outer page, only the iframe shows.
+    const parentStyle = document.createElement('style')
+    parentStyle.id = '__print_guard__'
+    parentStyle.textContent = `@media print { body > *:not(iframe[aria-hidden]) { display: none !important; } }`
+    document.head.appendChild(parentStyle)
+
+    const removeGuard = () => {
+      document.getElementById('__print_guard__')?.remove()
+    }
+
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus()
+        iframe.contentWindow?.print()
+
+        // afterprint fires when the print dialog closes (all modern browsers)
+        const iframeWin = iframe.contentWindow
+        if (iframeWin) {
+          const onAfter = () => { cleanup(); removeGuard(); iframeWin.removeEventListener('afterprint', onAfter) }
+          iframeWin.addEventListener('afterprint', onAfter)
+        }
+        // Belt-and-suspenders: clean up after 2 min in case afterprint never fires
+        setTimeout(() => { cleanup(); removeGuard() }, 120_000)
+      } catch {
+        cleanup()
+        removeGuard()
+      }
+    }
+  }
+
+  const handlePrintSingle = async (log: DailyLog & { project_name?: string }) => {
+    const worker_names = await resolveWorkerNames(log.id)
+    openPrintWindow(buildPrintHTML([{ ...log, worker_names }]))
+  }
+
+  const handlePrintAll = async () => {
+    const logsWithWorkers = await Promise.all(
+      filtered.map(async log => ({
+        ...log,
+        worker_names: await resolveWorkerNames(log.id),
+      }))
+    )
+    openPrintWindow(buildPrintHTML(logsWithWorkers))
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+
+  const filtered = logs.filter(l => !filterProject || l.project_id === filterProject)
+
+  const projectOptions = [
+    { value: '', label: 'جميع المشاريع' },
+    ...projects.map(p => ({ value: p.id, label: p.project_name }))
+  ]
+
+  return (
+    <>
+      <div className="p-6" ref={printRef}>
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">التقارير اليومية</h1>
+            <p className="text-slate-500 text-sm mt-0.5">متابعة الموقع اليومية لجميع المشاريع</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              icon={<Printer size={16} />}
+              onClick={handlePrintAll}
+              disabled={filtered.length === 0}
+            >
+              طباعة الكل
+            </Button>
+            <Button
+              icon={<Plus size={16} />}
+              onClick={() => { setEditingId(null); setForm(EMPTY_FORM(prefillProject)); setSelectedWorkers([]); setShowForm(true) }}
+            >
+              تسجيل تقرير جديد
+            </Button>
+          </div>
+        </div>
+
+        {/* Form */}
+        {showForm && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-6 overflow-hidden">
+            <div className="bg-gradient-to-l from-slate-700 to-slate-800 px-5 py-4 flex items-center justify-between">
+              <h2 className="text-white font-semibold text-base">
+                {editingId ? 'تعديل التقرير اليومي' : 'تقرير يومي جديد'}
+              </h2>
+              <button onClick={resetForm} className="text-white/60 hover:text-white transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select
+                  label="المشروع *"
+                  value={form.project_id}
+                  onChange={e => setForm(p => ({ ...p, project_id: e.target.value }))}
+                  options={[{ value: '', label: 'اختر المشروع' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))]}
+                />
+                <Input
+                  label="التاريخ"
+                  type="date"
+                  value={form.log_date}
+                  onChange={e => setForm(p => ({ ...p, log_date: e.target.value }))}
+                />
+              </div>
+
+              <Textarea
+                label="وصف الأعمال المنجزة اليوم *"
+                value={form.description}
+                onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
+                rows={3}
+              />
+
+              <Textarea
+                label="طلبات المواد"
+                value={form.material_requests}
+                onChange={e => setForm(p => ({ ...p, material_requests: e.target.value }))}
+                rows={2}
+              />
+
+              <label className="flex items-center gap-2.5 text-sm font-medium text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={form.inspector_meeting}
+                  onChange={e => setForm(p => ({ ...p, inspector_meeting: e.target.checked }))}
+                  className="w-4 h-4 rounded border-slate-300 text-slate-700"
+                />
+                التنسيق مع الاستشاري لموعد الفحص
+              </label>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">العمال المتواجدون في الموقع</label>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-50 rounded-lg border border-slate-200">
+                  {workers.map(w => (
+                    <label key={w.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedWorkers.includes(w.id)}
+                        onChange={e => setSelectedWorkers(prev =>
+                          e.target.checked ? [...prev, w.id] : prev.filter(x => x !== w.id)
+                        )}
+                        className="rounded"
+                      />
+                      <span className="text-slate-700 truncate">{w.name}</span>
+                    </label>
+                  ))}
+                </div>
+                {selectedWorkers.length > 0 && (
+                  <p className="text-xs text-slate-500 mt-1">{selectedWorkers.length} عامل محدد</p>
+                )}
+              </div>
+
+              {/* Site photos uploader */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
+                  <Camera size={15} className="text-slate-500" />
+                  صور الموقع
+                </label>
+                <div
+                  onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={e => { e.preventDefault(); setDragOver(false); handlePhotoFiles(e.dataTransfer.files) }}
+                  onClick={() => photoInputRef.current?.click()}
+                  className={`relative border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-colors
+                    ${dragOver ? 'border-slate-500 bg-slate-50' : 'border-slate-300 hover:border-slate-400 hover:bg-slate-50'}`}
+                >
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={e => e.target.files && handlePhotoFiles(e.target.files)}
+                  />
+                  {photoUploading ? (
+                    <div className="flex flex-col items-center gap-2 py-2">
+                      <div className="w-6 h-6 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+                      <p className="text-xs text-slate-500">جاري معالجة الصور...</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 py-1">
+                      <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center">
+                        <ImagePlus size={20} className="text-slate-500" />
+                      </div>
+                      <p className="text-sm font-medium text-slate-700">إضافة صورة</p>
+                      <p className="text-xs text-slate-400">اسحب الصور هنا أو انقر للاختيار</p>
+                    </div>
+                  )}
+                </div>
+
+                {form.photos.length > 0 && (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 mt-3">
+                    {form.photos.map((url, idx) => (
+                      <div key={idx} className="relative group aspect-square rounded-lg overflow-hidden border border-slate-200">
+                        <img src={url} alt="" className="w-full h-full object-cover" />
+                        <button
+                          onClick={e => { e.stopPropagation(); removePhoto(idx) }}
+                          className="absolute top-1 left-1 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <Textarea
+                label="ملاحظات إضافية"
+                value={form.additional_notes}
+                onChange={e => setForm(p => ({ ...p, additional_notes: e.target.value }))}
+                rows={2}
+                placeholder="أي ملاحظات إدارية أو تعليمات للموقع..."
+              />
+
+              <div className="flex gap-3 pt-1">
+                <Button loading={saving} onClick={handleSave}>
+                  {editingId ? 'حفظ التعديلات' : 'حفظ التقرير'}
+                </Button>
+                <Button variant="secondary" onClick={resetForm}>إلغاء</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Filter bar */}
+        <div className="flex gap-3 mb-4">
+          <div className="w-64">
+            <Select
+              label=""
+              value={filterProject}
+              onChange={e => setFilterProject(e.target.value)}
+              options={projectOptions}
+            />
+          </div>
+        </div>
+
+        {/* Log list */}
+        {loading ? (
+          <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
+        ) : filtered.length === 0 ? (
+          <div className="p-12 text-center">
+            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
+              <Camera size={28} className="text-slate-300" />
+            </div>
+            <p className="text-slate-400 font-medium">لا توجد تقارير</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filtered.map(log => {
+              const isExpanded = expandedLog === log.id
+              const isDeleting = deletingId === log.id
+              return (
+                <div
+                  key={log.id}
+                  className={`bg-white rounded-xl border transition-all
+                    ${isExpanded ? 'border-slate-300 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+                >
+                  {/* Card header */}
+                  <div
+                    className="flex items-start justify-between p-4 cursor-pointer"
+                    onClick={() => setExpandedLog(isExpanded ? null : log.id)}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <span className="font-semibold text-slate-800 text-sm">{formatDate(log.log_date)}</span>
+                        {log.project_name && (
+                          <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{log.project_name}</span>
+                        )}
+                        {log.inspector_meeting && (
+                          <span className="text-xs bg-blue-50 text-blue-600 border border-blue-100 px-2 py-0.5 rounded-full">تنسيق استشاري</span>
+                        )}
+                        {(log.photos?.length ?? 0) > 0 && (
+                          <span className="text-xs bg-emerald-50 text-emerald-600 border border-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Camera size={10} /> {log.photos.length} صورة
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-slate-600 text-sm leading-relaxed line-clamp-2">{log.description}</p>
+                      {log.material_requests && (
+                        <p className="text-amber-700 text-xs mt-1 truncate">طلبات مواد: {log.material_requests}</p>
+                      )}
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-1 mr-3 shrink-0" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => handlePrintSingle(log)}
+                        className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                        title="طباعة هذا التقرير"
+                      >
+                        <Printer size={15} />
+                      </button>
+                      <button
+                        onClick={() => openEdit(log)}
+                        className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                        title="تعديل"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        onClick={() => setDeleteTarget(log.id)}
+                        disabled={isDeleting}
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                        title="حذف"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                      <button
+                        onClick={() => setExpandedLog(isExpanded ? null : log.id)}
+                        className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors"
+                      >
+                        {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expanded detail */}
+                  {isExpanded && (
+                    <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                      {log.description && (
+                        <div>
+                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">الأعمال المنجزة</p>
+                          <p className="text-slate-700 text-sm whitespace-pre-wrap">{log.description}</p>
+                        </div>
+                      )}
+                      {log.material_requests && (
+                        <div>
+                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">طلبات المواد</p>
+                          <p className="text-slate-700 text-sm whitespace-pre-wrap">{log.material_requests}</p>
+                        </div>
+                      )}
+                      {log.additional_notes && (
+                        <div>
+                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">ملاحظات إضافية</p>
+                          <p className="text-slate-700 text-sm whitespace-pre-wrap">{log.additional_notes}</p>
+                        </div>
+                      )}
+                      {(log.photos?.length ?? 0) > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">صور الموقع</p>
+                          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                            {log.photos.map((url, i) => (
+                              <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                                className="block aspect-square rounded-lg overflow-hidden border border-slate-200 hover:opacity-90 transition-opacity">
+                                <img src={url} alt="" className="w-full h-full object-cover" />
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="حذف التقرير"
+        message="هل أنت متأكد من حذف هذا التقرير اليومي؟ لا يمكن التراجع عن هذا الإجراء."
+        confirmLabel="حذف"
+        danger
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
+    </>
+  )
+}

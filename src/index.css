@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    font-family: 'Noto Sans Arabic', 'Cairo', sans-serif;
+  }
+
+  body {
+    direction: rtl;
+    @apply bg-slate-50 text-slate-900;
+  }
+
+  input, textarea, select {
+    direction: rtl;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 2px;
+  }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  body { background: white !important; margin: 0 !important; padding: 0 !important; }
+  /* Hide the entire app shell: sidebar, header, navigation */
+  aside, nav, header,
+  [class*="Sidebar"], [class*="Header"],
+  button[aria-label], [role="navigation"] {
+    display: none !important;
+  }
+  /* Reset main layout to full width */
+  main, [class*="AppLayout"], .flex {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  /* The invoice/document container should fill the page */
+  .bg-white { box-shadow: none !important; border: none !important; border-radius: 0 !important; }
+}
+
+.print-only { display: none; }
+
+@keyframes shimmer {
+  0% { transform: translateX(100%); }
+  50% { transform: translateX(-20%); }
+  100% { transform: translateX(100%); }
+}
