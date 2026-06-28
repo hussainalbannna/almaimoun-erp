@@ -1,26 +1,88 @@
 // ════════════════════════════════════════════════════════════════════
 //  مساعد الذكاء الاصطناعي — قراءة وفهم المستندات والصور
 //  يدعم: PDF، صور، مستندات ممسوحة ضوئياً (OCR)، خط اليد
-//  يُستخدم في كل صفحات النظام (مشاريع، عمال، أوامر شراء، فواتير...)
+//  المفتاح يُحفظ في السحابة (قاعدة البيانات) ويعمل على كل الأجهزة
 // ════════════════════════════════════════════════════════════════════
+
+import { supabase } from './supabase'
 
 const AI_MODEL = 'claude-sonnet-4-6'
 const API_URL = 'https://api.anthropic.com/v1/messages'
-const KEY_STORAGE = 'anthropic_api_key'
+const KEY_CACHE = 'anthropic_api_key' // نسخة محلية للسرعة فقط
 
-// ─── إدارة مفتاح الـ API ───────────────────────────────────────────────
+// المصدر الرئيسي للمفتاح = قاعدة البيانات. هذا كاش في الذاكرة.
+// null = لم نحدد بعد | '' = محدد ولا يوجد مفتاح | 'sk-...' = يوجد
+let cachedKey: string | null = null
+
+// ─── قراءة المفتاح ─────────────────────────────────────────────────────
+function readLocalCache(): string {
+  try { return localStorage.getItem(KEY_CACHE) ?? '' } catch { return '' }
+}
+function writeLocalCache(key: string): void {
+  try {
+    if (key) localStorage.setItem(KEY_CACHE, key)
+    else localStorage.removeItem(KEY_CACHE)
+  } catch { /* ignore */ }
+}
+
+// تحميل المفتاح من قاعدة البيانات (السحابة)
+export async function loadApiKey(): Promise<string> {
+  try {
+    const { data } = await supabase.from('company_settings').select('anthropic_api_key').single()
+    const key = (data as { anthropic_api_key?: string } | null)?.anthropic_api_key ?? ''
+    cachedKey = key
+    writeLocalCache(key)
+    return key
+  } catch {
+    return readLocalCache()
+  }
+}
+
+// حفظ المفتاح في قاعدة البيانات (يعمل على كل الأجهزة)
+export async function saveApiKey(key: string): Promise<boolean> {
+  const trimmed = key.trim()
+  cachedKey = trimmed
+  writeLocalCache(trimmed)
+  try {
+    const { data } = await supabase.from('company_settings').select('id').single()
+    if (data) {
+      const { error } = await supabase.from('company_settings')
+        .update({ anthropic_api_key: trimmed, updated_at: new Date().toISOString() })
+        .eq('id', (data as { id: string }).id)
+      return !error
+    } else {
+      const { error } = await supabase.from('company_settings').insert({ anthropic_api_key: trimmed })
+      return !error
+    }
+  } catch {
+    return false
+  }
+}
+
+// قراءة سريعة (متزامنة) من الكاش
 export function getApiKey(): string {
-  try { return localStorage.getItem(KEY_STORAGE) ?? '' } catch { return '' }
+  if (cachedKey !== null) return cachedKey
+  return readLocalCache()
 }
+
+// هل يوجد مفتاح؟ (متفائلة عند عدم التحديد لتجنب الحظر الخاطئ على جهاز جديد)
 export function hasApiKey(): boolean {
-  return getApiKey().length > 0
+  if (cachedKey !== null) return cachedKey.length > 0
+  // لم نحدد بعد: حمّل من السحابة في الخلفية واسمح بالمحاولة
+  loadApiKey().catch(() => {})
+  const local = readLocalCache()
+  return local.length > 0 || cachedKey === null
 }
-export function setApiKey(key: string): void {
-  try { localStorage.setItem(KEY_STORAGE, key.trim()) } catch { /* ignore */ }
+
+// التأكد من وجود المفتاح قبل الاستخدام (يحمّل من السحابة إن لزم)
+async function ensureApiKey(): Promise<string> {
+  const current = getApiKey()
+  if (current) return current
+  return loadApiKey()
 }
-export function clearApiKey(): void {
-  try { localStorage.removeItem(KEY_STORAGE) } catch { /* ignore */ }
-}
+
+// تحميل المفتاح تلقائياً عند بدء التطبيق (في الخلفية)
+loadApiKey().catch(() => {})
 
 // ─── تحويل الملفات ─────────────────────────────────────────────────────
 export function fileToBase64(file: File): Promise<string> {
@@ -41,7 +103,7 @@ export function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-// ضغط الصور قبل التخزين لتقليل الحجم (يحافظ على مساحة قاعدة البيانات)
+// ضغط الصور قبل التخزين لتقليل الحجم
 export async function compressImage(file: File, maxDim = 1600, quality = 0.72): Promise<string> {
   if (!file.type.startsWith('image/')) return fileToDataUrl(file)
   const dataUrl = await fileToDataUrl(file)
@@ -84,7 +146,7 @@ function makeError(message: string, code?: string): AIError {
 
 // ─── قراءة مستند/صورة وإرجاع النص ──────────────────────────────────────
 export async function readDocumentText(file: File, instruction: string): Promise<string> {
-  const key = getApiKey()
+  const key = await ensureApiKey()
   if (!key) throw makeError('لم يتم ضبط مفتاح الذكاء الاصطناعي. أضفه من صفحة الإعدادات.', 'NO_KEY')
 
   const base64 = await fileToBase64(file)
@@ -152,9 +214,7 @@ export function extractJSON<T = Record<string, unknown>>(text: string): T | null
 // ─── فتح/تنزيل ملف من data URL أو رابط ──────────────────────────────────
 export function openStoredFile(fileUrl: string, fileType?: string): void {
   if (!fileUrl) return
-  // رابط خارجي عادي
   if (!fileUrl.startsWith('data:')) { window.open(fileUrl, '_blank'); return }
-  // data URL → تحويل إلى blob لفتح موثوق على الجوال
   try {
     const [head, b64] = fileUrl.split(',')
     const mime = head.match(/:(.*?);/)?.[1] || fileType || 'application/octet-stream'
