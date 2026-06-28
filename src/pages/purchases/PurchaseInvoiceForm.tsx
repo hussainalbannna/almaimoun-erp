@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowRight, Plus, Trash2, ZoomIn, X } from 'lucide-react'
+import { ArrowRight, Plus, Trash2, X, Sparkles, Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery, PurchasePaymentMethod } from '../../types'
+import { readDocumentText, extractJSON, compressImage, fileToDataUrl, hasApiKey } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
@@ -22,6 +23,7 @@ export default function PurchaseInvoiceForm() {
   const isEdit = !!id
 
   const [saving, setSaving] = useState(false)
+  const [scanning, setScanning] = useState(false)
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
   const [projects, setProjects] = useState<ProjectOption[]>([])
   const [lpos, setLpos] = useState<LPOOption[]>([])
@@ -101,6 +103,60 @@ export default function PurchaseInvoiceForm() {
   const handleLpoChange = (lpoId: string) => {
     const l = lpos.find(x => x.id === lpoId)
     setForm(f => ({ ...f, lpo_id: lpoId, lpo_number: l?.lpo_number ?? '' }))
+  }
+
+  // ── قراءة الفاتورة بالذكاء الاصطناعي ──────────────────────────────────
+  const handleScanInvoice = async (file: File) => {
+    if (!hasApiKey()) {
+      toast.error('فعّل مفتاح الذكاء الاصطناعي من الإعدادات أولاً')
+      return
+    }
+    setScanning(true)
+    toast.loading('جاري قراءة الفاتورة...', { id: 'inv-scan' })
+    try {
+      const text = await readDocumentText(file, `اقرأ فاتورة المورد هذه بدقة تامة حتى لو كانت ممسوحة ضوئياً أو صورة غير واضحة. افهم محتواها واستخرج البيانات. أرجع JSON فقط بدون أي شرح:
+{
+  "supplier_name": "اسم المورد أو الشركة",
+  "vendor_invoice_number": "رقم الفاتورة",
+  "amount": المبلغ الإجمالي النهائي بالدينار رقم فقط بدون عملة,
+  "date": "YYYY-MM-DD"
+}
+أي حقل غير موجود اتركه فارغاً "" أو 0.`)
+      const parsed = extractJSON<{ supplier_name?: string; vendor_invoice_number?: string; amount?: number; date?: string }>(text)
+      if (!parsed) { toast.error('تعذّر فهم الفاتورة', { id: 'inv-scan' }); return }
+
+      // محاولة مطابقة المورد بالاسم
+      let matchedSupplierId = ''
+      let matchedSupplierName = ''
+      if (parsed.supplier_name) {
+        const match = suppliers.find(s =>
+          s.name && (s.name.includes(parsed.supplier_name!) || parsed.supplier_name!.includes(s.name))
+        )
+        if (match) { matchedSupplierId = match.id; matchedSupplierName = match.name }
+      }
+
+      // تخزين نسخة الفاتورة (مضغوطة إن كانت صورة)
+      const dataUrl = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+
+      setForm(f => ({
+        ...f,
+        supplier_id: matchedSupplierId || f.supplier_id,
+        supplier_name: matchedSupplierName || f.supplier_name,
+        vendor_invoice_number: parsed.vendor_invoice_number || f.vendor_invoice_number,
+        amount: parsed.amount ? String(parsed.amount) : f.amount,
+        invoice_copy_data: dataUrl,
+      }))
+
+      if (parsed.supplier_name && !matchedSupplierId) {
+        toast.success(`تم استخراج البيانات. المورد "${parsed.supplier_name}" غير مسجّل — اختره يدوياً`, { id: 'inv-scan', duration: 5000 })
+      } else {
+        toast.success('تم قراءة الفاتورة وتعبئة البيانات', { id: 'inv-scan' })
+      }
+    } catch (e) {
+      toast.error((e as Error)?.message ?? 'تعذّرت القراءة', { id: 'inv-scan' })
+    } finally {
+      setScanning(false)
+    }
   }
 
   const fileToBase64 = (file: File): Promise<string> => {
@@ -205,6 +261,30 @@ export default function PurchaseInvoiceForm() {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-6">
+        {/* ═══ قراءة الفاتورة بالذكاء الاصطناعي ═══ */}
+        <div className="rounded-xl border-2 border-dashed p-4" style={{ borderColor: '#c4925a55', background: '#fdf9f4' }}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
+                <Sparkles size={18} className="text-white" />
+              </div>
+              <div>
+                <div className="font-semibold text-slate-800 text-sm">قراءة الفاتورة تلقائياً</div>
+                <div className="text-xs text-slate-500">ارفع صورة أو PDF لفاتورة المورد (حتى الممسوحة) ويملأ المبلغ ورقم الفاتورة والمورد</div>
+              </div>
+            </div>
+            <label className="cursor-pointer">
+              <input type="file" accept="image/*,application/pdf" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleScanInvoice(f); e.target.value = '' }} />
+              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-opacity"
+                style={{ background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)', opacity: scanning ? 0.6 : 1 }}>
+                {scanning ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                {scanning ? 'جاري القراءة...' : 'رفع وقراءة'}
+              </span>
+            </label>
+          </div>
+        </div>
+
         {/* Main Fields */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {/* Supplier */}
