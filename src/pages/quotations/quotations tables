@@ -1,0 +1,45 @@
+-- ═══ جداول عروض الأسعار ═══
+CREATE TABLE IF NOT EXISTS quotations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  quote_number TEXT NOT NULL,
+  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name TEXT DEFAULT '',
+  customer_phone TEXT DEFAULT '',
+  project_name TEXT DEFAULT '',
+  location TEXT DEFAULT '',
+  issue_date DATE DEFAULT CURRENT_DATE,
+  valid_until DATE,
+  status TEXT DEFAULT 'draft' CHECK (status IN ('draft','sent','accepted','rejected','expired')),
+  subtotal NUMERIC(14,3) DEFAULT 0,
+  discount NUMERIC(14,3) DEFAULT 0,
+  tax_rate NUMERIC(5,2) DEFAULT 10,
+  tax_amount NUMERIC(14,3) DEFAULT 0,
+  total NUMERIC(14,3) DEFAULT 0,
+  notes TEXT DEFAULT '',
+  terms TEXT DEFAULT '',
+  converted_project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS quotation_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  quotation_id UUID NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  category TEXT DEFAULT '',
+  quantity NUMERIC(12,3) DEFAULT 1,
+  unit TEXT DEFAULT 'مقطوعية',
+  unit_price NUMERIC(14,3) DEFAULT 0,
+  total NUMERIC(14,3) DEFAULT 0,
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE quotations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE quotation_items ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "auth_quotations" ON quotations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "auth_quotation_items" ON quotation_items FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quotation_items(quotation_id);
+CREATE INDEX IF NOT EXISTS idx_quote_customer ON quotations(customer_id);
