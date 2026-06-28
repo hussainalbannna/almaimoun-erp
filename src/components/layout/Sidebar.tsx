@@ -2,7 +2,8 @@ import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, FileText, ShoppingCart, Users, Building2,
   Settings, FileArchive, X, HardHat, Receipt, UserCog,
-  ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard
+  ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
+  Wrench, Package
 } from 'lucide-react'
 
 const navGroups = [
@@ -18,6 +19,7 @@ const navGroups = [
     items: [
       { to: '/projects', label: 'المشاريع والمراحل', icon: HardHat },
       { to: '/daily-logs', label: 'تقارير الموقع وأوامر التغيير', icon: ClipboardList },
+      { to: '/assets', label: 'الأصول والمعدات', icon: Package },
     ]
   },
   {
@@ -25,6 +27,7 @@ const navGroups = [
     items: [
       { to: '/workers', label: 'العمالة والسجلات', icon: Users },
       { to: '/payroll', label: 'كشف الرواتب', icon: UserCog },
+      { to: '/subcontractors', label: 'مقاولو الباطن', icon: Wrench },
     ]
   },
   {
