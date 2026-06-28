@@ -111,7 +111,10 @@ export default function SubcontractorDetail() {
 
   useEffect(() => { load() }, [id])
 
-  const set = (k: keyof typeof form) => (v: string) => setForm(f => ({ ...f, [k]: v }))
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement> | string) => {
+    const val = typeof e === 'string' ? e : e.target.value
+    setForm(f => ({ ...f, [k]: val }))
+  }
 
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('أدخل اسم المقاول'); return }
@@ -263,19 +266,19 @@ export default function SubcontractorDetail() {
               <div className="font-medium text-amber-900 text-sm mb-2">تكليف جديد</div>
               <div className="grid grid-cols-2 gap-3">
                 <Select label="المشروع" value={assignForm.project_id}
-                  onChange={v => setAssignForm(f => ({ ...f, project_id: v }))}
+                  onChange={e => setAssignForm(f => ({ ...f, project_id: e.target.value }))}
                   options={[{ value: '', label: '— بدون مشروع —' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))]} />
                 <Input label="المبلغ المتفق عليه" value={assignForm.agreed_amount}
-                  onChange={v => setAssignForm(f => ({ ...f, agreed_amount: v }))} type="number" />
+                  onChange={e => setAssignForm(f => ({ ...f, agreed_amount: e.target.value }))} type="number" />
               </div>
               <Textarea label="وصف العمل *" value={assignForm.scope}
-                onChange={v => setAssignForm(f => ({ ...f, scope: v }))} rows={2}
+                onChange={e => setAssignForm(f => ({ ...f, scope: e.target.value }))} rows={2}
                 placeholder="تمديدات كهربائية، أعمال حفر، سباكة..." />
               <div className="grid grid-cols-2 gap-3">
                 <Input label="تاريخ البداية" value={assignForm.start_date}
-                  onChange={v => setAssignForm(f => ({ ...f, start_date: v }))} type="date" />
+                  onChange={e => setAssignForm(f => ({ ...f, start_date: e.target.value }))} type="date" />
                 <Input label="تاريخ النهاية" value={assignForm.end_date}
-                  onChange={v => setAssignForm(f => ({ ...f, end_date: v }))} type="date" />
+                  onChange={e => setAssignForm(f => ({ ...f, end_date: e.target.value }))} type="date" />
               </div>
               <div className="flex gap-2">
                 <Button onClick={handleAddAssignment}>حفظ</Button>
@@ -337,26 +340,26 @@ export default function SubcontractorDetail() {
               <div className="font-medium text-green-900 text-sm mb-2">دفعة جديدة</div>
               <div className="grid grid-cols-2 gap-3">
                 <Select label="التكليف *" value={payForm.assignment_id}
-                  onChange={v => setPayForm(f => ({ ...f, assignment_id: v }))}
+                  onChange={e => setPayForm(f => ({ ...f, assignment_id: e.target.value }))}
                   options={[{ value: '', label: '— اختر —' }, ...assignments.map(a => ({ value: a.id, label: `${a.project_name || 'عام'} — ${a.scope.slice(0, 30)}` }))]} />
                 <Input label="المبلغ *" value={payForm.amount}
-                  onChange={v => setPayForm(f => ({ ...f, amount: v }))} type="number" />
+                  onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} type="number" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <Input label="تاريخ الدفع" value={payForm.payment_date}
-                  onChange={v => setPayForm(f => ({ ...f, payment_date: v }))} type="date" />
+                  onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value }))} type="date" />
                 <Select label="طريقة الدفع" value={payForm.payment_method}
-                  onChange={v => setPayForm(f => ({ ...f, payment_method: v }))} options={PAY_METHODS} />
+                  onChange={e => setPayForm(f => ({ ...f, payment_method: e.target.value }))} options={PAY_METHODS} />
               </div>
               {payForm.payment_method === 'cheque' && (
                 <div className="grid grid-cols-2 gap-3">
                   <Input label="تاريخ استحقاق الشيك" value={payForm.check_due_date}
-                    onChange={v => setPayForm(f => ({ ...f, check_due_date: v }))} type="date" />
+                    onChange={e => setPayForm(f => ({ ...f, check_due_date: e.target.value }))} type="date" />
                   <Input label="رقم الشيك" value={payForm.check_number}
-                    onChange={v => setPayForm(f => ({ ...f, check_number: v }))} />
+                    onChange={e => setPayForm(f => ({ ...f, check_number: e.target.value }))} />
                 </div>
               )}
-              <Input label="ملاحظات" value={payForm.notes} onChange={v => setPayForm(f => ({ ...f, notes: v }))} />
+              <Input label="ملاحظات" value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))} />
               <div className="flex gap-2">
                 <Button onClick={handleAddPayment}>تسجيل الدفعة</Button>
                 <Button variant="secondary" onClick={() => setShowPayForm(false)}>إلغاء</Button>
