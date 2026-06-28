@@ -3,7 +3,8 @@ import {
   LayoutDashboard, FileText, ShoppingCart, Users, Building2,
   Settings, FileArchive, X, HardHat, Receipt, UserCog,
   ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
-  Wrench, Package
+  Bot, Calendar, Bell, Calculator, ListChecks, ShieldCheck,
+  Package, Warehouse, CalendarCheck, Wrench, ListTodo, PieChart
 } from 'lucide-react'
 
 const navGroups = [
@@ -11,7 +12,15 @@ const navGroups = [
     label: 'الرئيسية',
     items: [
       { to: '/', label: 'لوحة التحكم', icon: LayoutDashboard, exact: true },
-      { to: '/reports', label: 'التقارير والإحصائيات', icon: BarChart2 },
+      { to: '/assistant', label: 'المساعد الذكي', icon: Bot },
+      { to: '/calendar', label: 'التقويم', icon: Calendar },
+      { to: '/notifications', label: 'مركز الإشعارات', icon: Bell },
+    ]
+  },
+  {
+    label: 'المبيعات والعروض',
+    items: [
+      { to: '/quotations', label: 'عروض الأسعار', icon: Calculator },
     ]
   },
   {
@@ -19,20 +28,26 @@ const navGroups = [
     items: [
       { to: '/projects', label: 'المشاريع والمراحل', icon: HardHat },
       { to: '/daily-logs', label: 'تقارير الموقع وأوامر التغيير', icon: ClipboardList },
+      { to: '/punch-list', label: 'قائمة الملاحظات', icon: ListChecks },
+      { to: '/safety', label: 'السلامة والحوادث', icon: ShieldCheck },
       { to: '/assets', label: 'الأصول والمعدات', icon: Package },
+      { to: '/inventory', label: 'المخزون والمواد', icon: Warehouse },
     ]
   },
   {
     label: 'الموارد البشرية',
     items: [
       { to: '/workers', label: 'العمالة والسجلات', icon: Users },
+      { to: '/attendance', label: 'الحضور والانصراف', icon: CalendarCheck },
       { to: '/payroll', label: 'كشف الرواتب', icon: UserCog },
       { to: '/subcontractors', label: 'مقاولو الباطن', icon: Wrench },
+      { to: '/tasks', label: 'المهام والتذكيرات', icon: ListTodo },
     ]
   },
   {
     label: 'المالية والمحاسبة',
     items: [
+      { to: '/finance', label: 'اللوحة المالية', icon: PieChart },
       { to: '/invoices', label: 'الفواتير', icon: FileText },
       { to: '/receipts', label: 'الإيصالات', icon: Receipt },
       { to: '/cashbook', label: 'دفتر الصندوق', icon: BookOpen },
@@ -56,6 +71,7 @@ const navGroups = [
   {
     label: '',
     items: [
+      { to: '/reports', label: 'التقارير والإحصائيات', icon: BarChart2 },
       { to: '/documents', label: 'المستندات', icon: FileArchive },
       { to: '/settings', label: 'الإعدادات', icon: Settings },
     ]
