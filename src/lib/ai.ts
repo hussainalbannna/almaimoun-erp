@@ -1,0 +1,172 @@
+// ════════════════════════════════════════════════════════════════════
+//  مساعد الذكاء الاصطناعي — قراءة وفهم المستندات والصور
+//  يدعم: PDF، صور، مستندات ممسوحة ضوئياً (OCR)، خط اليد
+//  يُستخدم في كل صفحات النظام (مشاريع، عمال، أوامر شراء، فواتير...)
+// ════════════════════════════════════════════════════════════════════
+
+const AI_MODEL = 'claude-sonnet-4-6'
+const API_URL = 'https://api.anthropic.com/v1/messages'
+const KEY_STORAGE = 'anthropic_api_key'
+
+// ─── إدارة مفتاح الـ API ───────────────────────────────────────────────
+export function getApiKey(): string {
+  try { return localStorage.getItem(KEY_STORAGE) ?? '' } catch { return '' }
+}
+export function hasApiKey(): boolean {
+  return getApiKey().length > 0
+}
+export function setApiKey(key: string): void {
+  try { localStorage.setItem(KEY_STORAGE, key.trim()) } catch { /* ignore */ }
+}
+export function clearApiKey(): void {
+  try { localStorage.removeItem(KEY_STORAGE) } catch { /* ignore */ }
+}
+
+// ─── تحويل الملفات ─────────────────────────────────────────────────────
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve((r.result as string).split(',')[1])
+    r.onerror = () => reject(new Error('فشل قراءة الملف'))
+    r.readAsDataURL(file)
+  })
+}
+
+export function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = () => reject(new Error('فشل قراءة الملف'))
+    r.readAsDataURL(file)
+  })
+}
+
+// ضغط الصور قبل التخزين لتقليل الحجم (يحافظ على مساحة قاعدة البيانات)
+export async function compressImage(file: File, maxDim = 1600, quality = 0.72): Promise<string> {
+  if (!file.type.startsWith('image/')) return fileToDataUrl(file)
+  const dataUrl = await fileToDataUrl(file)
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      let { width, height } = img
+      if (width > maxDim || height > maxDim) {
+        if (width > height) { height = Math.round((height / width) * maxDim); width = maxDim }
+        else { width = Math.round((width / height) * maxDim); height = maxDim }
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { resolve(dataUrl); return }
+      ctx.drawImage(img, 0, 0, width, height)
+      resolve(canvas.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = () => resolve(dataUrl)
+    img.src = dataUrl
+  })
+}
+
+// ─── أنواع المحتوى ─────────────────────────────────────────────────────
+type ContentBlock =
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }
+  | { type: 'text'; text: string }
+
+interface ResponseBlock { type: string; text?: string }
+
+export interface AIError extends Error { code?: string }
+
+function makeError(message: string, code?: string): AIError {
+  const e = new Error(message) as AIError
+  e.code = code
+  return e
+}
+
+// ─── قراءة مستند/صورة وإرجاع النص ──────────────────────────────────────
+export async function readDocumentText(file: File, instruction: string): Promise<string> {
+  const key = getApiKey()
+  if (!key) throw makeError('لم يتم ضبط مفتاح الذكاء الاصطناعي. أضفه من صفحة الإعدادات.', 'NO_KEY')
+
+  const base64 = await fileToBase64(file)
+  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+  const mediaType = file.type || (isPdf ? 'application/pdf' : 'image/jpeg')
+
+  const content: ContentBlock[] = []
+  if (isPdf) {
+    content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } })
+  } else {
+    content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } })
+  }
+  content.push({ type: 'text', text: instruction })
+
+  let response: Response
+  try {
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        max_tokens: 1500,
+        messages: [{ role: 'user', content }],
+      }),
+    })
+  } catch {
+    throw makeError('تعذّر الاتصال بخدمة الذكاء الاصطناعي. تحقق من الإنترنت.', 'NETWORK')
+  }
+
+  if (!response.ok) {
+    let msg = `خطأ في الخدمة (${response.status})`
+    if (response.status === 401) msg = 'مفتاح الذكاء الاصطناعي غير صحيح. تحقق منه في الإعدادات.'
+    else if (response.status === 429) msg = 'تم تجاوز حد الاستخدام. حاول بعد قليل.'
+    else if (response.status === 400) msg = 'الملف غير مدعوم أو حجمه كبير جداً.'
+    try {
+      const err = await response.json()
+      if (err?.error?.message) msg = err.error.message
+    } catch { /* ignore */ }
+    throw makeError(msg, String(response.status))
+  }
+
+  const data = await response.json()
+  const blocks = (data.content ?? []) as ResponseBlock[]
+  return blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim()
+}
+
+// ─── استخراج JSON من نص الرد ───────────────────────────────────────────
+export function extractJSON<T = Record<string, unknown>>(text: string): T | null {
+  try {
+    const clean = text.replace(/```json/gi, '').replace(/```/g, '').trim()
+    const start = clean.indexOf('{')
+    const end = clean.lastIndexOf('}')
+    if (start === -1 || end === -1) return null
+    return JSON.parse(clean.slice(start, end + 1)) as T
+  } catch {
+    return null
+  }
+}
+
+// ─── فتح/تنزيل ملف من data URL أو رابط ──────────────────────────────────
+export function openStoredFile(fileUrl: string, fileType?: string): void {
+  if (!fileUrl) return
+  // رابط خارجي عادي
+  if (!fileUrl.startsWith('data:')) { window.open(fileUrl, '_blank'); return }
+  // data URL → تحويل إلى blob لفتح موثوق على الجوال
+  try {
+    const [head, b64] = fileUrl.split(',')
+    const mime = head.match(/:(.*?);/)?.[1] || fileType || 'application/octet-stream'
+    const bin = atob(b64)
+    let n = bin.length
+    const u8 = new Uint8Array(n)
+    while (n--) u8[n] = bin.charCodeAt(n)
+    const blob = new Blob([u8], { type: mime })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch {
+    window.open(fileUrl, '_blank')
+  }
+}
