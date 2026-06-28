@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Upload } from 'lucide-react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { ArrowLeft, Plus, Trash2, Upload, ClipboardList } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { nextSerial, formatCurrency } from '../../lib/utils'
 import type { LPO, LPOItem, Supplier, ExtractedDocumentData } from '../../types'
@@ -33,8 +33,10 @@ const PAYMENT_TYPE_OPTIONS = [
 export default function LPOForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const isEdit = !!id
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [projects, setProjects] = useState<{ id: string; project_name: string }[]>([])
   const [selectedSupplierId, setSelectedSupplierId] = useState('')
   const [items, setItems] = useState<Array<Omit<LPOItem, 'id' | 'lpo_id'>>>([{ ...EMPTY_ITEM }])
   const [form, setForm] = useState({
@@ -43,6 +45,7 @@ export default function LPOForm() {
     supplier_email: '',
     supplier_address: '',
     supplier_tax_number: '',
+    project_id: '',
     issue_date: new Date().toISOString().slice(0, 10),
     delivery_date: '',
     status: 'draft',
@@ -56,16 +59,46 @@ export default function LPOForm() {
   })
   const [loading, setLoading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
+  const [fromLogId, setFromLogId] = useState<string | null>(null)
 
   useEffect(() => {
     supabase.from('suppliers').select('*').order('name').then(({ data }) => setSuppliers((data ?? []) as Supplier[]))
+    supabase.from('projects').select('id, project_name').eq('status', 'active').order('project_name').then(({ data }) => setProjects((data ?? []) as { id: string; project_name: string }[]))
     if (!isEdit) {
       supabase.from('lpos').select('lpo_number').then(({ data }) => {
         const nums = (data ?? []).map((r: { lpo_number: string }) => r.lpo_number)
         setForm(prev => ({ ...prev, lpo_number: nextSerial(nums, 1036) }))
       })
+      // استقبال البيانات القادمة من التقرير اليومي (تحويل طلب مواد → أمر شراء)
+      const projectParam = searchParams.get('project')
+      const materialsParam = searchParams.get('materials')
+      const fromLog = searchParams.get('from_log')
+      if (projectParam) setForm(prev => ({ ...prev, project_id: projectParam }))
+      if (fromLog) setFromLogId(fromLog)
+      if (materialsParam) {
+        // تحويل كل سطر من طلبات المواد إلى بند منفصل
+        const lines = materialsParam.split('\n').map(l => l.trim()).filter(Boolean)
+        if (lines.length > 0) {
+          const newItems = lines.map((line, i) => {
+            // محاولة فصل "المادة - الكمية" إن وجدت
+            const parts = line.split(/[-–:]/).map(p => p.trim())
+            const desc = parts[0] || line
+            const qtyMatch = line.match(/(\d+(?:\.\d+)?)/)
+            return {
+              description: desc,
+              quantity: qtyMatch ? parseFloat(qtyMatch[1]) : 1,
+              unit: 'قطعة',
+              unit_price: 0,
+              total: 0,
+              sort_order: i,
+            }
+          })
+          setItems(newItems)
+          toast.success(`تم تحويل ${newItems.length} مادة من التقرير اليومي`)
+        }
+      }
     }
-  }, [isEdit])
+  }, [isEdit, searchParams])
 
   useEffect(() => {
     if (!isEdit) return
@@ -78,6 +111,7 @@ export default function LPOForm() {
         supplier_email: lpo.supplier_email,
         supplier_address: lpo.supplier_address,
         supplier_tax_number: lpo.supplier_tax_number,
+        project_id: (lpo as LPO & { project_id?: string }).project_id ?? '',
         issue_date: lpo.issue_date,
         delivery_date: lpo.delivery_date ?? '',
         status: lpo.status,
@@ -151,6 +185,7 @@ export default function LPOForm() {
     const payload = {
       ...form,
       supplier_id: selectedSupplierId || null,
+      project_id: form.project_id || null,
       tax_rate: Number(form.tax_rate),
       discount: Number(form.discount),
       subtotal,
@@ -172,6 +207,10 @@ export default function LPOForm() {
       await supabase.from('lpo_items').insert(
         items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, lpo_id: (newLpo as LPO).id, sort_order: idx }))
       )
+      // تعليم التقرير اليومي المصدر بأنه تم تحويله لأمر شراء
+      if (fromLogId) {
+        await supabase.from('daily_logs').update({ converted_to_lpo: true }).eq('id', fromLogId)
+      }
     }
 
     setLoading(false)
@@ -197,12 +236,20 @@ export default function LPOForm() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
+        {fromLogId && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2 text-sm text-amber-800">
+            <ClipboardList size={16} />
+            تم إنشاء هذا الأمر من طلبات مواد في تقرير يومي — راجع البنود وأضف الأسعار والمورد
+          </div>
+        )}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h3 className="font-semibold text-slate-700 mb-4 text-sm">معلومات أمر الشراء</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Input label="رقم أمر الشراء *" value={form.lpo_number} onChange={setField('lpo_number')} />
             <Input label="تاريخ الإصدار *" type="date" value={form.issue_date} onChange={setField('issue_date')} />
             <Input label="تاريخ التسليم المتوقع" type="date" value={form.delivery_date} onChange={setField('delivery_date')} />
+            <Select label="المشروع" value={form.project_id} onChange={setField('project_id')}
+              options={[{ value: '', label: '— غير مرتبط بمشروع —' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))]} />
             <Select label="الحالة" value={form.status} onChange={setField('status')} options={STATUS_OPTIONS} />
             <Input label="شروط الدفع" value={form.payment_terms} onChange={setField('payment_terms')} />
             <Select label="طريقة الدفع" value={form.payment_type} onChange={setField('payment_type')} options={PAYMENT_TYPE_OPTIONS} />
