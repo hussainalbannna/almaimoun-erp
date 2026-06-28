@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp, ShoppingCart, Sparkles, Loader2, Cloud, Users } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
 import { formatDate } from '../../lib/utils'
@@ -18,8 +18,19 @@ const EMPTY_FORM = (projectId = '') => ({
   material_requests: '',
   inspector_meeting: false,
   additional_notes: '',
+  weather: '',
   photos: [] as string[],
 })
+
+const WEATHER_OPTIONS = [
+  { value: '', label: 'حالة الطقس' },
+  { value: 'مشمس', label: '☀️ مشمس' },
+  { value: 'غائم', label: '☁️ غائم' },
+  { value: 'حار', label: '🔥 حار جداً' },
+  { value: 'ممطر', label: '🌧️ ممطر' },
+  { value: 'غبار', label: '🌫️ غبار / أتربة' },
+  { value: 'رطب', label: '💧 رطوبة عالية' },
+]
 
 // ─── Print document generator ──────────────────────────────────────────────
 
@@ -68,6 +79,16 @@ function buildPrintHTML(logs: PrintLog[]): string {
           <span class="meta-label">المشروع / العميل</span>
           <span class="meta-value">${log.project_name ?? '—'}</span>
         </div>
+        ${(log as PrintLog & { weather?: string }).weather ? `
+        <div class="meta-item">
+          <span class="meta-label">الطقس</span>
+          <span class="meta-value">${(log as PrintLog & { weather?: string }).weather}</span>
+        </div>` : ''}
+        ${((log as PrintLog & { workers_count?: number }).workers_count ?? 0) > 0 ? `
+        <div class="meta-item">
+          <span class="meta-label">عدد العمال</span>
+          <span class="meta-value">${(log as PrintLog & { workers_count?: number }).workers_count}</span>
+        </div>` : ''}
         ${log.inspector_meeting ? `
         <div class="meta-item">
           <span class="meta-label">الاستشاري</span>
@@ -283,6 +304,7 @@ function buildPrintHTML(logs: PrintLog[]): string {
 
 export default function DailyLogList() {
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const prefillProject = searchParams.get('project') ?? ''
   const printRef = useRef<HTMLDivElement>(null)
 
@@ -300,7 +322,9 @@ export default function DailyLogList() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [photoUploading, setPhotoUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const [scanningMaterials, setScanningMaterials] = useState(false)
   const photoInputRef = useRef<HTMLInputElement>(null)
+  const materialScanRef = useRef<HTMLInputElement>(null)
 
   const [form, setForm] = useState(EMPTY_FORM(prefillProject))
 
@@ -336,6 +360,7 @@ export default function DailyLogList() {
       material_requests: log.material_requests ?? '',
       inspector_meeting: log.inspector_meeting ?? false,
       additional_notes: log.additional_notes ?? '',
+      weather: (log as DailyLog & { weather?: string }).weather ?? '',
       photos: log.photos ?? [],
     })
     const { data } = await supabase.from('daily_log_workers').select('worker_id').eq('log_id', log.id)
@@ -373,6 +398,60 @@ export default function DailyLogList() {
     setForm(prev => ({ ...prev, photos: prev.photos.filter((_, i) => i !== idx) }))
   }
 
+  // ── قراءة طلب المواد بالذكاء الاصطناعي ──────────────────────────────────
+  const handleScanMaterials = async (file: File) => {
+    setScanningMaterials(true)
+    toast.loading('جاري قراءة طلب المواد...', { id: 'mat-scan' })
+    try {
+      const base64 = await new Promise<string>((res, rej) => {
+        const r = new FileReader()
+        r.onload = () => res((r.result as string).split(',')[1])
+        r.onerror = rej
+        r.readAsDataURL(file)
+      })
+      const mediaType = file.type || 'image/jpeg'
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1000,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+              { type: 'text', text: 'هذه صورة لطلب مواد بناء مكتوب بخط اليد أو مطبوع (قد يكون ممسوحاً ضوئياً أو غير واضح). اقرأه بدقة واستخرج قائمة المواد المطلوبة بكمياتها. أرجع النص فقط بشكل منظم سطراً لكل مادة بصيغة "المادة - الكمية"، بدون أي مقدمة أو شرح. إذا لم تجد كمية اكتب المادة فقط.' }
+            ]
+          }]
+        })
+      })
+      const data = await response.json()
+      const text = (data.content ?? []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('').trim()
+      if (text) {
+        setForm(prev => ({ ...prev, material_requests: prev.material_requests ? `${prev.material_requests}\n${text}` : text }))
+        toast.success('تم استخراج طلب المواد', { id: 'mat-scan' })
+      } else {
+        toast.error('لم يتم العثور على نص', { id: 'mat-scan' })
+      }
+    } catch {
+      toast.error('تعذّرت القراءة. تأكد من تفعيل مفتاح الذكاء الاصطناعي', { id: 'mat-scan' })
+    } finally {
+      setScanningMaterials(false)
+    }
+  }
+
+  // ── تحويل طلب المواد إلى أمر شراء ────────────────────────────────────────
+  const convertToLPO = (log: DailyLog & { project_name?: string }) => {
+    if (!log.material_requests?.trim()) { toast.error('لا توجد طلبات مواد في هذا التقرير'); return }
+    // تمرير البيانات لصفحة إنشاء أمر شراء عبر الرابط
+    const params = new URLSearchParams({
+      project: log.project_id,
+      materials: log.material_requests,
+      from_log: log.id,
+    })
+    navigate(`/lpos/new?${params.toString()}`)
+  }
+
   // ── Save / Delete ───────────────────────────────────────────────────────
 
   const syncAttendance = async (logId: string, logDate: string, projectId: string, workerIds: string[]) => {
@@ -407,6 +486,8 @@ export default function DailyLogList() {
         material_requests: form.material_requests,
         inspector_meeting: form.inspector_meeting,
         additional_notes: form.additional_notes,
+        weather: form.weather,
+        workers_count: selectedWorkers.length,
         photos: form.photos,
       }
       let logId: string
@@ -574,7 +655,7 @@ export default function DailyLogList() {
             </div>
 
             <div className="p-5 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <Select
                   label="المشروع *"
                   value={form.project_id}
@@ -587,6 +668,12 @@ export default function DailyLogList() {
                   value={form.log_date}
                   onChange={e => setForm(p => ({ ...p, log_date: e.target.value }))}
                 />
+                <Select
+                  label="حالة الطقس"
+                  value={form.weather}
+                  onChange={e => setForm(p => ({ ...p, weather: e.target.value }))}
+                  options={WEATHER_OPTIONS}
+                />
               </div>
 
               <Textarea
@@ -596,12 +683,26 @@ export default function DailyLogList() {
                 rows={3}
               />
 
-              <Textarea
-                label="طلبات المواد"
-                value={form.material_requests}
-                onChange={e => setForm(p => ({ ...p, material_requests: e.target.value }))}
-                rows={2}
-              />
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-sm font-medium text-slate-700">طلبات المواد</label>
+                  <input ref={materialScanRef} type="file" accept="image/*" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleScanMaterials(f); e.target.value = '' }} />
+                  <button type="button" onClick={() => materialScanRef.current?.click()} disabled={scanningMaterials}
+                    className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg text-white font-medium transition-opacity disabled:opacity-60"
+                    style={{ background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
+                    {scanningMaterials ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                    قراءة من صورة
+                  </button>
+                </div>
+                <Textarea
+                  label=""
+                  value={form.material_requests}
+                  onChange={e => setForm(p => ({ ...p, material_requests: e.target.value }))}
+                  rows={2}
+                  placeholder="اكتب أو صوّر طلب المواد المكتوب بخط اليد..."
+                />
+              </div>
 
               <label className="flex items-center gap-2.5 text-sm font-medium text-slate-700 cursor-pointer select-none">
                 <input
@@ -760,6 +861,16 @@ export default function DailyLogList() {
                             <Camera size={10} /> {log.photos.length} صورة
                           </span>
                         )}
+                        {(log as DailyLog & { weather?: string }).weather && (
+                          <span className="text-xs bg-sky-50 text-sky-600 border border-sky-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Cloud size={10} /> {(log as DailyLog & { weather?: string }).weather}
+                          </span>
+                        )}
+                        {((log as DailyLog & { workers_count?: number }).workers_count ?? 0) > 0 && (
+                          <span className="text-xs bg-violet-50 text-violet-600 border border-violet-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Users size={10} /> {(log as DailyLog & { workers_count?: number }).workers_count} عامل
+                          </span>
+                        )}
                       </div>
                       <p className="text-slate-600 text-sm leading-relaxed line-clamp-2">{log.description}</p>
                       {log.material_requests && (
@@ -769,6 +880,15 @@ export default function DailyLogList() {
 
                     {/* Action buttons */}
                     <div className="flex items-center gap-1 mr-3 shrink-0" onClick={e => e.stopPropagation()}>
+                      {log.material_requests?.trim() && (
+                        <button
+                          onClick={() => convertToLPO(log)}
+                          className="p-1.5 text-amber-600 hover:text-white hover:bg-amber-600 rounded-lg transition-colors"
+                          title="تحويل طلبات المواد إلى أمر شراء"
+                        >
+                          <ShoppingCart size={15} />
+                        </button>
+                      )}
                       <button
                         onClick={() => handlePrintSingle(log)}
                         className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
