@@ -5,9 +5,10 @@ import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Textarea from '../../components/ui/Textarea'
 import toast from 'react-hot-toast'
-import { Building2, Mail, Phone, MessageCircle, CreditCard, Settings2, Hash } from 'lucide-react'
+import { Building2, Mail, Phone, CreditCard, Settings2, Hash, Sparkles, Loader2, CheckCircle, ExternalLink } from 'lucide-react'
+import { getApiKey, setApiKey, clearApiKey, readDocumentText } from '../../lib/ai'
 
-type Tab = 'company' | 'banking' | 'numbering'
+type Tab = 'company' | 'banking' | 'numbering' | 'ai'
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>('company')
@@ -32,6 +33,15 @@ export default function Settings() {
   const [settingsId, setSettingsId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // الذكاء الاصطناعي
+  const [aiKey, setAiKey] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [keyValid, setKeyValid] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    setAiKey(getApiKey())
+  }, [])
+
   useEffect(() => {
     supabase.from('company_settings').select('*').single().then(({ data }) => {
       if (data) {
@@ -55,10 +65,45 @@ export default function Settings() {
     toast.success('تم حفظ الإعدادات')
   }
 
+  // ─── حفظ واختبار مفتاح الذكاء الاصطناعي ──────────────────────────────
+  const handleSaveKey = () => {
+    if (!aiKey.trim()) { clearApiKey(); setKeyValid(null); toast.success('تم مسح المفتاح'); return }
+    setApiKey(aiKey)
+    setKeyValid(null)
+    toast.success('تم حفظ المفتاح على هذا الجهاز')
+  }
+
+  const handleTestKey = async () => {
+    if (!aiKey.trim()) { toast.error('أدخل المفتاح أولاً'); return }
+    setApiKey(aiKey) // حفظ قبل الاختبار
+    setTesting(true)
+    setKeyValid(null)
+    toast.loading('جاري اختبار المفتاح...', { id: 'test' })
+    try {
+      // صورة بيضاء صغيرة لاختبار الاتصال
+      const canvas = document.createElement('canvas')
+      canvas.width = 60; canvas.height = 20
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 60, 20)
+      ctx.fillStyle = '#000'; ctx.font = '14px sans-serif'; ctx.fillText('123', 5, 15)
+      const blob = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/jpeg'))
+      const file = new File([blob], 'test.jpg', { type: 'image/jpeg' })
+      await readDocumentText(file, 'ما الرقم المكتوب في الصورة؟ أجب برقم واحد فقط.')
+      setKeyValid(true)
+      toast.success('المفتاح يعمل بنجاح ✓', { id: 'test' })
+    } catch (e) {
+      setKeyValid(false)
+      toast.error((e as Error)?.message ?? 'فشل الاختبار', { id: 'test' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
   const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
     { key: 'company', label: 'معلومات الشركة', icon: Building2 },
     { key: 'banking', label: 'البنك والدفع', icon: CreditCard },
     { key: 'numbering', label: 'الترقيم والعملة', icon: Hash },
+    { key: 'ai', label: 'الذكاء الاصطناعي', icon: Sparkles },
   ]
 
   return (
@@ -142,8 +187,71 @@ export default function Settings() {
           </>
         )}
 
+        {tab === 'ai' && (
+          <>
+            <h3 className="font-semibold text-slate-800 flex items-center gap-2"><Sparkles size={18} style={{ color: '#c4925a' }} /> الذكاء الاصطناعي</h3>
+            <p className="text-sm text-slate-500">
+              يُستخدم لقراءة العقود والهويات والمستندات تلقائياً (حتى الممسوحة ضوئياً) وملء الحقول. المفتاح يُحفظ على هذا الجهاز فقط ولا يُرسل لأحد غير خدمة Anthropic.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">مفتاح Anthropic API</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={aiKey}
+                    onChange={e => { setAiKey(e.target.value); setKeyValid(null) }}
+                    placeholder="sk-ant-..."
+                    className="flex-1 h-10 px-3 rounded-lg border border-slate-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                    dir="ltr"
+                  />
+                  {keyValid === true && <CheckCircle size={20} className="text-green-600 shrink-0" />}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={handleSaveKey}>حفظ المفتاح</Button>
+                <Button variant="outline" onClick={handleTestKey} disabled={testing}
+                  icon={testing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}>
+                  {testing ? 'جاري الاختبار...' : 'اختبار المفتاح'}
+                </Button>
+              </div>
+
+              {keyValid === true && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800 flex items-center gap-2">
+                  <CheckCircle size={16} /> المفتاح يعمل بنجاح. كل ميزات الذكاء الاصطناعي مفعّلة الآن.
+                </div>
+              )}
+              {keyValid === false && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+                  المفتاح لم يعمل. تأكد من نسخه كاملاً ومن وجود رصيد في حسابك.
+                </div>
+              )}
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-2 space-y-2">
+              <h4 className="font-medium text-amber-900 text-sm">كيف تحصل على المفتاح؟</h4>
+              <ol className="text-xs text-amber-800 space-y-1.5 list-decimal pr-4">
+                <li>ادخل على <span className="font-mono">console.anthropic.com</span> وسجّل حساب</li>
+                <li>اشحن رصيد بسيط (يبدأ من 5 دولار) من Billing</li>
+                <li>من API Keys اضغط Create Key وانسخ المفتاح (يبدأ بـ sk-ant)</li>
+                <li>الصقه هنا واضغط حفظ ثم اختبار</li>
+              </ol>
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 hover:text-amber-900 mt-1">
+                فتح صفحة المفاتيح <ExternalLink size={12} />
+              </a>
+            </div>
+
+            <div className="bg-slate-50 rounded-lg p-3 text-xs text-slate-500">
+              التكلفة تقريبية جداً: قراءة عقد أو هوية واحدة تكلف أقل من 1 سنت. الرصيد يكفي لمئات المستندات.
+            </div>
+          </>
+        )}
+
         <div className="pt-2">
-          <Button onClick={handleSave} loading={loading}>حفظ الإعدادات</Button>
+          {tab !== 'ai' && <Button onClick={handleSave} loading={loading}>حفظ الإعدادات</Button>}
         </div>
       </div>
     </div>
