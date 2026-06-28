@@ -28,8 +28,13 @@ function writeLocalCache(key: string): void {
 // تحميل المفتاح من قاعدة البيانات (السحابة)
 export async function loadApiKey(): Promise<string> {
   try {
-    const { data } = await supabase.from('company_settings').select('anthropic_api_key').single()
-    const key = (data as { anthropic_api_key?: string } | null)?.anthropic_api_key ?? ''
+    const { data: rows } = await supabase
+      .from('company_settings')
+      .select('anthropic_api_key')
+      .limit(1)
+    const key = (rows && rows.length > 0)
+      ? ((rows[0] as { anthropic_api_key?: string }).anthropic_api_key ?? '')
+      : ''
     cachedKey = key
     writeLocalCache(key)
     return key
@@ -44,17 +49,30 @@ export async function saveApiKey(key: string): Promise<boolean> {
   cachedKey = trimmed
   writeLocalCache(trimmed)
   try {
-    const { data } = await supabase.from('company_settings').select('id').single()
-    if (data) {
-      const { error } = await supabase.from('company_settings')
+    // جلب أول صف موجود (بدون single لتفادي الأخطاء)
+    const { data: rows, error: selErr } = await supabase
+      .from('company_settings')
+      .select('id')
+      .limit(1)
+    if (selErr) { console.error('AI key select error:', selErr); return false }
+
+    if (rows && rows.length > 0) {
+      const rowId = (rows[0] as { id: string }).id
+      const { error: updErr } = await supabase
+        .from('company_settings')
         .update({ anthropic_api_key: trimmed, updated_at: new Date().toISOString() })
-        .eq('id', (data as { id: string }).id)
-      return !error
+        .eq('id', rowId)
+      if (updErr) { console.error('AI key update error:', updErr); return false }
+      return true
     } else {
-      const { error } = await supabase.from('company_settings').insert({ anthropic_api_key: trimmed })
-      return !error
+      const { error: insErr } = await supabase
+        .from('company_settings')
+        .insert({ anthropic_api_key: trimmed })
+      if (insErr) { console.error('AI key insert error:', insErr); return false }
+      return true
     }
-  } catch {
+  } catch (e) {
+    console.error('AI key save exception:', e)
     return false
   }
 }
