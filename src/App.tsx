@@ -36,15 +36,29 @@ import DailyLogList from './pages/daily-logs/DailyLogList'
 import CashBook from './pages/cashbook/CashBook'
 import PurchaseInvoiceList from './pages/purchases/PurchaseInvoiceList'
 import PurchaseInvoiceForm from './pages/purchases/PurchaseInvoiceForm'
-// ✦ الأقسام الجديدة
+// ── الأقسام المُضافة ──
 import SubcontractorList from './pages/subcontractors/SubcontractorList'
 import SubcontractorDetail from './pages/subcontractors/SubcontractorDetail'
-import ClientStatement from './pages/statements/ClientStatement'
 import AssetList from './pages/assets/AssetList'
+import ClientStatement from './pages/statements/ClientStatement'
+// ── الصفحات الجديدة ──
+import AIAssistant from './pages/assistant/AIAssistant'
+import QuotationList from './pages/quotations/QuotationList'
+import QuotationForm from './pages/quotations/QuotationForm'
+import QuotationView from './pages/quotations/QuotationView'
+import CalendarView from './pages/calendar/CalendarView'
+import TasksBoard from './pages/tasks/TasksBoard'
+import InventoryList from './pages/inventory/InventoryList'
+import InventoryForm from './pages/inventory/InventoryForm'
+import PunchListPage from './pages/punch-list/PunchListPage'
+import SafetyPage from './pages/safety/SafetyPage'
+import AttendanceBoard from './pages/attendance/AttendanceBoard'
+import FinanceDashboard from './pages/finance/FinanceDashboard'
+import NotificationsCenter from './pages/notifications/NotificationsCenter'
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 30_000 },
+    queries: { retry: 1, staleTime: 30_000, refetchOnWindowFocus: false },
   },
 })
 
@@ -62,58 +76,92 @@ export default function App() {
             }>
               <Route index element={<Dashboard />} />
               <Route path="reports" element={<ReportsPage />} />
-              {/* Projects */}
+
+              {/* المساعد الذكي والتقويم والإشعارات */}
+              <Route path="assistant" element={<AIAssistant />} />
+              <Route path="calendar" element={<CalendarView />} />
+              <Route path="notifications" element={<NotificationsCenter />} />
+
+              {/* عروض الأسعار */}
+              <Route path="quotations" element={<QuotationList />} />
+              <Route path="quotations/new" element={<QuotationForm />} />
+              <Route path="quotations/:id" element={<QuotationView />} />
+              <Route path="quotations/:id/edit" element={<QuotationForm />} />
+
+              {/* المشاريع */}
               <Route path="projects" element={<ProjectList />} />
               <Route path="projects/new" element={<ProjectForm />} />
               <Route path="projects/:id" element={<ProjectDetail />} />
               <Route path="projects/:id/edit" element={<ProjectForm />} />
               <Route path="projects/:projectId/vos/new" element={<VOForm />} />
-              {/* Invoices */}
+
+              {/* قائمة الملاحظات والسلامة */}
+              <Route path="punch-list" element={<PunchListPage />} />
+              <Route path="safety" element={<SafetyPage />} />
+
+              {/* الأصول والمخزون */}
+              <Route path="assets" element={<AssetList />} />
+              <Route path="inventory" element={<InventoryList />} />
+              <Route path="inventory/new" element={<InventoryForm />} />
+              <Route path="inventory/:id/edit" element={<InventoryForm />} />
+
+              {/* الفواتير */}
               <Route path="invoices" element={<InvoiceList />} />
               <Route path="invoices/new" element={<InvoiceForm />} />
               <Route path="invoices/:id/edit" element={<InvoiceForm />} />
               <Route path="invoices/:id/view" element={<InvoiceView />} />
-              {/* Receipts */}
+
+              {/* الإيصالات */}
               <Route path="receipts" element={<ReceiptList />} />
               <Route path="receipts/new" element={<ReceiptForm />} />
               <Route path="receipts/:id/view" element={<ReceiptView />} />
-              {/* LPOs */}
+
+              {/* اللوحة المالية ودفتر الصندوق */}
+              <Route path="finance" element={<FinanceDashboard />} />
+              <Route path="cashbook" element={<CashBook />} />
+
+              {/* أوامر الشراء */}
               <Route path="lpos" element={<LPOList />} />
               <Route path="lpos/new" element={<LPOForm />} />
               <Route path="lpos/:id/edit" element={<LPOForm />} />
               <Route path="lpos/:id/view" element={<LPOView />} />
               <Route path="lpos/:id/deliveries" element={<LPODeliveries />} />
-              {/* Purchase Invoices */}
+
+              {/* فواتير الشراء */}
               <Route path="purchases" element={<PurchaseInvoiceList />} />
               <Route path="purchases/new" element={<PurchaseInvoiceForm />} />
               <Route path="purchases/:id/edit" element={<PurchaseInvoiceForm />} />
-              {/* Workers */}
+
+              {/* العمالة */}
               <Route path="workers" element={<WorkerList />} />
               <Route path="workers/new" element={<WorkerForm />} />
               <Route path="workers/:id/edit" element={<WorkerForm />} />
               <Route path="workers/:id/profile" element={<WorkerProfile />} />
               <Route path="payroll" element={<PayrollDashboard />} />
-              {/* Daily Logs */}
+              <Route path="attendance" element={<AttendanceBoard />} />
+
+              {/* المهام */}
+              <Route path="tasks" element={<TasksBoard />} />
+
+              {/* التقارير اليومية */}
               <Route path="daily-logs" element={<DailyLogList />} />
-              {/* Cash Book */}
-              <Route path="cashbook" element={<CashBook />} />
-              {/* ✦ المقاولون من الباطن */}
+
+              {/* مقاولو الباطن */}
               <Route path="subcontractors" element={<SubcontractorList />} />
               <Route path="subcontractors/new" element={<SubcontractorDetail />} />
               <Route path="subcontractors/:id" element={<SubcontractorDetail />} />
-              {/* ✦ الأصول والمعدات */}
-              <Route path="assets" element={<AssetList />} />
-              {/* Contacts */}
+
+              {/* الموردون والعملاء وجهات الاتصال */}
               <Route path="suppliers" element={<SupplierList />} />
               <Route path="suppliers/new" element={<SupplierForm />} />
               <Route path="suppliers/:id/edit" element={<SupplierForm />} />
               <Route path="customers" element={<CustomerList />} />
               <Route path="customers/new" element={<CustomerForm />} />
               <Route path="customers/:id/edit" element={<CustomerForm />} />
-              {/* ✦ كشف حساب العميل */}
               <Route path="customers/:customerId/statement" element={<ClientStatement />} />
               <Route path="contacts" element={<ContactsDirectory />} />
-              {/* Misc */}
+
+              {/* أخرى */}
               <Route path="documents" element={<DocumentsPage />} />
               <Route path="settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
