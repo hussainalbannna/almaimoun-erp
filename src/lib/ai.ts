@@ -216,6 +216,50 @@ export async function readDocumentText(file: File, instruction: string): Promise
   return blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim()
 }
 
+// ─── محادثة نصية (للمساعد الذكي) ───────────────────────────────────────
+export interface ChatMessage { role: 'user' | 'assistant'; content: string }
+
+export async function askAI(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
+  const key = await ensureApiKey()
+  if (!key) throw makeError('لم يتم ضبط مفتاح الذكاء الاصطناعي. أضفه من صفحة الإعدادات.', 'NO_KEY')
+
+  let response: Response
+  try {
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        max_tokens: 2000,
+        ...(systemPrompt ? { system: systemPrompt } : {}),
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+      }),
+    })
+  } catch {
+    throw makeError('تعذّر الاتصال بخدمة الذكاء الاصطناعي. تحقق من الإنترنت.', 'NETWORK')
+  }
+
+  if (!response.ok) {
+    let msg = `خطأ في الخدمة (${response.status})`
+    if (response.status === 401) msg = 'مفتاح الذكاء الاصطناعي غير صحيح. تحقق منه في الإعدادات.'
+    else if (response.status === 429) msg = 'تم تجاوز حد الاستخدام. حاول بعد قليل.'
+    try {
+      const err = await response.json()
+      if (err?.error?.message) msg = err.error.message
+    } catch { /* ignore */ }
+    throw makeError(msg, String(response.status))
+  }
+
+  const data = await response.json()
+  const blocks = (data.content ?? []) as ResponseBlock[]
+  return blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim()
+}
+
 // ─── استخراج JSON من نص الرد ───────────────────────────────────────────
 export function extractJSON<T = Record<string, unknown>>(text: string): T | null {
   try {
