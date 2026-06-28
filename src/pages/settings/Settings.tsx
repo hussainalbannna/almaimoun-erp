@@ -6,7 +6,7 @@ import Input from '../../components/ui/Input'
 import Textarea from '../../components/ui/Textarea'
 import toast from 'react-hot-toast'
 import { Building2, Mail, Phone, CreditCard, Settings2, Hash, Sparkles, Loader2, CheckCircle, ExternalLink } from 'lucide-react'
-import { getApiKey, setApiKey, clearApiKey, readDocumentText } from '../../lib/ai'
+import { loadApiKey, saveApiKey, readDocumentText } from '../../lib/ai'
 
 type Tab = 'company' | 'banking' | 'numbering' | 'ai'
 
@@ -37,9 +37,10 @@ export default function Settings() {
   const [aiKey, setAiKey] = useState('')
   const [testing, setTesting] = useState(false)
   const [keyValid, setKeyValid] = useState<boolean | null>(null)
+  const [savingKey, setSavingKey] = useState(false)
 
   useEffect(() => {
-    setAiKey(getApiKey())
+    loadApiKey().then(k => setAiKey(k)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -65,22 +66,24 @@ export default function Settings() {
     toast.success('تم حفظ الإعدادات')
   }
 
-  // ─── حفظ واختبار مفتاح الذكاء الاصطناعي ──────────────────────────────
-  const handleSaveKey = () => {
-    if (!aiKey.trim()) { clearApiKey(); setKeyValid(null); toast.success('تم مسح المفتاح'); return }
-    setApiKey(aiKey)
+  // ─── حفظ واختبار مفتاح الذكاء الاصطناعي (في السحابة) ─────────────────
+  const handleSaveKey = async () => {
+    setSavingKey(true)
+    const ok = await saveApiKey(aiKey)
+    setSavingKey(false)
     setKeyValid(null)
-    toast.success('تم حفظ المفتاح على هذا الجهاز')
+    if (!ok) { toast.error('تعذّر حفظ المفتاح في قاعدة البيانات'); return }
+    toast.success(aiKey.trim() ? 'تم حفظ المفتاح — يعمل الآن على كل أجهزتك' : 'تم مسح المفتاح')
   }
 
   const handleTestKey = async () => {
     if (!aiKey.trim()) { toast.error('أدخل المفتاح أولاً'); return }
-    setApiKey(aiKey) // حفظ قبل الاختبار
     setTesting(true)
     setKeyValid(null)
-    toast.loading('جاري اختبار المفتاح...', { id: 'test' })
+    toast.loading('جاري حفظ واختبار المفتاح...', { id: 'test' })
     try {
-      // صورة بيضاء صغيرة لاختبار الاتصال
+      await saveApiKey(aiKey) // حفظ في السحابة قبل الاختبار
+      // صورة صغيرة لاختبار الاتصال
       const canvas = document.createElement('canvas')
       canvas.width = 60; canvas.height = 20
       const ctx = canvas.getContext('2d')!
@@ -191,7 +194,7 @@ export default function Settings() {
           <>
             <h3 className="font-semibold text-slate-800 flex items-center gap-2"><Sparkles size={18} style={{ color: '#c4925a' }} /> الذكاء الاصطناعي</h3>
             <p className="text-sm text-slate-500">
-              يُستخدم لقراءة العقود والهويات والمستندات تلقائياً (حتى الممسوحة ضوئياً) وملء الحقول. المفتاح يُحفظ على هذا الجهاز فقط ولا يُرسل لأحد غير خدمة Anthropic.
+              يُستخدم لقراءة العقود والهويات والمستندات تلقائياً (حتى الممسوحة ضوئياً) وملء الحقول. المفتاح يُحفظ في قاعدة البيانات بشكل آمن ويعمل تلقائياً على جميع أجهزتك (كمبيوتر وجوال).
             </p>
 
             <div className="space-y-3">
@@ -211,7 +214,7 @@ export default function Settings() {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Button onClick={handleSaveKey}>حفظ المفتاح</Button>
+                <Button onClick={handleSaveKey} loading={savingKey}>حفظ المفتاح</Button>
                 <Button variant="outline" onClick={handleTestKey} disabled={testing}
                   icon={testing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}>
                   {testing ? 'جاري الاختبار...' : 'اختبار المفتاح'}
