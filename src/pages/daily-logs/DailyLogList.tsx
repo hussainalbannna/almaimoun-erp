@@ -4,6 +4,7 @@ import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, Chevr
 import { supabase } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
 import { formatDate } from '../../lib/utils'
+import { readDocumentText, hasApiKey } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -400,41 +401,22 @@ export default function DailyLogList() {
 
   // ── قراءة طلب المواد بالذكاء الاصطناعي ──────────────────────────────────
   const handleScanMaterials = async (file: File) => {
+    if (!hasApiKey()) {
+      toast.error('فعّل مفتاح الذكاء الاصطناعي من الإعدادات أولاً')
+      return
+    }
     setScanningMaterials(true)
     toast.loading('جاري قراءة طلب المواد...', { id: 'mat-scan' })
     try {
-      const base64 = await new Promise<string>((res, rej) => {
-        const r = new FileReader()
-        r.onload = () => res((r.result as string).split(',')[1])
-        r.onerror = rej
-        r.readAsDataURL(file)
-      })
-      const mediaType = file.type || 'image/jpeg'
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-              { type: 'text', text: 'هذه صورة لطلب مواد بناء مكتوب بخط اليد أو مطبوع (قد يكون ممسوحاً ضوئياً أو غير واضح). اقرأه بدقة واستخرج قائمة المواد المطلوبة بكمياتها. أرجع النص فقط بشكل منظم سطراً لكل مادة بصيغة "المادة - الكمية"، بدون أي مقدمة أو شرح. إذا لم تجد كمية اكتب المادة فقط.' }
-            ]
-          }]
-        })
-      })
-      const data = await response.json()
-      const text = (data.content ?? []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('').trim()
+      const text = await readDocumentText(file, 'هذه صورة لطلب مواد بناء مكتوب بخط اليد أو مطبوع (قد يكون ممسوحاً ضوئياً أو غير واضح). اقرأه بدقة واستخرج قائمة المواد المطلوبة بكمياتها. أرجع النص فقط بشكل منظم سطراً لكل مادة بصيغة "المادة - الكمية"، بدون أي مقدمة أو شرح. إذا لم تجد كمية اكتب المادة فقط.')
       if (text) {
         setForm(prev => ({ ...prev, material_requests: prev.material_requests ? `${prev.material_requests}\n${text}` : text }))
         toast.success('تم استخراج طلب المواد', { id: 'mat-scan' })
       } else {
         toast.error('لم يتم العثور على نص', { id: 'mat-scan' })
       }
-    } catch {
-      toast.error('تعذّرت القراءة. تأكد من تفعيل مفتاح الذكاء الاصطناعي', { id: 'mat-scan' })
+    } catch (e) {
+      toast.error((e as Error)?.message ?? 'تعذّرت القراءة', { id: 'mat-scan' })
     } finally {
       setScanningMaterials(false)
     }
