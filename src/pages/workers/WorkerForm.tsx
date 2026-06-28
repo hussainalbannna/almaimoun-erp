@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, Sparkles, Loader2, Award, CalendarDays } from 'lucide-
 import { supabase } from '../../lib/supabase'
 import type { Worker, WorkerAdvance } from '../../types'
 import { formatDate, formatCurrency, calcEndOfService, calcAccruedLeave } from '../../lib/utils'
+import { readDocumentText, extractJSON, hasApiKey } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -16,6 +17,19 @@ const BRANCH_OPTIONS = [
   { value: '3', label: 'الفرع 3' },
   { value: '5', label: 'الفرع 5' },
 ]
+
+const ID_PROMPT = `أنت مساعد متخصص في قراءة بطاقات الهوية البحرينية (CPR) وجوازات السفر. اقرأ هذا المستند بدقة تامة حتى لو كان ممسوحاً ضوئياً أو صورة غير واضحة. افهم محتواه واستخرج البيانات.
+أرجع JSON فقط بدون أي نص أو شرح إضافي، بهذا الشكل بالضبط:
+{
+  "name": "الاسم بالعربي",
+  "name_en": "name in english",
+  "cpr": "الرقم الشخصي (9 أرقام)",
+  "nationality": "الجنسية",
+  "cpr_expiry": "YYYY-MM-DD",
+  "passport_number": "رقم الجواز إن وُجد",
+  "passport_expiry": "YYYY-MM-DD"
+}
+أي حقل غير موجود اتركه فارغاً "". التواريخ بصيغة YYYY-MM-DD فقط.`
 
 export default function WorkerForm() {
   const { id } = useParams()
@@ -52,38 +66,19 @@ export default function WorkerForm() {
 
   // ───── قراءة الهوية/الجواز بالذكاء الاصطناعي ─────
   const handleScanDocument = async (file: File) => {
+    if (!hasApiKey()) {
+      toast.error('فعّل مفتاح الذكاء الاصطناعي من الإعدادات أولاً')
+      return
+    }
     setScanning(true)
     toast.loading('جاري قراءة المستند...', { id: 'scan' })
     try {
-      const base64 = await new Promise<string>((res, rej) => {
-        const r = new FileReader()
-        r.onload = () => res((r.result as string).split(',')[1])
-        r.onerror = rej
-        r.readAsDataURL(file)
-      })
-      const mediaType = file.type || 'image/jpeg'
-
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-              { type: 'text', text: `اقرأ بطاقة الهوية البحرينية أو جواز السفر هذا بدقة، حتى لو كان ممسوحاً ضوئياً أو الصورة غير واضحة. أرجع JSON فقط بدون أي نص آخر بهذا الشكل:
-{"name":"الاسم بالعربي","name_en":"name in english","cpr":"الرقم الشخصي 9 أرقام","nationality":"الجنسية","cpr_expiry":"YYYY-MM-DD","passport_number":"رقم الجواز","passport_expiry":"YYYY-MM-DD"}
-إذا لم تجد حقلاً اتركه فارغاً "". التواريخ بصيغة YYYY-MM-DD فقط.` }
-            ]
-          }]
-        })
-      })
-      const data = await response.json()
-      const text = (data.content ?? []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('')
-      const clean = text.replace(/```json|```/g, '').trim()
-      const parsed = JSON.parse(clean)
+      const text = await readDocumentText(file, ID_PROMPT)
+      const parsed = extractJSON<{
+        name?: string; name_en?: string; cpr?: string; nationality?: string
+        cpr_expiry?: string; passport_number?: string; passport_expiry?: string
+      }>(text)
+      if (!parsed) { toast.error('تعذّر فهم المستند', { id: 'scan' }); return }
 
       setForm(p => ({
         ...p,
@@ -96,8 +91,8 @@ export default function WorkerForm() {
         passport_expiry: parsed.passport_expiry || p.passport_expiry,
       }))
       toast.success('تم استخراج البيانات بنجاح', { id: 'scan' })
-    } catch {
-      toast.error('تعذّرت القراءة. تأكد من تفعيل مفتاح الذكاء الاصطناعي', { id: 'scan' })
+    } catch (e) {
+      toast.error((e as Error)?.message ?? 'تعذّرت القراءة', { id: 'scan' })
     } finally {
       setScanning(false)
     }
@@ -107,16 +102,11 @@ export default function WorkerForm() {
     if (!form.name) { toast.error('يجب إدخال الاسم'); return }
     setSaving(true)
     try {
-      const payload = { ...form }
-      // حساب مكافأة نهاية الخدمة تلقائياً
-      if (form.basic_salary && form.join_date) {
-        payload.end_of_service_date = null
-      }
       if (isEdit) {
-        const { error } = await supabase.from('workers').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', id)
+        const { error } = await supabase.from('workers').update({ ...form, updated_at: new Date().toISOString() }).eq('id', id)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('workers').insert({ ...payload })
+        const { error } = await supabase.from('workers').insert({ ...form })
         if (error) throw error
       }
       toast.success(isEdit ? 'تم تحديث بيانات العامل' : 'تم إضافة العامل')
@@ -160,10 +150,9 @@ export default function WorkerForm() {
           </button>
           <h1 className="text-xl font-bold text-slate-800">{isEdit ? 'تعديل بيانات العامل' : 'إضافة عامل جديد'}</h1>
         </div>
-        {/* زر القراءة الذكية */}
         <div>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleScanDocument(f) }} />
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleScanDocument(f); e.target.value = '' }} />
           <button onClick={() => fileRef.current?.click()} disabled={scanning}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-opacity disabled:opacity-60"
             style={{ background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
@@ -238,14 +227,13 @@ export default function WorkerForm() {
           </div>
         </div>
 
-        {/* الإجازات ونهاية الخدمة (تُحسب تلقائياً) */}
+        {/* الإجازات ونهاية الخدمة */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h2 className="font-semibold text-slate-700 mb-4">الإجازات ونهاية الخدمة</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input label="رصيد الإجازة السنوية (أيام)" type="number" value={String(form.annual_leave_days ?? 30)} onChange={e => setForm(p => ({ ...p, annual_leave_days: parseInt(e.target.value) || 0 }))} />
             <Input label="الأيام المستخدمة" type="number" value={String(form.used_leave_days ?? 0)} onChange={e => setForm(p => ({ ...p, used_leave_days: parseFloat(e.target.value) || 0 }))} />
           </div>
-          {/* بطاقات الحساب التلقائي */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-center gap-3">
               <CalendarDays size={20} className="text-blue-600" />
