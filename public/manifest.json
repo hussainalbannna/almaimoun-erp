@@ -33,6 +33,18 @@
   "categories": ["business", "productivity", "finance"],
   "shortcuts": [
     {
+      "name": "المساعد الذكي",
+      "short_name": "المساعد",
+      "url": "/assistant",
+      "description": "اسأل عن مشاريعك وأرباحك وعمالك"
+    },
+    {
+      "name": "عرض سعر جديد",
+      "short_name": "عرض سعر",
+      "url": "/quotations/new",
+      "description": "إنشاء عرض سعر للعميل"
+    },
+    {
       "name": "فاتورة جديدة",
       "short_name": "فاتورة",
       "url": "/invoices/new",
@@ -45,22 +57,10 @@
       "description": "تسجيل تقرير الموقع اليومي"
     },
     {
-      "name": "أمر شراء",
-      "short_name": "أمر شراء",
-      "url": "/lpos/new",
-      "description": "إصدار أمر شراء جديد"
-    },
-    {
       "name": "دفتر الصندوق",
       "short_name": "الصندوق",
       "url": "/cashbook",
       "description": "تسجيل مصروف أو إيراد"
-    },
-    {
-      "name": "العمالة",
-      "short_name": "العمالة",
-      "url": "/workers",
-      "description": "إدارة العمال والرواتب"
     }
   ]
 }

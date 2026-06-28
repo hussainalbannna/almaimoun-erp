@@ -5,14 +5,49 @@ import Header from './Header'
 
 const pageTitles: Record<string, string> = {
   '/': 'لوحة التحكم',
+  '/reports': 'التقارير والإحصائيات',
+  // المساعد والتقويم والإشعارات
+  '/assistant': 'المساعد الذكي',
+  '/calendar': 'التقويم',
+  '/notifications': 'مركز الإشعارات',
+  // عروض الأسعار
+  '/quotations': 'عروض الأسعار',
+  '/quotations/new': 'عرض سعر جديد',
+  // المشاريع
+  '/projects': 'المشاريع',
+  '/projects/new': 'مشروع جديد',
+  // الفواتير
   '/invoices': 'الفواتير',
   '/invoices/new': 'فاتورة جديدة',
+  // الإيصالات
+  '/receipts': 'الإيصالات',
+  '/receipts/new': 'إيصال جديد',
+  // المالية
+  '/finance': 'اللوحة المالية',
+  '/cashbook': 'دفتر الصندوق',
+  // أوامر الشراء والمشتريات
   '/lpos': 'أوامر الشراء',
   '/lpos/new': 'أمر شراء جديد',
-  '/customers': 'العملاء',
-  '/customers/new': 'عميل جديد',
+  '/purchases': 'فواتير الشراء',
+  '/purchases/new': 'فاتورة شراء جديدة',
+  // العمالة
+  '/workers': 'العمالة',
+  '/workers/new': 'عامل جديد',
+  '/payroll': 'كشف الرواتب',
+  // المهام والتقارير
+  '/tasks': 'المهام والتذكيرات',
+  '/daily-logs': 'تقارير الموقع',
+  // مقاولو الباطن والأصول
+  '/subcontractors': 'مقاولو الباطن',
+  '/subcontractors/new': 'مقاول باطن جديد',
+  '/assets': 'الأصول والمعدات',
+  // الموردون والعملاء وجهات الاتصال
   '/suppliers': 'الموردون',
   '/suppliers/new': 'مورد جديد',
+  '/customers': 'العملاء',
+  '/customers/new': 'عميل جديد',
+  '/contacts': 'جهات الاتصال',
+  // أخرى
   '/documents': 'المستندات',
   '/settings': 'الإعدادات',
 }
@@ -21,10 +56,22 @@ export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const location = useLocation()
 
-  const title =
-    pageTitles[location.pathname] ??
-    (location.pathname.includes('/edit') ? 'تعديل' :
-     location.pathname.includes('/view') ? 'عرض' : '')
+  // عنوان الصفحة: مطابقة مباشرة، ثم حالات خاصة، ثم الأطول مطابقةً للمسارات الفرعية
+  const path = location.pathname
+  let title = pageTitles[path]
+  if (!title) {
+    if (path.includes('/statement')) title = 'كشف حساب'
+    else if (path.includes('/edit')) title = 'تعديل'
+    else if (path.includes('/view')) title = 'عرض'
+    else if (path.includes('/profile')) title = 'ملف العامل'
+    else if (path.includes('/deliveries')) title = 'الاستلامات'
+    else if (path.includes('/vos/new')) title = 'أمر تغيير جديد'
+    else {
+      // مطابقة المسار الأب (مثل /quotations/123 → عروض الأسعار)
+      const base = '/' + path.split('/')[1]
+      title = pageTitles[base] ?? ''
+    }
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 print:block print:h-auto print:overflow-visible print:bg-white">

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Calendar as CalIcon, ChevronRight, ChevronLeft, CreditCard, UserCog, FileText, ListTodo, Briefcase, Calculator, Package } from 'lucide-react'
+import { Calendar as CalIcon, ChevronRight, ChevronLeft, CreditCard, UserCog, FileText, ListTodo, Briefcase, Calculator, Package, RefreshCw } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
 
@@ -13,6 +13,7 @@ interface CalEvent {
   title: string
   amount?: number
   link?: string
+  overdue?: boolean
 }
 
 const TYPE_META: Record<EventType, { label: string; color: string; icon: typeof CalIcon }> = {
@@ -30,6 +31,7 @@ const MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'ماي�
 
 const toKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const dateKey = (s: string | null) => (s ? s.slice(0, 10) : '')
+const todayStr = () => toKey(new Date())
 
 export default function CalendarView() {
   const navigate = useNavigate()
@@ -38,66 +40,62 @@ export default function CalendarView() {
   const [events, setEvents] = useState<CalEvent[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> => {
-        try { const { data } = await p; return data ?? [] } catch { return [] }
-      }
-      const [workers, assets, invoices, purchases, subPay, tasks, projects, quotes] = await Promise.all([
-        safe(supabase.from('workers').select('id,name,visa_expiry,cpr_expiry,passport_expiry,status')),
-        safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry')),
-        safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
-        safe(supabase.from('purchase_invoices').select('id,supplier_name,amount,payment_method,check_due_date')),
-        safe(supabase.from('subcontractor_payments').select('id,amount,payment_method,check_due_date')),
-        safe(supabase.from('tasks').select('id,title,due_date,status')),
-        safe(supabase.from('projects').select('id,project_name,start_date,end_date')),
-        safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status')),
-      ])
-
-      const ev: CalEvent[] = []
-
-      for (const w of workers as Record<string, unknown>[]) {
-        if (w.status === 'inactive') continue
-        for (const [label, f] of [['انتهاء إقامة', 'visa_expiry'], ['انتهاء بطاقة', 'cpr_expiry'], ['انتهاء جواز', 'passport_expiry']] as const) {
-          if (w[f]) ev.push({ id: `w-${w.id}-${f}`, type: 'worker_doc', date: dateKey(w[f] as string), title: `${label}: ${w.name}`, link: `/workers/${w.id}/edit` })
-        }
-      }
-      for (const a of assets as Record<string, unknown>[]) {
-        for (const [label, f] of [['انتهاء تأمين', 'insurance_expiry'], ['انتهاء استمارة', 'registration_expiry']] as const) {
-          if (a[f]) ev.push({ id: `a-${a.id}-${f}`, type: 'asset_doc', date: dateKey(a[f] as string), title: `${label}: ${a.name}`, link: '/assets' })
-        }
-      }
-      for (const p of purchases as Record<string, unknown>[]) {
-        if (p.payment_method === 'deferred_cheque' && p.check_due_date)
-          ev.push({ id: `pc-${p.id}`, type: 'cheque', date: dateKey(p.check_due_date as string), title: `شيك: ${p.supplier_name}`, amount: Number(p.amount) || 0, link: '/purchases' })
-      }
-      for (const s of subPay as Record<string, unknown>[]) {
-        if (s.payment_method === 'cheque' && s.check_due_date)
-          ev.push({ id: `sc-${s.id}`, type: 'cheque', date: dateKey(s.check_due_date as string), title: 'شيك مقاول باطن', amount: Number(s.amount) || 0, link: '/subcontractors' })
-      }
-      for (const inv of invoices as Record<string, unknown>[]) {
-        if (inv.status !== 'paid' && inv.due_date)
-          ev.push({ id: `inv-${inv.id}`, type: 'invoice', date: dateKey(inv.due_date as string), title: `فاتورة ${inv.invoice_number}`, amount: Number(inv.total) || 0, link: `/invoices/${inv.id}/view` })
-      }
-      for (const t of tasks as Record<string, unknown>[]) {
-        if (t.status !== 'done' && t.due_date)
-          ev.push({ id: `t-${t.id}`, type: 'task', date: dateKey(t.due_date as string), title: t.title as string, link: '/tasks' })
-      }
-      for (const pr of projects as Record<string, unknown>[]) {
-        if (pr.start_date) ev.push({ id: `ps-${pr.id}`, type: 'project', date: dateKey(pr.start_date as string), title: `بداية: ${pr.project_name}`, link: `/projects/${pr.id}` })
-        if (pr.end_date) ev.push({ id: `pe-${pr.id}`, type: 'project', date: dateKey(pr.end_date as string), title: `تسليم: ${pr.project_name}`, link: `/projects/${pr.id}` })
-      }
-      for (const q of quotes as Record<string, unknown>[]) {
-        if (q.status === 'sent' && q.valid_until)
-          ev.push({ id: `q-${q.id}`, type: 'quote', date: dateKey(q.valid_until as string), title: `انتهاء عرض ${q.quote_number}`, link: `/quotations/${q.id}` })
-      }
-
-      setEvents(ev)
-      setLoading(false)
+  const loadEvents = useCallback(async () => {
+    setLoading(true)
+    const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> => {
+      try { const { data } = await p; return data ?? [] } catch { return [] }
     }
-    load()
+    const today = todayStr()
+    const [workers, assets, invoices, purchases, subPay, tasks, projects, quotes] = await Promise.all([
+      safe(supabase.from('workers').select('id,name,visa_expiry,cpr_expiry,passport_expiry,status')),
+      safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry')),
+      safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
+      safe(supabase.from('purchase_invoices').select('id,supplier_name,amount,payment_method,check_due_date')),
+      safe(supabase.from('subcontractor_payments').select('id,subcontractor_name,amount,payment_method,check_due_date,project_name')),
+      safe(supabase.from('tasks').select('id,title,due_date,status')),
+      safe(supabase.from('projects').select('id,project_name,start_date,end_date')),
+      safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status')),
+    ])
+
+    const ev: CalEvent[] = []
+    const isOverdue = (dateStr: string) => dateStr < today
+
+    for (const w of workers as Record<string, unknown>[]) {
+      if (w.status === 'inactive') continue
+      for (const [label, f] of [['انتهاء إقامة', 'visa_expiry'], ['انتهاء بطاقة', 'cpr_expiry'], ['انتهاء جواز', 'passport_expiry']] as const) {
+        if (w[f]) { const dk = dateKey(w[f] as string); ev.push({ id: `w-${w.id}-${f}`, type: 'worker_doc', date: dk, title: `${label}: ${w.name}`, link: `/workers/${w.id}/edit`, overdue: isOverdue(dk) }) }
+      }
+    }
+    for (const a of assets as Record<string, unknown>[]) {
+      for (const [label, f] of [['انتهاء تأمين', 'insurance_expiry'], ['انتهاء استمارة', 'registration_expiry']] as const) {
+        if (a[f]) { const dk = dateKey(a[f] as string); ev.push({ id: `a-${a.id}-${f}`, type: 'asset_doc', date: dk, title: `${label}: ${a.name}`, link: '/assets', overdue: isOverdue(dk) }) }
+      }
+    }
+    for (const p of purchases as Record<string, unknown>[]) {
+      if (p.payment_method === 'deferred_cheque' && p.check_due_date) { const dk = dateKey(p.check_due_date as string); ev.push({ id: `pc-${p.id}`, type: 'cheque', date: dk, title: `شيك: ${p.supplier_name}`, amount: Number(p.amount) || 0, link: '/purchases', overdue: isOverdue(dk) }) }
+    }
+    for (const s of subPay as Record<string, unknown>[]) {
+      if (s.payment_method === 'cheque' && s.check_due_date) { const dk = dateKey(s.check_due_date as string); ev.push({ id: `sc-${s.id}`, type: 'cheque', date: dk, title: `شيك مقاول: ${s.subcontractor_name || 'باطن'}${s.project_name ? ' — ' + s.project_name : ''}`, amount: Number(s.amount) || 0, link: '/subcontractors', overdue: isOverdue(dk) }) }
+    }
+    for (const inv of invoices as Record<string, unknown>[]) {
+      if (inv.status !== 'paid' && inv.due_date) { const dk = dateKey(inv.due_date as string); ev.push({ id: `inv-${inv.id}`, type: 'invoice', date: dk, title: `فاتورة ${inv.invoice_number}`, amount: Number(inv.total) || 0, link: `/invoices/${inv.id}/view`, overdue: isOverdue(dk) }) }
+    }
+    for (const t of tasks as Record<string, unknown>[]) {
+      if (t.status !== 'done' && t.due_date) { const dk = dateKey(t.due_date as string); ev.push({ id: `t-${t.id}`, type: 'task', date: dk, title: t.title as string, link: '/tasks', overdue: isOverdue(dk) }) }
+    }
+    for (const pr of projects as Record<string, unknown>[]) {
+      if (pr.start_date) ev.push({ id: `ps-${pr.id}`, type: 'project', date: dateKey(pr.start_date as string), title: `بداية: ${pr.project_name}`, link: `/projects/${pr.id}` })
+      if (pr.end_date) { const dk = dateKey(pr.end_date as string); ev.push({ id: `pe-${pr.id}`, type: 'project', date: dk, title: `تسليم: ${pr.project_name}`, link: `/projects/${pr.id}`, overdue: isOverdue(dk) }) }
+    }
+    for (const q of quotes as Record<string, unknown>[]) {
+      if (q.status === 'sent' && q.valid_until) { const dk = dateKey(q.valid_until as string); ev.push({ id: `q-${q.id}`, type: 'quote', date: dk, title: `انتهاء عرض ${q.quote_number}`, link: `/quotations/${q.id}`, overdue: isOverdue(dk) }) }
+    }
+
+    setEvents(ev)
+    setLoading(false)
   }, [])
+
+  useEffect(() => { loadEvents() }, [loadEvents])
 
   // خريطة: تاريخ → أحداث
   const eventsByDate = useMemo(() => {
@@ -113,7 +111,7 @@ export default function CalendarView() {
   const grid = useMemo(() => {
     const y = cursor.getFullYear(), m = cursor.getMonth()
     const first = new Date(y, m, 1)
-    const startDay = first.getDay() // 0=أحد
+    const startDay = first.getDay()
     const daysInMonth = new Date(y, m + 1, 0).getDate()
     const cells: (Date | null)[] = []
     for (let i = 0; i < startDay; i++) cells.push(null)
@@ -122,8 +120,14 @@ export default function CalendarView() {
     return cells
   }, [cursor])
 
-  const todayKey = toKey(new Date())
+  const todayKey = todayStr()
   const selectedEvents = eventsByDate[selected] ?? []
+
+  // عدد أحداث الشهر المعروض
+  const monthEventCount = useMemo(() => {
+    const prefix = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`
+    return events.filter(e => e.date.startsWith(prefix)).length
+  }, [events, cursor])
 
   const prevMonth = () => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))
   const nextMonth = () => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))
@@ -142,7 +146,12 @@ export default function CalendarView() {
             <p className="text-sm text-slate-500">كل المواعيد والاستحقاقات</p>
           </div>
         </div>
-        <button onClick={goToday} className="text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">اليوم</button>
+        <div className="flex items-center gap-2">
+          <button onClick={loadEvents} title="تحديث" className="p-2 text-slate-500 hover:text-amber-700 rounded-lg hover:bg-amber-50">
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button onClick={goToday} className="text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">اليوم</button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -151,7 +160,10 @@ export default function CalendarView() {
           {/* رأس الشهر */}
           <div className="flex items-center justify-between mb-4">
             <button onClick={prevMonth} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100"><ChevronRight size={20} /></button>
-            <h2 className="font-bold text-slate-800">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</h2>
+            <div className="text-center">
+              <h2 className="font-bold text-slate-800">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</h2>
+              {monthEventCount > 0 && <span className="text-xs text-slate-400">{monthEventCount} موعد هذا الشهر</span>}
+            </div>
             <button onClick={nextMonth} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100"><ChevronLeft size={20} /></button>
           </div>
 
@@ -169,6 +181,7 @@ export default function CalendarView() {
                 if (!d) return <div key={i} />
                 const key = toKey(d)
                 const dayEvents = eventsByDate[key] ?? []
+                const hasOverdue = dayEvents.some(e => e.overdue)
                 const isToday = key === todayKey
                 const isSelected = key === selected
                 return (
@@ -176,13 +189,17 @@ export default function CalendarView() {
                     className={`min-h-[64px] rounded-lg p-1.5 text-right border transition-colors ${
                       isSelected ? 'border-amber-400 bg-amber-50' : isToday ? 'border-slate-300 bg-slate-50' : 'border-transparent hover:bg-slate-50'
                     }`}>
-                    <div className={`text-sm font-medium ${isToday ? 'text-amber-700' : 'text-slate-700'}`}>{d.getDate()}</div>
+                    <div className="flex items-center justify-between">
+                      <span className={`text-sm font-medium ${isToday ? 'text-amber-700' : 'text-slate-700'}`}>{d.getDate()}</span>
+                      {isToday && <span className="text-[9px] text-amber-600 font-medium">اليوم</span>}
+                    </div>
                     <div className="flex flex-wrap gap-0.5 mt-1">
                       {dayEvents.slice(0, 4).map(e => (
-                        <span key={e.id} className="w-1.5 h-1.5 rounded-full" style={{ background: TYPE_META[e.type].color }} />
+                        <span key={e.id} className="w-1.5 h-1.5 rounded-full" style={{ background: e.overdue ? '#dc2626' : TYPE_META[e.type].color }} />
                       ))}
                       {dayEvents.length > 4 && <span className="text-[9px] text-slate-400">+{dayEvents.length - 4}</span>}
                     </div>
+                    {hasOverdue && <div className="w-full h-0.5 bg-red-400 rounded-full mt-0.5" />}
                   </button>
                 )
               })}
@@ -202,9 +219,12 @@ export default function CalendarView() {
 
         {/* أحداث اليوم المختار */}
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <h2 className="font-semibold text-slate-700 mb-3">
-            {(() => { const [y, m, dd] = selected.split('-'); return `${parseInt(dd)} ${MONTHS[parseInt(m) - 1]} ${y}` })()}
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-slate-700">
+              {(() => { const [y, m, dd] = selected.split('-'); return `${parseInt(dd)} ${MONTHS[parseInt(m) - 1]} ${y}` })()}
+            </h2>
+            {selectedEvents.length > 0 && <span className="text-xs text-slate-400 bg-slate-100 rounded-full px-2 py-0.5">{selectedEvents.length}</span>}
+          </div>
           {selectedEvents.length === 0 ? (
             <div className="text-center text-slate-400 py-10 text-sm">لا توجد مواعيد في هذا اليوم</div>
           ) : (
@@ -214,13 +234,16 @@ export default function CalendarView() {
                 const Icon = meta.icon
                 return (
                   <button key={e.id} onClick={() => e.link && navigate(e.link)}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors text-right">
+                    className={`w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-right ${e.overdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100'}`}>
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: meta.color + '22' }}>
                       <Icon size={15} style={{ color: meta.color }} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-slate-800 truncate">{e.title}</div>
-                      <div className="text-xs text-slate-400">{meta.label}</div>
+                      <div className="text-xs flex items-center gap-1.5">
+                        <span className="text-slate-400">{meta.label}</span>
+                        {e.overdue && <span className="text-red-600 font-medium">· متأخر</span>}
+                      </div>
                     </div>
                     {e.amount ? <div className="text-sm font-bold text-slate-700 shrink-0">{formatCurrency(e.amount)}</div> : null}
                   </button>

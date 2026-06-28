@@ -88,7 +88,7 @@ export default function DocumentUpload({ onExtracted, accept = '.pdf,.xlsx,.xls,
             </div>
             <div>
               <p className="text-sm font-medium text-slate-700">رفع ملف للقراءة التلقائية</p>
-              <p className="text-xs text-slate-500 mt-1">PDF, صورة, Excel — يدعم الملفات المسحوحة ضوئياً (Scanned)</p>
+              <p className="text-xs text-slate-500 mt-1">PDF, صورة, Excel — يدعم الملفات الممسوحة ضوئياً (Scanned)</p>
             </div>
             <Button variant="outline" size="sm" onClick={e => { e.stopPropagation(); inputRef.current?.click() }}>
               اختر ملفاً

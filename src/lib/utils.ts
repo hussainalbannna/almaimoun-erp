@@ -23,6 +23,28 @@ export function formatDateTime(date: string | null | undefined): string {
   }
 }
 
+// تاريخ نسبي مختصر (منذ كم) — مفيد للسجلات والنشاطات
+export function timeAgo(date: string | null | undefined): string {
+  if (!date) return ''
+  try {
+    const d = parseISO(date)
+    const now = new Date()
+    const diffMs = now.getTime() - d.getTime()
+    const mins = Math.floor(diffMs / 60000)
+    if (mins < 1) return 'الآن'
+    if (mins < 60) return `قبل ${mins} دقيقة`
+    const hours = Math.floor(mins / 60)
+    if (hours < 24) return `قبل ${hours} ساعة`
+    const days = Math.floor(hours / 24)
+    if (days < 30) return `قبل ${days} يوم`
+    const months = Math.floor(days / 30)
+    if (months < 12) return `قبل ${months} شهر`
+    return `قبل ${Math.floor(months / 12)} سنة`
+  } catch {
+    return formatDate(date)
+  }
+}
+
 // ═══════════════════════════════════════════
 //  العملة — دينار بحريني بدون أصفار زائدة
 //  150.000 → "150 د.ب"   |   150.5 → "150.500 د.ب"
@@ -53,6 +75,23 @@ export function formatNumber(amount: number | null | undefined): string {
   const formattedInt = parseInt(intPart, 10).toLocaleString('en-US')
   const sign = num < 0 ? '-' : ''
   return decPart ? `${sign}${formattedInt}.${decPart}` : `${sign}${formattedInt}`
+}
+
+// نسبة مئوية منسّقة — لعرض هوامش الربح والإنجاز
+export function formatPercent(value: number | null | undefined, decimals = 1): string {
+  const num = Number(value ?? 0)
+  if (isNaN(num)) return '0%'
+  return `${num.toFixed(decimals).replace(/\.?0+$/, '')}%`
+}
+
+// حجم الملف بصيغة مقروءة — لنظام حفظ المستندات
+export function formatFileSize(bytes: number | null | undefined): string {
+  const b = Number(bytes ?? 0)
+  if (b <= 0) return '0 ب'
+  const units = ['ب', 'ك.ب', 'م.ب', 'غ.ب']
+  const i = Math.floor(Math.log(b) / Math.log(1024))
+  const size = b / Math.pow(1024, i)
+  return `${size.toFixed(size >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
 }
 
 // ═══════════════════════════════════════════
@@ -187,6 +226,53 @@ export const subcontractorSpecialtyColor: Record<string, string> = {
 }
 
 // ═══════════════════════════════════════════
+//  ضريبة القيمة المضافة على المشتريات (قابلة للاسترداد)
+//  ملاحظة: البناء الجديد معفى من الضريبة على المبيعات،
+//  لكن نشتري من الموردين بضريبة 10% ونستردها ربع سنوياً
+// ═══════════════════════════════════════════
+export const BAHRAIN_VAT_RATE = 10
+
+// استخراج مبلغ الضريبة من مبلغ شامل للضريبة
+// مثال: فاتورة 110 شاملة → الضريبة = 10، الصافي = 100
+export function extractVAT(grossAmount: number, rate = BAHRAIN_VAT_RATE): { net: number; vat: number } {
+  const gross = Number(grossAmount) || 0
+  const net = gross / (1 + rate / 100)
+  const vat = gross - net
+  return {
+    net: Math.round(net * 1000) / 1000,
+    vat: Math.round(vat * 1000) / 1000,
+  }
+}
+
+// حساب الضريبة المضافة على مبلغ صافٍ
+// مثال: 100 + ضريبة → الضريبة = 10، الإجمالي = 110
+export function addVAT(netAmount: number, rate = BAHRAIN_VAT_RATE): { vat: number; gross: number } {
+  const net = Number(netAmount) || 0
+  const vat = Math.round((net * rate / 100) * 1000) / 1000
+  return { vat, gross: Math.round((net + vat) * 1000) / 1000 }
+}
+
+// تحديد الربع الضريبي لتاريخ معيّن (للإقرار ربع السنوي)
+// يُرجع مثل: "الربع الأول 2026" مع نطاق التواريخ
+export function taxQuarter(dateStr: string | null | undefined): { quarter: number; year: number; label: string; from: string; to: string } | null {
+  if (!dateStr) return null
+  try {
+    const d = parseISO(dateStr)
+    const month = d.getMonth() // 0-11
+    const year = d.getFullYear()
+    const quarter = Math.floor(month / 3) + 1
+    const names = ['الأول', 'الثاني', 'الثالث', 'الرابع']
+    const fromMonth = (quarter - 1) * 3
+    const from = `${year}-${String(fromMonth + 1).padStart(2, '0')}-01`
+    const toMonthLast = new Date(year, fromMonth + 3, 0)
+    const to = `${year}-${String(fromMonth + 3).padStart(2, '0')}-${String(toMonthLast.getDate()).padStart(2, '0')}`
+    return { quarter, year, label: `الربع ${names[quarter - 1]} ${year}`, from, to }
+  } catch {
+    return null
+  }
+}
+
+// ═══════════════════════════════════════════
 //  حساب مكافأة نهاية الخدمة (قانون عمل البحرين)
 // ═══════════════════════════════════════════
 export function calcEndOfService(basicSalary: number, joinDate: string, endDate?: string): number {
@@ -249,19 +335,30 @@ export const alertStyles: Record<AlertLevel, { bg: string; border: string; text:
 }
 
 // ═══════════════════════════════════════════
+//  تنظيف رقم الهاتف البحريني وتوحيده
+// ═══════════════════════════════════════════
+function normalizeBahrainPhone(phone: string): string {
+  let n = phone.replace(/\D/g, '')
+  if (n.startsWith('00973')) n = n.slice(5)
+  else if (n.startsWith('00')) n = n.slice(2)
+  else if (n.startsWith('973') && n.length === 11) n = n.slice(3)
+  if (n.length === 8) n = '973' + n   // رقم بحريني محلي
+  return n
+}
+
+// ═══════════════════════════════════════════
 //  فتح واتساب برسالة جاهزة
 // ═══════════════════════════════════════════
 export function openWhatsApp(phone: string, message: string) {
-  const cleaned = phone.replace(/\D/g, '')
-  let number = cleaned
-  if (number.startsWith('00')) number = number.slice(2)
-  if (number.length === 8) number = '973' + number
+  const number = normalizeBahrainPhone(phone)
   window.open(`https://wa.me/${number}?text=${encodeURIComponent(message)}`, '_blank')
 }
 
 // ═══════════════════════════════════════════
 //  فتح الإيميل برسالة جاهزة
+//  (window.open بدل location.href حتى لا يكسر تنقّل التطبيق)
 // ═══════════════════════════════════════════
 export function openEmail(to: string, subject: string, body: string) {
-  window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+  const link = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+  window.open(link, '_blank')
 }

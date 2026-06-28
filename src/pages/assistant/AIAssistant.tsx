@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Send, Loader2, Sparkles, User, Trash2, AlertCircle } from 'lucide-react'
+import { Bot, Send, Loader2, Sparkles, User, Trash2, AlertCircle, RefreshCw } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { askAI, hasApiKey, type ChatMessage } from '../../lib/ai'
 
@@ -14,14 +14,17 @@ function daysUntil(dateStr: string | null | undefined): number | null {
   return Math.round((target.getTime() - today.getTime()) / 86400000)
 }
 
+const n = (v: unknown): number => Number(v) || 0
+const fmt = (v: number): string => v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 })
+
 // أسئلة مقترحة جاهزة
 const SUGGESTIONS = [
-  'ما هو إجمالي الأرباح والمستحقات على العملاء؟',
+  'ما ربح أو خسارة كل مشروع لدي؟',
+  'لخّص لي وضع الشركة المالي بالكامل',
   'أي عامل قاربت إقامته أو بطاقته على الانتهاء؟',
-  'ما حالة مشاريعي الحالية وكم نسبة إنجاز كل مشروع؟',
-  'كم إجمالي الشيكات الآجلة المستحقة هذا الشهر؟',
-  'لخّص لي وضع الشركة المالي بشكل عام',
-  'ما الفواتير غير المدفوعة وكم قيمتها؟',
+  'كم إجمالي الشيكات الآجلة المستحقة قريباً؟',
+  'كم ضريبة المشتريات القابلة للاسترداد تقريباً؟',
+  'ما المشروع الأكثر ربحية والأقل ربحية؟',
 ]
 
 interface BusinessData {
@@ -33,6 +36,10 @@ interface BusinessData {
   milestones: Record<string, unknown>[]
   purchaseInvoices: Record<string, unknown>[]
   subPayments: Record<string, unknown>[]
+  cashEntries: Record<string, unknown>[]
+  quotations: Record<string, unknown>[]
+  tasks: Record<string, unknown>[]
+  vos: Record<string, unknown>[]
 }
 
 export default function AIAssistant() {
@@ -44,43 +51,43 @@ export default function AIAssistant() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const keyOk = hasApiKey()
 
-  // تحميل بيانات الشركة في الخلفية لتزويد المساعد بالسياق
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments] = await Promise.all([
-          supabase.from('projects').select('project_number,project_name,client_name,location,contract_value,status,start_date,end_date'),
-          supabase.from('workers').select('name,profession,nationality,worker_type,status,visa_expiry,cpr_expiry,passport_expiry,basic_salary,actual_salary,daily_rate'),
-          supabase.from('invoices').select('invoice_number,customer_name,issue_date,due_date,status,total'),
-          supabase.from('receipts').select('receipt_number,customer_name,amount,receipt_date'),
-          supabase.from('suppliers').select('name,company_name,phone'),
-          supabase.from('project_milestones').select('name,percentage,amount,status,project_id'),
-          supabase.from('purchase_invoices').select('supplier_name,project_name,amount,payment_method,check_due_date,vendor_invoice_number').then(r => r).catch(() => ({ data: [] })),
-          supabase.from('subcontractor_payments').select('amount,payment_method,check_due_date,payment_date').then(r => r).catch(() => ({ data: [] })),
-        ])
-        bizData.current = {
-          projects: projects.data ?? [],
-          workers: workers.data ?? [],
-          invoices: invoices.data ?? [],
-          receipts: receipts.data ?? [],
-          suppliers: suppliers.data ?? [],
-          milestones: milestones.data ?? [],
-          purchaseInvoices: (purchaseInvoices as { data?: Record<string, unknown>[] }).data ?? [],
-          subPayments: (subPayments as { data?: Record<string, unknown>[] }).data ?? [],
-        }
-        setDataReady(true)
-      } catch {
-        setDataReady(true) // نسمح بالمحاولة حتى لو فشل بعض التحميل
-      }
+  const loadData = async () => {
+    setDataReady(false)
+    const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> => {
+      try { const { data } = await p; return data ?? [] } catch { return [] }
     }
-    load()
-  }, [])
+    try {
+      const [projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos] = await Promise.all([
+        safe(supabase.from('projects').select('id,project_number,project_name,client_name,location,contract_value,status,start_date,end_date')),
+        safe(supabase.from('workers').select('name,profession,nationality,worker_type,status,visa_expiry,cpr_expiry,passport_expiry,basic_salary,actual_salary,daily_rate')),
+        safe(supabase.from('invoices').select('invoice_number,customer_name,issue_date,due_date,status,total,project_id')),
+        safe(supabase.from('receipts').select('receipt_number,customer_name,amount,receipt_date,project_id')),
+        safe(supabase.from('suppliers').select('name,company_name,phone')),
+        safe(supabase.from('project_milestones').select('name,percentage,amount,status,project_id')),
+        safe(supabase.from('purchase_invoices').select('supplier_name,project_id,project_name,amount,payment_method,check_due_date,vendor_invoice_number')),
+        safe(supabase.from('subcontractor_payments').select('amount,payment_method,check_due_date,payment_date,project_id')),
+        safe(supabase.from('accounts_payable').select('amount,category,expense_type,project_id,entry_date')),
+        safe(supabase.from('quotations').select('quote_number,customer_name,project_name,total,status,valid_until')),
+        safe(supabase.from('tasks').select('title,status,priority,due_date')),
+        safe(supabase.from('variation_orders').select('project_id,description,amount,status')),
+      ])
+      bizData.current = {
+        projects, workers, invoices, receipts, suppliers, milestones,
+        purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos,
+      }
+      setDataReady(true)
+    } catch {
+      setDataReady(true)
+    }
+  }
+
+  useEffect(() => { loadData() }, [])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, loading])
 
-  // بناء ملخّص نصّي مختصر للبيانات (سياق للمساعد)
+  // بناء ملخّص نصّي ذكي للبيانات — مع حساب ربحية كل مشروع
   const buildContext = (): string => {
     const d = bizData.current
     if (!d) return 'لا توجد بيانات محمّلة.'
@@ -88,19 +95,53 @@ export default function AIAssistant() {
     const today = new Date().toISOString().slice(0, 10)
     const lines: string[] = []
     lines.push(`التاريخ اليوم: ${today}`)
-    lines.push(`العملة: دينار بحريني (د.ب)`)
+    lines.push(`العملة: دينار بحريني (د.ب) بثلاث خانات عشرية`)
+    lines.push(`النشاط: بناء فلل جديدة في البحرين (معفى من ضريبة المبيعات، لكن ضريبة المشتريات 10% قابلة للاسترداد ربع سنوياً)`)
 
-    // المشاريع
-    lines.push(`\n## المشاريع (${d.projects.length}):`)
+    // ── ربحية كل مشروع (الأهم) ──
+    lines.push(`\n## تحليل ربحية المشاريع (${d.projects.length} مشروع):`)
+    lines.push(`[ملاحظة للحساب: ربح المشروع = (قيمة العقد + أوامر التغيير) − (مصروفات الصندوق + فواتير الموردين + مدفوعات المقاولين) المرتبطة بالمشروع]`)
+
+    let totalContracts = 0, totalAllCosts = 0, totalReceivedAll = 0
+
     d.projects.forEach((p, i) => {
-      const ms = d.milestones.filter(m => m.project_id === (p as { id?: string }).id)
-      const done = ms.filter(m => m.status === 'invoiced' || m.status === 'paid').reduce((s, m) => s + Number(m.percentage || 0), 0)
-      lines.push(`${i + 1}. ${p.project_name} | العميل: ${p.client_name} | الموقع: ${p.location} | قيمة العقد: ${p.contract_value} | الحالة: ${p.status} | نسبة الإنجاز المفوتر: ${done}%`)
+      const pid = (p as { id?: string }).id
+      const contract = n(p.contract_value)
+
+      const projVOs = d.vos.filter(v => v.project_id === pid && (v.status === 'approved' || v.status === 'معتمد'))
+      const voTotal = projVOs.reduce((s, v) => s + n(v.amount), 0)
+
+      const cashCost = d.cashEntries.filter(c => c.project_id === pid).reduce((s, c) => s + n(c.amount), 0)
+      const supplierCost = d.purchaseInvoices.filter(pi => pi.project_id === pid).reduce((s, pi) => s + n(pi.amount), 0)
+      const subCost = d.subPayments.filter(sp => sp.project_id === pid).reduce((s, sp) => s + n(sp.amount), 0)
+      const totalCost = cashCost + supplierCost + subCost
+
+      const received = d.receipts.filter(r => r.project_id === pid).reduce((s, r) => s + n(r.amount), 0)
+
+      const revenue = contract + voTotal
+      const profit = revenue - totalCost
+      const margin = revenue > 0 ? (profit / revenue) * 100 : 0
+      const outstanding = revenue - received
+
+      totalContracts += revenue
+      totalAllCosts += totalCost
+      totalReceivedAll += received
+
+      lines.push(`\n${i + 1}. ${p.project_name} — ${p.client_name} (${p.location || 'بدون موقع'}) [${p.status}]`)
+      lines.push(`   الإيراد: ${fmt(revenue)} (عقد ${fmt(contract)}${voTotal ? ' + أوامر تغيير ' + fmt(voTotal) : ''})`)
+      lines.push(`   التكاليف: ${fmt(totalCost)} (صندوق ${fmt(cashCost)} + موردين ${fmt(supplierCost)} + مقاولين ${fmt(subCost)})`)
+      lines.push(`   ${profit >= 0 ? 'الربح' : 'الخسارة'}: ${fmt(profit)} (هامش ${margin.toFixed(1)}%)`)
+      lines.push(`   المقبوض: ${fmt(received)} | المتبقي على العميل: ${fmt(outstanding)}`)
     })
 
-    // العمال + الوثائق المنتهية
-    lines.push(`\n## العمال (${d.workers.length}):`)
-    d.workers.forEach((w, i) => {
+    const netProfit = totalContracts - totalAllCosts
+    lines.push(`\n## الإجمالي العام:`)
+    lines.push(`إجمالي قيمة العقود: ${fmt(totalContracts)} | إجمالي التكاليف: ${fmt(totalAllCosts)} | صافي الربح: ${fmt(netProfit)} | إجمالي المقبوض: ${fmt(totalReceivedAll)} | إجمالي المتبقي: ${fmt(totalContracts - totalReceivedAll)}`)
+
+    // ── العمال + الوثائق المنتهية ──
+    const activeWorkers = d.workers.filter(w => w.status !== 'inactive')
+    lines.push(`\n## العمال (${activeWorkers.length} نشط):`)
+    activeWorkers.forEach((w, i) => {
       const expiries: string[] = []
       for (const [label, field] of [['الإقامة', 'visa_expiry'], ['البطاقة', 'cpr_expiry'], ['الجواز', 'passport_expiry']] as const) {
         const v = w[field] as string | null
@@ -109,43 +150,56 @@ export default function AIAssistant() {
           if (dleft !== null && dleft <= 60) expiries.push(`${label} ${dleft < 0 ? 'منتهية منذ ' + Math.abs(dleft) + ' يوم' : 'بعد ' + dleft + ' يوم'}`)
         }
       }
-      lines.push(`${i + 1}. ${w.name} | ${w.profession || ''} | ${w.nationality || ''} | ${w.status}${expiries.length ? ' | ⚠️ ' + expiries.join('، ') : ''}`)
+      lines.push(`${i + 1}. ${w.name} | ${w.profession || ''} | ${w.nationality || ''}${expiries.length ? ' | ⚠️ ' + expiries.join('، ') : ''}`)
     })
 
-    // الفواتير
+    // ── الفواتير ──
     const unpaid = d.invoices.filter(inv => inv.status !== 'paid')
-    const totalUnpaid = unpaid.reduce((s, inv) => s + Number(inv.total || 0), 0)
-    lines.push(`\n## الفواتير (${d.invoices.length}، غير مدفوعة: ${unpaid.length} بقيمة ${totalUnpaid.toFixed(3)}):`)
-    d.invoices.forEach((inv) => {
-      lines.push(`- ${inv.invoice_number} | ${inv.customer_name} | ${inv.total} | ${inv.status} | استحقاق: ${inv.due_date || '-'}`)
-    })
+    const totalUnpaid = unpaid.reduce((s, inv) => s + n(inv.total), 0)
+    lines.push(`\n## الفواتير: ${d.invoices.length} إجمالاً، غير مدفوعة ${unpaid.length} بقيمة ${fmt(totalUnpaid)}`)
+    unpaid.forEach((inv) => lines.push(`- ${inv.invoice_number} | ${inv.customer_name} | ${fmt(n(inv.total))} | ${inv.status} | استحقاق: ${inv.due_date || '-'}`))
 
-    // الإيصالات (المقبوضات)
-    const totalReceived = d.receipts.reduce((s, r) => s + Number(r.amount || 0), 0)
-    lines.push(`\n## المقبوضات: إجمالي ${totalReceived.toFixed(3)} من ${d.receipts.length} إيصال`)
-
-    // الشيكات الآجلة
+    // ── الشيكات الآجلة + ضريبة المشتريات ──
     const cheques = [
-      ...d.purchaseInvoices.filter(p => p.payment_method === 'deferred_cheque' && p.check_due_date).map(p => ({ amount: p.amount, due: p.check_due_date, who: p.supplier_name })),
-      ...d.subPayments.filter(s => s.payment_method === 'cheque' && s.check_due_date).map(s => ({ amount: s.amount, due: s.check_due_date, who: 'مقاول باطن' })),
+      ...d.purchaseInvoices.filter(p => p.payment_method === 'deferred_cheque' && p.check_due_date).map(p => ({ amount: n(p.amount), due: p.check_due_date, who: p.supplier_name })),
+      ...d.subPayments.filter(s => s.payment_method === 'cheque' && s.check_due_date).map(s => ({ amount: n(s.amount), due: s.check_due_date, who: 'مقاول باطن' })),
     ]
-    const totalCheques = cheques.reduce((s, c) => s + Number(c.amount || 0), 0)
-    lines.push(`\n## الشيكات الآجلة (${cheques.length} بقيمة ${totalCheques.toFixed(3)}):`)
-    cheques.forEach(c => lines.push(`- ${c.amount} | استحقاق: ${c.due} | ${c.who}`))
+    const totalCheques = cheques.reduce((s, c) => s + c.amount, 0)
+    lines.push(`\n## الشيكات الآجلة (${cheques.length} بقيمة ${fmt(totalCheques)}):`)
+    cheques.forEach(c => lines.push(`- ${fmt(c.amount)} | استحقاق: ${c.due} | ${c.who}`))
 
-    // الموردون
+    const totalPurchases = d.purchaseInvoices.reduce((s, p) => s + n(p.amount), 0)
+    const recoverableVAT = totalPurchases - (totalPurchases / 1.1)
+    lines.push(`\n## ضريبة المشتريات القابلة للاسترداد: ~${fmt(Math.round(recoverableVAT * 1000) / 1000)} (من إجمالي مشتريات ${fmt(totalPurchases)})`)
+
+    // ── عروض الأسعار ──
+    if (d.quotations.length) {
+      const pending = d.quotations.filter(q => q.status === 'sent')
+      lines.push(`\n## عروض الأسعار: ${d.quotations.length} إجمالاً، بانتظار الرد ${pending.length}`)
+      pending.forEach(q => lines.push(`- ${q.quote_number} | ${q.customer_name} | ${fmt(n(q.total))} | ينتهي: ${q.valid_until || '-'}`))
+    }
+
+    // ── المهام ──
+    if (d.tasks.length) {
+      const openTasks = d.tasks.filter(t => t.status !== 'done')
+      lines.push(`\n## المهام المفتوحة (${openTasks.length}):`)
+      openTasks.forEach(t => lines.push(`- ${t.title} | ${t.priority} | استحقاق: ${t.due_date || '-'}`))
+    }
+
     lines.push(`\n## الموردون: ${d.suppliers.length} مورد`)
 
     return lines.join('\n')
   }
 
-  const SYSTEM_PROMPT = `أنت مساعد ذكي لشركة "مؤسسة الميمون للمقاولات" المتخصصة في بناء الفلل في البحرين. مهمتك مساعدة صاحب الشركة في إدارة أعماله.
+  const SYSTEM_PROMPT = `أنت مساعد ذكي ومحاسب خبير لشركة "مؤسسة الميمون للمقاولات" المتخصصة في بناء الفلل الجديدة في البحرين. مهمتك مساعدة صاحب الشركة في إدارة أعماله وحساباته بدقة.
 
 قواعد مهمة:
-- أجب دائماً باللهجة الخليجية/العربية الواضحة والمختصرة.
+- أجب دائماً باللهجة الخليجية/العربية الواضحة والمختصرة والعملية.
 - استند فقط إلى البيانات المرفقة أدناه. إذا لم تكن المعلومة موجودة، قل بوضوح "هذه المعلومة غير متوفرة في النظام حالياً".
 - عند ذكر المبالغ استخدم الدينار البحريني (د.ب) بثلاث خانات عشرية.
-- كن دقيقاً في الأرقام والحسابات. اعرض النتائج بشكل منظّم وسهل القراءة.
+- كن دقيقاً جداً في الأرقام والحسابات. اعرض النتائج بشكل منظّم وسهل القراءة (جداول أو نقاط).
+- بيانات ربحية المشاريع محسوبة مسبقاً في السياق — استخدمها مباشرة عند السؤال عن ربح/خسارة أي مشروع.
+- ملاحظة ضريبية: المبيعات (البناء الجديد) معفاة من الضريبة، لكن ضريبة المشتريات من الموردين (10%) قابلة للاسترداد عبر إقرار ربع سنوي.
 - إذا طُلب منك صياغة رسالة (واتساب/إيميل) اكتبها جاهزة للإرسال.
 - لا تخترع أسماء أو أرقاماً غير موجودة في البيانات.
 
@@ -191,11 +245,16 @@ export default function AIAssistant() {
             </p>
           </div>
         </div>
-        {messages.length > 0 && (
-          <button onClick={clearChat} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-red-600 px-3 py-1.5 rounded-lg hover:bg-red-50">
-            <Trash2 size={15} /> محادثة جديدة
+        <div className="flex items-center gap-2">
+          <button onClick={loadData} title="تحديث البيانات" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-amber-700 px-3 py-1.5 rounded-lg hover:bg-amber-50">
+            <RefreshCw size={15} className={!dataReady ? 'animate-spin' : ''} /> تحديث
           </button>
-        )}
+          {messages.length > 0 && (
+            <button onClick={clearChat} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-red-600 px-3 py-1.5 rounded-lg hover:bg-red-50">
+              <Trash2 size={15} /> محادثة جديدة
+            </button>
+          )}
+        </div>
       </div>
 
       {/* تنبيه عدم وجود مفتاح */}
@@ -214,7 +273,7 @@ export default function AIAssistant() {
               <Sparkles size={28} style={{ color: '#c4925a' }} />
             </div>
             <h2 className="text-xl font-bold text-slate-800 mb-2">كيف أقدر أساعدك اليوم؟</h2>
-            <p className="text-slate-500 text-sm mb-6">اسألني عن مشاريعك، أرباحك، عمالك، فواتيرك، أو اطلب صياغة رسالة لعميل.</p>
+            <p className="text-slate-500 text-sm mb-6">اسألني عن ربحية مشاريعك، وضعك المالي، عمالك، فواتيرك، أو اطلب صياغة رسالة لعميل.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {SUGGESTIONS.map((s, i) => (
                 <button key={i} onClick={() => send(s)} disabled={!keyOk || !dataReady}

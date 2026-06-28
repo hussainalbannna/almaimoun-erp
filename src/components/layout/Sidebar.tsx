@@ -3,8 +3,7 @@ import {
   LayoutDashboard, FileText, ShoppingCart, Users, Building2,
   Settings, FileArchive, X, HardHat, Receipt, UserCog,
   ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
-  Bot, Calendar, Bell, Calculator, ListChecks, ShieldCheck,
-  Package, Warehouse, CalendarCheck, Wrench, ListTodo, PieChart
+  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package
 } from 'lucide-react'
 
 const navGroups = [
@@ -28,17 +27,13 @@ const navGroups = [
     items: [
       { to: '/projects', label: 'المشاريع والمراحل', icon: HardHat },
       { to: '/daily-logs', label: 'تقارير الموقع وأوامر التغيير', icon: ClipboardList },
-      { to: '/punch-list', label: 'قائمة الملاحظات', icon: ListChecks },
-      { to: '/safety', label: 'السلامة والحوادث', icon: ShieldCheck },
       { to: '/assets', label: 'الأصول والمعدات', icon: Package },
-      { to: '/inventory', label: 'المخزون والمواد', icon: Warehouse },
     ]
   },
   {
     label: 'الموارد البشرية',
     items: [
       { to: '/workers', label: 'العمالة والسجلات', icon: Users },
-      { to: '/attendance', label: 'الحضور والانصراف', icon: CalendarCheck },
       { to: '/payroll', label: 'كشف الرواتب', icon: UserCog },
       { to: '/subcontractors', label: 'مقاولو الباطن', icon: Wrench },
       { to: '/tasks', label: 'المهام والتذكيرات', icon: ListTodo },

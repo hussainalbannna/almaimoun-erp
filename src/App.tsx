@@ -36,23 +36,18 @@ import DailyLogList from './pages/daily-logs/DailyLogList'
 import CashBook from './pages/cashbook/CashBook'
 import PurchaseInvoiceList from './pages/purchases/PurchaseInvoiceList'
 import PurchaseInvoiceForm from './pages/purchases/PurchaseInvoiceForm'
-// ── الأقسام المُضافة ──
+// الأقسام المضافة
 import SubcontractorList from './pages/subcontractors/SubcontractorList'
 import SubcontractorDetail from './pages/subcontractors/SubcontractorDetail'
 import AssetList from './pages/assets/AssetList'
 import ClientStatement from './pages/statements/ClientStatement'
-// ── الصفحات الجديدة ──
+// الصفحات الجديدة الجاهزة فقط
 import AIAssistant from './pages/assistant/AIAssistant'
 import QuotationList from './pages/quotations/QuotationList'
 import QuotationForm from './pages/quotations/QuotationForm'
 import QuotationView from './pages/quotations/QuotationView'
 import CalendarView from './pages/calendar/CalendarView'
 import TasksBoard from './pages/tasks/TasksBoard'
-import InventoryList from './pages/inventory/InventoryList'
-import InventoryForm from './pages/inventory/InventoryForm'
-import PunchListPage from './pages/punch-list/PunchListPage'
-import SafetyPage from './pages/safety/SafetyPage'
-import AttendanceBoard from './pages/attendance/AttendanceBoard'
 import FinanceDashboard from './pages/finance/FinanceDashboard'
 import NotificationsCenter from './pages/notifications/NotificationsCenter'
 
@@ -95,15 +90,8 @@ export default function App() {
               <Route path="projects/:id/edit" element={<ProjectForm />} />
               <Route path="projects/:projectId/vos/new" element={<VOForm />} />
 
-              {/* قائمة الملاحظات والسلامة */}
-              <Route path="punch-list" element={<PunchListPage />} />
-              <Route path="safety" element={<SafetyPage />} />
-
-              {/* الأصول والمخزون */}
+              {/* الأصول */}
               <Route path="assets" element={<AssetList />} />
-              <Route path="inventory" element={<InventoryList />} />
-              <Route path="inventory/new" element={<InventoryForm />} />
-              <Route path="inventory/:id/edit" element={<InventoryForm />} />
 
               {/* الفواتير */}
               <Route path="invoices" element={<InvoiceList />} />
@@ -138,7 +126,6 @@ export default function App() {
               <Route path="workers/:id/edit" element={<WorkerForm />} />
               <Route path="workers/:id/profile" element={<WorkerProfile />} />
               <Route path="payroll" element={<PayrollDashboard />} />
-              <Route path="attendance" element={<AttendanceBoard />} />
 
               {/* المهام */}
               <Route path="tasks" element={<TasksBoard />} />
