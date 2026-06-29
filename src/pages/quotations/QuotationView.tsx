@@ -335,18 +335,12 @@ export default function QuotationView() {
         <div className="relative p-8" style={{ zIndex: 1 }}>
         {/* رأس بهوية الميمون — تصميم راقٍ */}
         <div className="flex items-start justify-between pb-5 mb-6" style={{ borderBottom: '2px solid', borderImage: 'linear-gradient(90deg, #c4925a, #e5d9c8) 1' }}>
-          <div className="flex items-center gap-4">
-            {/* أيقونة شعار */}
-            <div className="flex items-center justify-center rounded-2xl shadow-sm" style={{ width: '64px', height: '64px', background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
-              <span className="font-black text-white" style={{ fontSize: '38px', fontFamily: 'Arial Black, sans-serif' }}>M</span>
-            </div>
-            <div>
-              <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{L.name_co}</div>
-              <div className="text-[11px] text-slate-500 mt-1.5 flex flex-col gap-0.5" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>
-                <span>C.R No: {FALLBACK.cr}</span>
-                <span>{FALLBACK.phone}</span>
-                <span>{FALLBACK.email}</span>
-              </div>
+          <div>
+            <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{L.name_co}</div>
+            <div className="text-[11px] text-slate-500 mt-1.5 flex flex-col gap-0.5" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>
+              <span>C.R No: {FALLBACK.cr}</span>
+              <span>{FALLBACK.phone}</span>
+              <span>{FALLBACK.email}</span>
             </div>
           </div>
           <div className={isAr ? 'text-left' : 'text-right'}>
