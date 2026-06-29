@@ -202,7 +202,7 @@ export default function QuotationForm() {
       }
 
       toast.success(isEdit ? 'تم تحديث العرض' : 'تم إنشاء العرض')
-      navigate(`/quotations/${quoteId}/view`)
+      navigate(`/quotations/${quoteId}`)
     } catch (e) {
       toast.error('حدث خطأ: ' + ((e as Error)?.message ?? ''))
     } finally {
