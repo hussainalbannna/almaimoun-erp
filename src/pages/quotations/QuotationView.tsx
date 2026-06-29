@@ -72,7 +72,7 @@ const EXCLUDED_AR = [
   'جميع أعمال الحفر والدفان وتهيئة وضغط الأرض.', 'جميع الاكسسوارات والأدوات الكهربائية.',
   'جميع الاكسسوارات والأدوات الصحية.', 'جميع أعمال التكييف.', 'جميع أعمال أنظمة مكافحة الحريق.',
   'جميع أعمال الألمنيوم للأبواب والنوافذ.', 'جميع أعمال الحديد المطاوع.', 'جميع أعمال الخشب والنجارة.',
-  'جميع أعمال الجبس والصباغة.', 'جميع أعمال الأنظمة الأمنية وكاميرات المراقبة والستاليت.',
+  'جميع أعمال الجبس بورد للأسقف.', 'جميع أعمال الدهان والصباغة.', 'جميع أعمال الأنظمة الأمنية وكاميرات المراقبة والستاليت.',
   'جميع أعمال الخزائن للمطابخ وملحقاتها.', 'جميع أعمال العزل الحراري للأسطح الخرسانية.',
   'جميع أعمال الزراعة والتشجير.', 'جميع أعمال العزل المائي.',
   'جميع ما لم يذكر في النقاط المشمولة في هذه التسعيرة.',
@@ -81,7 +81,7 @@ const EXCLUDED_EN = [
   'All excavation, demolition, backfilling, pressure testing, and compaction.', 'All electrical accessories and tools.',
   'All accessories and sanitary ware.', 'All the air conditioning works.', 'All works of firefighting systems.',
   'All aluminum works, doors, and windows.', 'All wrought iron works.', 'All wood and carpentry work.',
-  'All painting and gypsum works.', 'All security systems, surveillance cameras and satellite work.',
+  'All gypsum board works for ceilings.', 'All painting works.', 'All security systems, surveillance cameras and satellite work.',
   'All cabinet work for kitchens and accessories.', 'All thermal insulation works for concrete surfaces.',
   'All agricultural and landscaping works.', 'All swimming pool works.',
   'All that is not mentioned in the points contained in this quote.',
@@ -240,12 +240,18 @@ export default function QuotationView() {
   const isPostTension = quote.building_type === 'post_tension'
 
   const optionalItems = items.filter(it => it.category === 'optional')
-  const hasGypsum = optionalItems.some(it => (it.description || '').includes('جبس') || (it.description_en || '').toLowerCase().includes('gypsum'))
-  const hasExcavation = optionalItems.some(it => (it.description || '').includes('حفر') || (it.description_en || '').toLowerCase().includes('excavation'))
+  const optText = (it: QItem) => (it.description || '') + ' ' + (it.description_en || '').toLowerCase()
+  const hasGypsum = optionalItems.some(it => optText(it).includes('جبس') || optText(it).includes('gypsum'))
+  const hasPainting = optionalItems.some(it => optText(it).includes('صباغة') || optText(it).includes('دهان') || optText(it).includes('painting'))
+  const hasExcavation = optionalItems.some(it => optText(it).includes('حفر') || optText(it).includes('excavation'))
 
   const excluded = (isAr ? EXCLUDED_AR : EXCLUDED_EN).filter(ex => {
-    if (hasGypsum && (ex.includes('الجبس') || ex.toLowerCase().includes('gypsum') || ex.toLowerCase().includes('painting'))) return false
-    if (hasExcavation && (ex.includes('الحفر') || ex.toLowerCase().includes('excavation'))) return false
+    const e = ex.toLowerCase()
+    // الجبس: يُحذف بند الجبس من "لا تشمل" لو أُضيف الجبس
+    if (hasGypsum && (ex.includes('الجبس') || e.includes('gypsum'))) return false
+    // الصباغة: يُحذف بند الدهان من "لا تشمل" لو أُضيفت الصباغة
+    if (hasPainting && (ex.includes('الدهان') || ex.includes('الصباغة') || e.includes('painting'))) return false
+    if (hasExcavation && (ex.includes('الحفر') || e.includes('excavation'))) return false
     return true
   })
 
