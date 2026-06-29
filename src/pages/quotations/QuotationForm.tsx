@@ -18,13 +18,18 @@ interface CustomerOpt { id: string; name: string; phone: string }
 const OPTIONAL_ITEMS = [
   {
     key: 'excavation',
-    ar: 'جميع أعمال الحفر والدفان', en: 'All excavation and backfilling works',
-    detailAr: 'أعمال الحفر والدفان وتهيئة وضغط الأرض.', detailEn: 'All excavation, backfilling, leveling and soil compaction works.',
+    ar: 'أعمال الحفر والدفان', en: 'Excavation and backfilling works',
+    detailAr: 'تنفيذ أعمال الحفر والردم ودمك التربة.', detailEn: 'Excavation, backfilling, and soil compaction.',
   },
   {
     key: 'gypsum',
-    ar: 'جميع أعمال الجبس والصباغة', en: 'All gypsum and painting works',
-    detailAr: 'أعمال الجبس والصباغة الداخلية والخارجية.', detailEn: 'Internal and external gypsum and painting works.',
+    ar: 'أعمال الجبس', en: 'Gypsum board works',
+    detailAr: 'توريد وتنفيذ أعمال الجبس بورد للأسقف الداخلية.', detailEn: 'Supply and installation of gypsum board for internal ceilings.',
+  },
+  {
+    key: 'painting',
+    ar: 'أعمال الصباغة', en: 'Painting works',
+    detailAr: 'تجهيز الأسطح وتنفيذ أعمال الدهان الداخلي والخارجي بالدهانات المعتمدة.', detailEn: 'Surface preparation and execution of internal and external painting with approved paints.',
   },
 ]
 
@@ -58,6 +63,7 @@ export default function QuotationForm() {
   const [optionals, setOptionals] = useState<Record<string, { enabled: boolean; price: number }>>({
     excavation: { enabled: false, price: 0 },
     gypsum: { enabled: false, price: 0 },
+    painting: { enabled: false, price: 0 },
   })
 
   useEffect(() => {
@@ -90,10 +96,12 @@ export default function QuotationForm() {
           }))
           const { data: its } = await supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order')
           if (its && its.length) {
-            const newOpt = { excavation: { enabled: false, price: 0 }, gypsum: { enabled: false, price: 0 } }
+            const newOpt = { excavation: { enabled: false, price: 0 }, gypsum: { enabled: false, price: 0 }, painting: { enabled: false, price: 0 } }
             its.filter(it => it.category === 'optional').forEach(it => {
-              const isGyp = (it.description || '').includes('جبس') || (it.description_en || '').toLowerCase().includes('gypsum')
-              const k = isGyp ? 'gypsum' : 'excavation'
+              const d = (it.description || '') + ' ' + (it.description_en || '').toLowerCase()
+              let k = 'excavation'
+              if (d.includes('جبس') || d.includes('gypsum')) k = 'gypsum'
+              else if (d.includes('صباغة') || d.includes('دهان') || d.includes('painting')) k = 'painting'
               newOpt[k] = { enabled: true, price: Number(it.unit_price) || 0 }
             })
             setOptionals(newOpt)
