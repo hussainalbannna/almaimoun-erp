@@ -16,6 +16,8 @@ interface Quotation {
   customer_name: string
   customer_address: string
   customer_phone: string
+  project_desc_ar: string
+  project_desc_en: string
   location: string
   area: string
   issue_date: string
@@ -38,7 +40,7 @@ const FALLBACK = {
   name_en: 'ALMAIMOUN CONSTRUCTION',
   name_ar: 'الميمون للمقاولات',
   phone: '+973 37055576',
-  email: 'Info@AlMaimounConst.com',
+  email: 'info@almaimoun-construction.com',
   cr: '120637-2',
 }
 
@@ -285,9 +287,10 @@ export default function QuotationView() {
     name_co: isAr ? FALLBACK.name_ar : FALLBACK.name_en,
   }
 
+  const projDesc = isAr ? (quote.project_desc_ar || 'بناء فيلا من طابقين') : (quote.project_desc_en || 'construction for two story villa')
   const subjectLine = isAr
-    ? `بناء ${L.villa} في ${tLoc || ''}، البحرين مساحة بناء ${quote.area || ''} متر مربع`
-    : `construction for ${L.villa} at ${tLoc || ''}, Bahrain ${quote.area || ''} m².`
+    ? `${projDesc} في ${tLoc || ''}، البحرين مساحة بناء ${quote.area || ''} متر مربع`
+    : `${projDesc} at ${tLoc || ''}, Bahrain ${quote.area || ''} m².`
 
   return (
     <div className="p-6 max-w-4xl mx-auto" dir="rtl">
@@ -314,91 +317,141 @@ export default function QuotationView() {
       </div>
 
       {/* ═══ ورقة التسعيرة ═══ */}
-      <div dir={dir} className="bg-white rounded-xl border border-slate-200 p-8 print:border-0 print:shadow-none quote-page">
-        {/* رأس بهوية الميمون */}
-        <div className="flex items-start justify-between border-b-2 pb-5 mb-5" style={{ borderColor: '#c4925a' }}>
-          <div>
-            <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{L.name_co}</div>
-            <div className="text-xs text-slate-500 mt-1" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>C.R No: {FALLBACK.cr}</div>
-            <div className="text-xs text-slate-500" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>{FALLBACK.phone}</div>
-            <div className="text-xs text-slate-500" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>{FALLBACK.email}</div>
+      <div dir={dir} className="bg-white rounded-2xl shadow-sm border border-slate-200 print:border-0 print:shadow-none quote-page relative overflow-hidden">
+        {/* شريط علوي ذهبي رفيع */}
+        <div className="h-2 w-full print:h-2" style={{ background: 'linear-gradient(90deg, #c4925a 0%, #7b4a2d 50%, #c4925a 100%)' }} />
+
+        {/* شعار خلفي مخفي (watermark) متدرّج — جمالية راقية */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none overflow-hidden" style={{ zIndex: 0 }}>
+          <div className="text-center" style={{ transform: 'rotate(-12deg)', opacity: 0.04 }}>
+            <div className="font-black leading-none" style={{ fontSize: '220px', color: '#7b4a2d', fontFamily: 'Arial Black, sans-serif' }}>M</div>
+            <div className="font-bold" style={{ fontSize: '38px', color: '#7b4a2d', letterSpacing: '0.25em', marginTop: '-10px' }}>ALMAIMOUN</div>
+          </div>
+        </div>
+        {/* زخرفة دائرية ناعمة (ركن) */}
+        <div className="absolute pointer-events-none" style={{ top: '-60px', insetInlineEnd: '-60px', width: '200px', height: '200px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(196,146,90,0.06) 0%, transparent 70%)', zIndex: 0 }} />
+
+        {/* المحتوى فوق الـ watermark */}
+        <div className="relative p-8" style={{ zIndex: 1 }}>
+        {/* رأس بهوية الميمون — تصميم راقٍ */}
+        <div className="flex items-start justify-between pb-5 mb-6" style={{ borderBottom: '2px solid', borderImage: 'linear-gradient(90deg, #c4925a, #e5d9c8) 1' }}>
+          <div className="flex items-center gap-4">
+            {/* أيقونة شعار */}
+            <div className="flex items-center justify-center rounded-2xl shadow-sm" style={{ width: '64px', height: '64px', background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
+              <span className="font-black text-white" style={{ fontSize: '38px', fontFamily: 'Arial Black, sans-serif' }}>M</span>
+            </div>
+            <div>
+              <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{L.name_co}</div>
+              <div className="text-[11px] text-slate-500 mt-1.5 flex flex-col gap-0.5" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>
+                <span>C.R No: {FALLBACK.cr}</span>
+                <span>{FALLBACK.phone}</span>
+                <span>{FALLBACK.email}</span>
+              </div>
+            </div>
           </div>
           <div className={isAr ? 'text-left' : 'text-right'}>
-            <div className="text-2xl font-bold" style={{ color: '#c4925a' }}>{L.title}</div>
-            <div className="text-sm text-slate-700 font-medium mt-1" dir="ltr">{quote.quote_number}</div>
-            <div className="text-xs text-slate-500 mt-0.5" dir="ltr">{quote.issue_date}</div>
+            <div className="text-3xl font-black tracking-tight" style={{ color: '#c4925a' }}>{L.title}</div>
+            <div className="inline-block mt-2 px-3 py-1 rounded-lg text-sm font-bold" style={{ background: '#faf6f1', color: '#7b4a2d' }} dir="ltr">{quote.quote_number}</div>
+            <div className="text-xs text-slate-500 mt-1.5" dir="ltr">{quote.issue_date}</div>
           </div>
         </div>
 
-        {/* بيانات العميل */}
-        <div className="mb-5 text-sm">
-          <div className="text-xs font-bold text-slate-400 mb-1">{L.clientInfo}</div>
-          <div><span className="text-slate-400">{L.clientName}: </span><span className="font-semibold text-slate-800">{tName || '—'}</span></div>
-          {tAddr && <div><span className="text-slate-400">{L.address}: </span><span className="text-slate-700">{tAddr}</span></div>}
-          {quote.customer_phone && <div><span className="text-slate-400">{L.contact}: </span><span className="text-slate-700" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>{quote.customer_phone}</span></div>}
-          <div><span className="text-slate-400">{L.subject}: </span><span className="text-slate-700">{subjectLine}</span></div>
+        {/* بيانات العميل — كرت أنيق */}
+        <div className="mb-5 rounded-xl p-4 text-sm" style={{ background: 'linear-gradient(135deg, #faf6f1 0%, #fdfbf8 100%)', border: '1px solid #efe4d4' }}>
+          <div className="text-xs font-bold mb-2 pb-2 flex items-center gap-2" style={{ color: '#c4925a', borderBottom: '1px solid #efe4d4' }}>
+            <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#c4925a' }} />
+            {L.clientInfo}
+          </div>
+          <div className="space-y-1">
+            <div><span className="text-slate-400">{L.clientName}: </span><span className="font-bold text-slate-800">{tName || '—'}</span></div>
+            {tAddr && <div><span className="text-slate-400">{L.address}: </span><span className="text-slate-700">{tAddr}</span></div>}
+            {quote.customer_phone && <div><span className="text-slate-400">{L.contact}: </span><span className="text-slate-700" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>{quote.customer_phone}</span></div>}
+            <div><span className="text-slate-400">{L.subject}: </span><span className="text-slate-700 font-medium">{subjectLine}</span></div>
+          </div>
         </div>
 
         {/* التحية */}
         <p className={`text-sm text-slate-600 leading-relaxed mb-4 ${alignClass}`}>{L.greeting}</p>
 
         {/* الشروط */}
-        <div className="mb-4 text-sm">
-          <div className="font-bold text-slate-700">{L.termsTitle}:</div>
-          {L.terms.map((term, i) => <div key={i} className="text-slate-600">{i + 1}. {term}</div>)}
+        <div className="mb-4 text-sm rounded-lg p-3" style={{ background: '#fbfaf8', border: '1px solid #f0ebe3' }}>
+          <div className="font-bold mb-1" style={{ color: '#7b4a2d' }}>{L.termsTitle}:</div>
+          {L.terms.map((term, i) => <div key={i} className="text-slate-600 flex gap-1.5"><span style={{ color: '#c4925a' }}>{i + 1}.</span>{term}</div>)}
         </div>
         <p className={`text-sm text-slate-600 leading-relaxed mb-4 ${alignClass}`}>{L.estimateLine}</p>
 
-        {/* جدول البنود بالشروحات */}
-        <table className="w-full text-sm mb-6">
+        {/* جدول البنود بالشروحات — عنوان ملوّن + شرح أبيض للتمييز */}
+        <table className="w-full text-sm mb-6 border-collapse" style={{ border: '1px solid #e5d9c8' }}>
           <thead>
-            <tr style={{ background: '#7b4a2d' }}>
-              <th className="text-center font-semibold py-2.5 px-2 text-white w-8">#</th>
-              <th className={`font-semibold py-2.5 px-3 text-white ${alignClass}`}>{L.description}</th>
+            <tr style={{ background: 'linear-gradient(90deg, #7b4a2d 0%, #9a6440 100%)' }}>
+              <th className="text-center font-bold py-3 px-2 text-white w-10" style={{ border: '1px solid #6b3e26' }}>#</th>
+              <th className={`font-bold py-3 px-4 text-white ${alignClass}`} style={{ border: '1px solid #6b3e26' }}>{L.description}</th>
             </tr>
           </thead>
           <tbody>
             {FIXED_ITEMS.map((it, i) => (
-              <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                <td className="py-2.5 px-2 text-center text-slate-400 align-top">{i + 1}</td>
-                <td className={`py-2.5 px-3 ${alignClass}`}>
-                  <div className="font-bold text-slate-800">{isAr ? it.ar : it.en}</div>
-                  <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">{isAr ? it.detailAr : it.detailEn}</div>
+              <tr key={i}>
+                <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{i + 1}</td>
+                <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
+                  {/* عنوان البند — بخلفية ملوّنة فاتحة */}
+                  <div className={`font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
+                    {isAr ? it.ar : it.en}
+                  </div>
+                  {/* شرح البند — بخلفية بيضاء (تمييز) */}
+                  <div className={`text-xs text-slate-600 py-2 px-4 leading-relaxed ${alignClass}`} style={{ background: 'white' }}>
+                    {isAr ? it.detailAr : it.detailEn}
+                  </div>
                 </td>
               </tr>
             ))}
             {optionalItems.map((it, i) => (
-              <tr key={`o-${i}`} className={(FIXED_ITEMS.length + i) % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                <td className="py-2.5 px-2 text-center text-slate-400 align-top">{FIXED_ITEMS.length + i + 1}</td>
-                <td className={`py-2.5 px-3 ${alignClass}`}>
-                  <div className="font-bold text-slate-800">{isAr ? it.description : (it.description_en || it.description)}</div>
-                  {(isAr ? it.detail : it.detail_en) && <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">{isAr ? it.detail : it.detail_en}</div>}
+              <tr key={`o-${i}`}>
+                <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{FIXED_ITEMS.length + i + 1}</td>
+                <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
+                  <div className={`font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
+                    {isAr ? it.description : (it.description_en || it.description)}
+                  </div>
+                  {(isAr ? it.detail : it.detail_en) && (
+                    <div className={`text-xs text-slate-600 py-2 px-4 leading-relaxed ${alignClass}`} style={{ background: 'white' }}>
+                      {isAr ? it.detail : it.detail_en}
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
 
-        {/* السعر الإجمالي فقط */}
+        {/* السعر الإجمالي فقط — بارز وراقٍ */}
         <div className={`flex mb-6 ${isAr ? 'justify-start' : 'justify-end'}`}>
-          <div className="w-72">
-            <div className="flex justify-between items-center py-3 px-4 rounded-lg font-bold text-base" style={{ background: '#7b4a2d', color: 'white' }}>
-              <span>{L.grandTotal}</span>
-              <span dir="ltr">{fmt(quote.total)} {L.bd}</span>
+          <div className="w-80">
+            <div className="flex justify-between items-center py-4 px-5 rounded-xl font-bold shadow-md" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)', color: 'white' }}>
+              <span className="text-base">{L.grandTotal}</span>
+              <span className="text-xl" dir="ltr">{fmt(quote.total)} <span className="text-sm font-medium opacity-90">{L.bd}</span></span>
             </div>
           </div>
         </div>
 
-        {/* لا تشمل */}
-        <div className="border border-slate-200 rounded-xl p-4 mb-6 bg-slate-50/50">
-          <div className="font-bold text-sm text-slate-700 mb-2">{L.excludes}</div>
-          <div className="text-xs text-slate-600 space-y-0.5">
-            {excluded.map((ex, i) => <div key={i}>{i + 1}. {ex}</div>)}
+        {/* لا تشمل — كرت أنيق */}
+        <div className="rounded-xl p-4 mb-6" style={{ background: '#fbfaf8', border: '1px solid #efe4d4' }}>
+          <div className="font-bold text-sm mb-2 flex items-center gap-2" style={{ color: '#7b4a2d' }}>
+            <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#c4925a' }} />
+            {L.excludes}
+          </div>
+          <div className="text-xs text-slate-600 grid grid-cols-1 gap-y-1">
+            {excluded.map((ex, i) => (
+              <div key={i} className="flex gap-2">
+                <span className="shrink-0" style={{ color: '#c4925a' }}>{i + 1}.</span>
+                <span>{ex}</span>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* الصلاحية */}
-        <div className="text-sm font-bold text-slate-700 text-center mb-5">{L.validity}</div>
+        {/* الصلاحية — شارة أنيقة */}
+        <div className="text-center mb-5">
+          <span className="inline-block text-sm font-bold py-2 px-5 rounded-full" style={{ background: '#faf6f1', color: '#7b4a2d', border: '1px solid #efe4d4' }}>{L.validity}</span>
+        </div>
 
         {/* خانة التوقيع */}
         <div>
@@ -409,6 +462,7 @@ export default function QuotationView() {
             <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50">{L.dateLabel}</div>
           </div>
         </div>
+        </div>{/* نهاية المحتوى فوق watermark */}
       </div>
 
       {/* ═══ صفحات خطوات العمل (بوست تنشن فقط — بنفس اللغة) ═══ */}
