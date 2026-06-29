@@ -48,6 +48,7 @@ export default function QuotationForm() {
     building_type: 'precast' as 'post_tension' | 'precast',  // داخلي — لا يظهر للعميل
     status: 'draft',
     grand_total: '',
+    price_per_meter: '',  // داخلي — لحساب الإجمالي تلقائياً
     notes: '',
   })
 
@@ -78,6 +79,7 @@ export default function QuotationForm() {
             issue_date: q.issue_date ?? new Date().toISOString().slice(0, 10),
             language: (q.language as 'ar' | 'en') ?? 'en',
             building_type: (q.building_type as 'post_tension' | 'precast') ?? 'precast',
+            price_per_meter: q.price_per_meter ? String(q.price_per_meter) : '',
             status: q.status ?? 'draft',
             grand_total: q.total ? String(q.total) : '',
             notes: q.notes ?? '',
@@ -117,7 +119,20 @@ export default function QuotationForm() {
   }
 
   const optSum = Object.entries(optionals).reduce((s, [, v]) => s + (v.enabled ? Number(v.price || 0) : 0), 0)
-  const grandTotal = Number(form.grand_total) || 0
+  // حساب الإجمالي من سعر المتر × المساحة (أداة داخلية)
+  const areaNum = parseFloat(form.area) || 0
+  const ppmNum = parseFloat(form.price_per_meter) || 0
+  const calculatedFromMeter = Math.round(areaNum * ppmNum)
+  // لو فيه سعر متر ومساحة، نحسب تلقائياً؛ وإلا نستخدم الإجمالي اليدوي
+  const grandTotal = calculatedFromMeter > 0 ? calculatedFromMeter : (Number(form.grand_total) || 0)
+
+  // تحديث الإجمالي تلقائياً عند تغيير سعر المتر أو المساحة
+  useEffect(() => {
+    if (calculatedFromMeter > 0) {
+      setForm(f => ({ ...f, grand_total: String(calculatedFromMeter) }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.price_per_meter, form.area])
 
   const handleSave = async () => {
     if (!form.customer_name.trim()) { toast.error('أدخل اسم العميل'); return }
@@ -136,6 +151,7 @@ export default function QuotationForm() {
         issue_date: form.issue_date,
         language: form.language,
         building_type: form.building_type,
+        price_per_meter: parseFloat(form.price_per_meter) || 0,
         status: form.status,
         subtotal: grandTotal,
         discount: 0,
@@ -273,6 +289,34 @@ export default function QuotationForm() {
           </div>
         </div>
 
+        {/* حاسبة سعر المتر (داخلي — لا يظهر للعميل) */}
+        <div className="bg-blue-50 rounded-xl border border-blue-200 p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Building2 size={18} className="text-blue-600" />
+            <h2 className="font-semibold text-blue-900">حاسبة سعر المتر (داخلي — لا يظهر للعميل)</h2>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">سعر المتر (د.ب)</label>
+              <input type="number" value={form.price_per_meter} placeholder="110"
+                onChange={e => setForm(f => ({ ...f, price_per_meter: e.target.value }))}
+                className="w-full h-10 px-3 rounded-lg border border-blue-200 text-sm outline-none focus:border-blue-400 text-center" dir="ltr" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">المساحة (م²)</label>
+              <input type="number" value={form.area} placeholder="470.61" disabled
+                className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm text-center text-slate-500" dir="ltr" />
+            </div>
+          </div>
+          {calculatedFromMeter > 0 && (
+            <div className="flex justify-between items-center bg-white rounded-lg p-3 border border-blue-200">
+              <span className="text-sm text-slate-600">{ppmNum} × {areaNum} = </span>
+              <span className="font-bold text-blue-700" dir="ltr">{fmt(calculatedFromMeter)} د.ب</span>
+            </div>
+          )}
+          <p className="text-[11px] text-slate-400 mt-2">عند إدخال سعر المتر، يُحسب الإجمالي تلقائياً (سعر المتر × المساحة). لتجاوزه، اكتب الإجمالي يدوياً بالأسفل.</p>
+        </div>
+
         {/* السعر الإجمالي */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h2 className="font-semibold text-slate-700 mb-4">السعر الإجمالي</h2>
@@ -286,7 +330,7 @@ export default function QuotationForm() {
             <div className="flex items-center justify-between gap-3">
               <label className="font-medium text-slate-700">السعر الإجمالي للعرض (د.ب) *</label>
               <input type="number" value={form.grand_total} placeholder="51767"
-                onChange={e => setForm(f => ({ ...f, grand_total: e.target.value }))}
+                onChange={e => setForm(f => ({ ...f, grand_total: e.target.value, price_per_meter: '' }))}
                 className="w-40 h-11 px-3 rounded-xl border-2 border-slate-200 text-lg font-bold outline-none focus:border-amber-400 text-center" dir="ltr" />
             </div>
             <div className="text-xs text-slate-400 bg-slate-50 rounded-lg p-2">السعر الإجمالي فقط يظهر في العرض (بدون سعر لكل بند). الضريبة: معفى (صفر).</div>
