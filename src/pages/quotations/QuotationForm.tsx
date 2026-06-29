@@ -1,59 +1,114 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowRight, Plus, Trash2, Sparkles, Loader2, GripVertical } from 'lucide-react'
+import { ArrowRight, Globe } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency } from '../../lib/utils'
-import { readDocumentText, extractJSON, hasApiKey } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import Textarea from '../../components/ui/Textarea'
 import toast from 'react-hot-toast'
 
-interface Item {
-  id: string
-  description: string
-  category: string
-  quantity: number
-  unit: string
-  unit_price: number
-  total: number
-}
-
 interface CustomerOpt { id: string; name: string; phone: string }
 
-const CATEGORIES = ['', 'حفر وأساسات', 'هيكل خرساني', 'بناء ومباني', 'كهرباء', 'سباكة', 'تشطيبات', 'بلاط ورخام', 'دهانات', 'أعمال خارجية', 'أخرى']
-const UNITS = ['مقطوعية', 'متر مربع', 'متر طولي', 'متر مكعب', 'قطعة', 'عدد', 'طن', 'يوم', 'شهر']
+// ════════════════════════════════════════════════════════════════
+//  القالب الثابت لعرض السعر — مؤسسة الميمون للمقاولات والتجارة
+//  7 بنود ثابتة + بنود اختيارية (حفّار/دفان، جبس/صباغة)
+// ════════════════════════════════════════════════════════════════
 
-const newItem = (): Item => ({ id: crypto.randomUUID(), description: '', category: '', quantity: 1, unit: 'مقطوعية', unit_price: 0, total: 0 })
+// البنود السبعة الثابتة (نفس الترتيب دائماً) — عربي + إنجليزي
+const FIXED_ITEMS = [
+  { ar: 'مواد البناء والأيدي العاملة', en: 'Labors & materials' },
+  { ar: 'جميع أعمال الخرسانة (حديد، نجارة، أساسات، قواعد، جسور، أعمدة، أسقف)', en: 'All concrete works including iron, carpentry, foundations, columns, beams, and roofs' },
+  { ar: 'جميع أعمال الطابوق', en: 'All block work' },
+  { ar: 'جميع أعمال المساح (داخلي وخارجي)', en: 'All plaster work, internal and external' },
+  { ar: 'جميع أعمال البلاط (المالك يوفّر البلاط)', en: 'All tiles work, owner provides the tiles' },
+  { ar: 'التركيب الأولي للكهرباء', en: 'Initial electrical installation' },
+  { ar: 'التركيب الأولي للماء', en: 'Initial plumbing installation' },
+]
+
+// البنود الإضافية الاختيارية
+const OPTIONAL_ITEMS = [
+  { key: 'excavation', ar: 'أعمال الحفر والدفان', en: 'Excavation and backfilling works' },
+  { key: 'gypsum', ar: 'أعمال الجبس والصباغة', en: 'Gypsum and painting works' },
+]
+
+// قائمة "لا يشمل" الثابتة (15 بند) — عربي + إنجليزي
+const EXCLUDED_AR = [
+  'جميع أعمال الكهرباء النهائية والإنارة',
+  'جميع أعمال السباكة النهائية والأدوات الصحية',
+  'جميع أعمال التكييف',
+  'جميع أعمال أنظمة مكافحة الحريق',
+  'جميع أعمال الألمنيوم والأبواب والنوافذ',
+  'جميع أعمال الحديد المشغول',
+  'جميع أعمال الخشب والنجارة',
+  'جميع أعمال الدهان والجبس',
+  'جميع أنظمة الأمن وكاميرات المراقبة والستلايت',
+  'جميع أعمال خزائن المطابخ وملحقاتها',
+  'جميع أعمال العزل الحراري للأسطح الخرسانية',
+  'جميع الأعمال الزراعية وتنسيق الحدائق',
+  'جميع أعمال المسابح',
+  'جميع أعمال الصرف الصحي والإنشائية الخارجية',
+  'كل ما لم يُذكر في هذا العرض',
+]
+const EXCLUDED_EN = [
+  'All final electrical and lighting works',
+  'All final plumbing works and sanitary ware',
+  'All air conditioning works',
+  'All firefighting systems works',
+  'All aluminum works, doors, and windows',
+  'All wrought iron works',
+  'All wood and carpentry work',
+  'All painting and gypsum works',
+  'All security systems, surveillance cameras and satellite work',
+  'All cabinet work for kitchens and accessories',
+  'All thermal insulation works for concrete surfaces',
+  'All agricultural and landscaping works',
+  'All swimming pool works',
+  'All drainage and external structural works',
+  'All that is not mentioned in this quotation',
+]
+
+// الشروط الثلاثة الثابتة — عربي + إنجليزي (قابلة للتعديل)
+const DEFAULT_TERMS_AR = `1- يبدأ العمل بعد توقيع العقد ودفع الدفعة المقدمة المتفق عليها.
+2- المالك مسؤول عن توفير المخططات والتراخيص اللازمة.
+3- أي أعمال إضافية خارج البنود المذكورة تُحتسب بشكل منفصل.`
+const DEFAULT_TERMS_EN = `1- Work begins after signing the contract and paying the agreed advance payment.
+2- The owner is responsible for providing the necessary drawings and permits.
+3- Any additional works outside the mentioned items are calculated separately.`
 
 export default function QuotationForm() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const isEdit = !!id
+  const isEdit = !!id && id !== 'new'
   const [saving, setSaving] = useState(false)
-  const [scanning, setScanning] = useState(false)
   const [customers, setCustomers] = useState<CustomerOpt[]>([])
-  const fileRef = useRef<HTMLInputElement>(null)
 
   const [form, setForm] = useState({
     quote_number: '',
     customer_id: '',
     customer_name: '',
+    customer_address: '',
     customer_phone: '',
     project_name: '',
     location: '',
+    area: '',
     issue_date: new Date().toISOString().slice(0, 10),
-    valid_until: '',
+    language: 'en' as 'ar' | 'en',  // لغة العرض/الطباعة
     status: 'draft',
-    discount: 0,
-    tax_rate: 10,
+    grand_total: '',
+    terms_ar: DEFAULT_TERMS_AR,
+    terms_en: DEFAULT_TERMS_EN,
     notes: '',
-    terms: 'العرض ساري المفعول لمدة 30 يوماً من تاريخه. الأسعار شاملة المواد والعمالة ما لم يُذكر خلاف ذلك.',
   })
-  const [items, setItems] = useState<Item[]>([newItem()])
 
-  // توليد رقم العرض + تحميل العملاء
+  // مبالغ البنود السبعة (اختياري — يمكن ترك الإجمالي فقط)
+  const [itemPrices, setItemPrices] = useState<number[]>(FIXED_ITEMS.map(() => 0))
+  // البنود الإضافية المفعّلة + أسعارها
+  const [optionals, setOptionals] = useState<Record<string, { enabled: boolean; price: number }>>({
+    excavation: { enabled: false, price: 0 },
+    gypsum: { enabled: false, price: 0 },
+  })
+
   useEffect(() => {
     supabase.from('customers').select('id,name,phone').order('name').then(({ data }) => {
       setCustomers((data ?? []) as CustomerOpt[])
@@ -63,134 +118,97 @@ export default function QuotationForm() {
       const loadQuote = async () => {
         const { data: q } = await supabase.from('quotations').select('*').eq('id', id).single()
         if (q) {
-          setForm({
+          setForm(f => ({
+            ...f,
             quote_number: q.quote_number ?? '',
             customer_id: q.customer_id ?? '',
             customer_name: q.customer_name ?? '',
+            customer_address: q.customer_address ?? '',
             customer_phone: q.customer_phone ?? '',
             project_name: q.project_name ?? '',
             location: q.location ?? '',
+            area: q.area ?? '',
             issue_date: q.issue_date ?? new Date().toISOString().slice(0, 10),
-            valid_until: q.valid_until ?? '',
+            language: (q.language as 'ar' | 'en') ?? 'en',
             status: q.status ?? 'draft',
-            discount: Number(q.discount) || 0,
-            tax_rate: Number(q.tax_rate) || 10,
+            grand_total: q.total ? String(q.total) : '',
+            terms_ar: q.terms_ar ?? DEFAULT_TERMS_AR,
+            terms_en: q.terms_en ?? DEFAULT_TERMS_EN,
             notes: q.notes ?? '',
-            terms: q.terms ?? '',
-          })
-        }
-        const { data: its } = await supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order')
-        if (its && its.length) {
-          setItems(its.map(it => ({
-            id: it.id, description: it.description ?? '', category: it.category ?? '',
-            quantity: Number(it.quantity) || 0, unit: it.unit ?? 'مقطوعية',
-            unit_price: Number(it.unit_price) || 0, total: Number(it.total) || 0,
-          })))
+          }))
+          // تحميل أسعار البنود
+          const { data: its } = await supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order')
+          if (its && its.length) {
+            const prices = FIXED_ITEMS.map((_, i) => {
+              const found = its.find(it => it.sort_order === i)
+              return found ? Number(found.unit_price) || 0 : 0
+            })
+            setItemPrices(prices)
+            // البنود الإضافية (sort_order >= 100)
+            const newOpt = { ...optionals }
+            OPTIONAL_ITEMS.forEach((opt, i) => {
+              const found = its.find(it => it.sort_order === 100 + i)
+              if (found) newOpt[opt.key] = { enabled: true, price: Number(found.unit_price) || 0 }
+            })
+            setOptionals(newOpt)
+          }
         }
       }
       loadQuote()
     } else {
-      // رقم تلقائي
+      // رقم تلقائي بصيغة الميمون: تسلسلي/يوم/شهر/سنة
       supabase.from('quotations').select('quote_number').order('created_at', { ascending: false }).limit(50).then(({ data }) => {
-        const year = new Date().getFullYear()
         const nums = (data ?? []).map(q => {
-          const m = String(q.quote_number).match(/(\d+)$/)
+          const m = String(q.quote_number).match(/^(\d+)/)
           return m ? parseInt(m[1]) : 0
         })
-        const next = (nums.length ? Math.max(...nums) : 0) + 1
-        setForm(f => ({ ...f, quote_number: `QT-${year}-${String(next).padStart(3, '0')}` }))
+        const next = (nums.length ? Math.max(...nums) : 631) + 1
+        const d = new Date()
+        const dd = String(d.getDate()).padStart(2, '0')
+        const mm = String(d.getMonth() + 1).padStart(2, '0')
+        const yyyy = d.getFullYear()
+        setForm(f => ({ ...f, quote_number: `${next}/${dd}/${mm}/${yyyy}` }))
       })
     }
   }, [id, isEdit])
 
-  // تحديث بند
-  const updateItem = (itemId: string, patch: Partial<Item>) => {
-    setItems(prev => prev.map(it => {
-      if (it.id !== itemId) return it
-      const updated = { ...it, ...patch }
-      updated.total = Number((updated.quantity * updated.unit_price).toFixed(3))
-      return updated
-    }))
-  }
-
-  const removeItem = (itemId: string) => setItems(prev => prev.length > 1 ? prev.filter(it => it.id !== itemId) : prev)
-
-  // اختيار عميل
   const onCustomerChange = (cid: string) => {
     const c = customers.find(x => x.id === cid)
     setForm(f => ({ ...f, customer_id: cid, customer_name: c?.name ?? f.customer_name, customer_phone: c?.phone ?? f.customer_phone }))
   }
 
-  // حسابات
-  const subtotal = items.reduce((s, it) => s + Number(it.total || 0), 0)
-  const afterDiscount = Math.max(0, subtotal - Number(form.discount || 0))
-  const taxAmount = Number((afterDiscount * Number(form.tax_rate || 0) / 100).toFixed(3))
-  const grandTotal = Number((afterDiscount + taxAmount).toFixed(3))
+  // حساب الإجمالي: مجموع البنود السبعة + الإضافية، أو القيمة اليدوية
+  const itemsSum = itemPrices.reduce((s, p) => s + Number(p || 0), 0)
+  const optSum = Object.entries(optionals).reduce((s, [, v]) => s + (v.enabled ? Number(v.price || 0) : 0), 0)
+  const calculatedTotal = itemsSum + optSum
+  // الإجمالي النهائي: لو فيه أسعار بنود نستخدم المحسوب، وإلا اليدوي
+  const grandTotal = calculatedTotal > 0 ? calculatedTotal : (Number(form.grand_total) || 0)
 
-  // ── قراءة بنود من ملف بالذكاء ──────────────────────────────────────
-  const handleScan = async (file: File) => {
-    if (!hasApiKey()) { toast.error('فعّل مفتاح الذكاء الاصطناعي من الإعدادات أولاً'); return }
-    setScanning(true)
-    toast.loading('جاري قراءة البنود...', { id: 'q-scan' })
-    try {
-      const text = await readDocumentText(file, `هذه قائمة بنود/كميات لمشروع بناء (قد تكون صورة أو ملف أو جدول كميات BOQ، حتى لو ممسوحة ضوئياً). اقرأها بدقة واستخرج البنود. أرجع JSON فقط بهذا الشكل بدون أي شرح:
-{
-  "items": [
-    { "description": "وصف البند", "category": "التصنيف", "quantity": الكمية رقم, "unit": "الوحدة", "unit_price": السعر رقم أو 0 }
-  ]
-}
-الوحدات المتاحة: مقطوعية، متر مربع، متر طولي، متر مكعب، قطعة، عدد، طن. إذا لم يوجد سعر اكتب 0.`)
-      const parsed = extractJSON<{ items?: Array<{ description?: string; category?: string; quantity?: number; unit?: string; unit_price?: number }> }>(text)
-      if (!parsed?.items?.length) { toast.error('لم يتم العثور على بنود', { id: 'q-scan' }); return }
-
-      const scanned: Item[] = parsed.items.map(it => {
-        const qty = Number(it.quantity) || 1
-        const price = Number(it.unit_price) || 0
-        return {
-          id: crypto.randomUUID(),
-          description: it.description ?? '',
-          category: it.category ?? '',
-          quantity: qty,
-          unit: it.unit ?? 'مقطوعية',
-          unit_price: price,
-          total: Number((qty * price).toFixed(3)),
-        }
-      })
-      // استبدل البنود الفارغة، أو أضف للموجود
-      setItems(prev => {
-        const hasContent = prev.some(p => p.description.trim())
-        return hasContent ? [...prev, ...scanned] : scanned
-      })
-      toast.success(`تمت إضافة ${scanned.length} بند`, { id: 'q-scan' })
-    } catch (e) {
-      toast.error((e as Error)?.message ?? 'تعذّرت القراءة', { id: 'q-scan' })
-    } finally {
-      setScanning(false)
-    }
-  }
-
-  // حفظ
   const handleSave = async () => {
-    if (!form.project_name.trim() && !form.customer_name.trim()) { toast.error('أدخل اسم المشروع أو العميل'); return }
+    if (!form.customer_name.trim()) { toast.error('أدخل اسم العميل'); return }
+    if (grandTotal <= 0) { toast.error('أدخل الإجمالي أو أسعار البنود'); return }
     setSaving(true)
     try {
       const payload = {
         quote_number: form.quote_number,
         customer_id: form.customer_id || null,
         customer_name: form.customer_name,
+        customer_address: form.customer_address,
         customer_phone: form.customer_phone,
         project_name: form.project_name,
         location: form.location,
+        area: form.area,
         issue_date: form.issue_date,
-        valid_until: form.valid_until || null,
+        language: form.language,
         status: form.status,
-        subtotal,
-        discount: Number(form.discount) || 0,
-        tax_rate: Number(form.tax_rate) || 0,
-        tax_amount: taxAmount,
+        subtotal: grandTotal,
+        discount: 0,
+        tax_rate: 0,       // معفى — صفر
+        tax_amount: 0,
         total: grandTotal,
+        terms_ar: form.terms_ar,
+        terms_en: form.terms_en,
         notes: form.notes,
-        terms: form.terms,
         updated_at: new Date().toISOString(),
       }
 
@@ -205,20 +223,36 @@ export default function QuotationForm() {
         quoteId = data.id
       }
 
-      const itemsPayload = items.filter(it => it.description.trim()).map((it, i) => ({
+      // حفظ البنود السبعة الثابتة
+      const itemsPayload = FIXED_ITEMS.map((it, i) => ({
         quotation_id: quoteId,
-        description: it.description,
-        category: it.category,
-        quantity: it.quantity,
-        unit: it.unit,
-        unit_price: it.unit_price,
-        total: it.total,
+        description: it.ar,
+        description_en: it.en,
+        category: 'fixed',
+        quantity: 1,
+        unit: 'مقطوعية',
+        unit_price: itemPrices[i] || 0,
+        total: itemPrices[i] || 0,
         sort_order: i,
       }))
-      if (itemsPayload.length) {
-        const { error: itErr } = await supabase.from('quotation_items').insert(itemsPayload)
-        if (itErr) throw itErr
-      }
+      // البنود الإضافية المفعّلة
+      OPTIONAL_ITEMS.forEach((opt, i) => {
+        if (optionals[opt.key].enabled) {
+          itemsPayload.push({
+            quotation_id: quoteId,
+            description: opt.ar,
+            description_en: opt.en,
+            category: 'optional',
+            quantity: 1,
+            unit: 'مقطوعية',
+            unit_price: optionals[opt.key].price || 0,
+            total: optionals[opt.key].price || 0,
+            sort_order: 100 + i,
+          })
+        }
+      })
+      const { error: itErr } = await supabase.from('quotation_items').insert(itemsPayload)
+      if (itErr) throw itErr
 
       toast.success(isEdit ? 'تم تحديث العرض' : 'تم إنشاء العرض')
       navigate('/quotations')
@@ -229,9 +263,10 @@ export default function QuotationForm() {
     }
   }
 
+  const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
+
   return (
-    <div className="p-6 max-w-5xl mx-auto" dir="rtl">
-      {/* الترويسة */}
+    <div className="p-6 max-w-4xl mx-auto" dir="rtl">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/quotations')} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">
@@ -239,96 +274,79 @@ export default function QuotationForm() {
           </button>
           <h1 className="text-xl font-bold text-slate-800">{isEdit ? 'تعديل عرض السعر' : 'عرض سعر جديد'}</h1>
         </div>
-        <div>
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleScan(f); e.target.value = '' }} />
-          <button onClick={() => fileRef.current?.click()} disabled={scanning}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-opacity disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
-            {scanning ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-            قراءة بنود من ملف
+        {/* اختيار لغة العرض والطباعة */}
+        <div className="flex items-center gap-2 bg-slate-100 rounded-xl p-1">
+          <Globe size={15} className="text-slate-400 mr-1" />
+          <button onClick={() => setForm(f => ({ ...f, language: 'ar' }))}
+            className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${form.language === 'ar' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>
+            عربي
+          </button>
+          <button onClick={() => setForm(f => ({ ...f, language: 'en' }))}
+            className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${form.language === 'en' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>
+            English
           </button>
         </div>
       </div>
 
       <div className="space-y-5">
-        {/* بيانات العرض */}
+        {/* بيانات العرض والعميل */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h2 className="font-semibold text-slate-700 mb-4">بيانات العرض</h2>
+          <h2 className="font-semibold text-slate-700 mb-4">بيانات العرض والعميل</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input label="رقم العرض" value={form.quote_number} onChange={e => setForm(f => ({ ...f, quote_number: e.target.value }))} />
+            <Input label="رقم العرض" value={form.quote_number} onChange={e => setForm(f => ({ ...f, quote_number: e.target.value }))} dir="ltr" />
+            <Input label="تاريخ العرض" type="date" value={form.issue_date} onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))} />
             <Select label="العميل" value={form.customer_id}
               onChange={e => onCustomerChange(e.target.value)}
-              placeholder="اختر عميلاً (أو اكتب الاسم يدوياً)"
+              placeholder="اختر عميلاً (أو اكتب يدوياً)"
               options={customers.map(c => ({ value: c.id, label: c.name }))} />
-            <Input label="اسم العميل" value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} />
-            <Input label="هاتف العميل" value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} />
-            <Input label="اسم المشروع" value={form.project_name} onChange={e => setForm(f => ({ ...f, project_name: e.target.value }))} placeholder="مثال: فيلا سكنية - سترة" />
-            <Input label="الموقع" value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} />
-            <Input label="تاريخ العرض" type="date" value={form.issue_date} onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))} />
-            <Input label="صالح حتى" type="date" value={form.valid_until} onChange={e => setForm(f => ({ ...f, valid_until: e.target.value }))} />
+            <Input label="اسم العميل *" value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} />
+            <Input label="عنوان العميل" value={form.customer_address} onChange={e => setForm(f => ({ ...f, customer_address: e.target.value }))} />
+            <Input label="هاتف العميل" value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} dir="ltr" />
+            <Input label="المشروع (فيلا دورين)" value={form.project_name} onChange={e => setForm(f => ({ ...f, project_name: e.target.value }))} placeholder="فيلا دورين" />
+            <Input label="الموقع" value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="سترة" />
+            <Input label="المساحة (م²)" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} dir="ltr" />
           </div>
         </div>
 
-        {/* البنود */}
+        {/* البنود السبعة الثابتة */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-slate-700">بنود العرض</h2>
-            <Button size="sm" variant="outline" icon={<Plus size={14} />} onClick={() => setItems(prev => [...prev, newItem()])}>إضافة بند</Button>
-          </div>
-
+          <h2 className="font-semibold text-slate-700 mb-1">البنود الثابتة (السبعة)</h2>
+          <p className="text-xs text-slate-400 mb-4">أدخل سعر كل بند (اختياري — أو اترك الكل صفر وأدخل الإجمالي بالأسفل)</p>
           <div className="space-y-2">
-            {/* رؤوس الأعمدة */}
-            <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-slate-400 px-2">
-              <div className="col-span-4">الوصف</div>
-              <div className="col-span-2">التصنيف</div>
-              <div className="col-span-1">الكمية</div>
-              <div className="col-span-1">الوحدة</div>
-              <div className="col-span-2">سعر الوحدة</div>
-              <div className="col-span-1">الإجمالي</div>
-              <div className="col-span-1"></div>
-            </div>
-
-            {items.map((it) => (
-              <div key={it.id} className="grid grid-cols-12 gap-2 items-center bg-slate-50 rounded-lg p-2">
-                <div className="col-span-12 md:col-span-4">
-                  <input value={it.description} onChange={e => updateItem(it.id, { description: e.target.value })}
-                    placeholder="وصف البند" className="w-full h-9 px-3 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400" />
-                </div>
-                <div className="col-span-6 md:col-span-2">
-                  <select value={it.category} onChange={e => updateItem(it.id, { category: e.target.value })}
-                    className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400 bg-white">
-                    {CATEGORIES.map(c => <option key={c} value={c}>{c || 'بدون'}</option>)}
-                  </select>
-                </div>
-                <div className="col-span-3 md:col-span-1">
-                  <input type="number" value={it.quantity} onChange={e => updateItem(it.id, { quantity: parseFloat(e.target.value) || 0 })}
-                    className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400 text-center" />
-                </div>
-                <div className="col-span-3 md:col-span-1">
-                  <select value={it.unit} onChange={e => updateItem(it.id, { unit: e.target.value })}
-                    className="w-full h-9 px-1 rounded-lg border border-slate-200 text-xs outline-none focus:border-amber-400 bg-white">
-                    {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                </div>
-                <div className="col-span-4 md:col-span-2">
-                  <input type="number" value={it.unit_price} onChange={e => updateItem(it.id, { unit_price: parseFloat(e.target.value) || 0 })}
-                    placeholder="0.000" className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400 text-center" />
-                </div>
-                <div className="col-span-6 md:col-span-1 text-sm font-medium text-slate-700 text-center">
-                  {it.total.toFixed(3)}
-                </div>
-                <div className="col-span-2 md:col-span-1 flex justify-center">
-                  <button onClick={() => removeItem(it.id)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50">
-                    <Trash2 size={16} />
-                  </button>
-                </div>
+            {FIXED_ITEMS.map((it, i) => (
+              <div key={i} className="flex items-center gap-3 bg-slate-50 rounded-lg p-3">
+                <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center text-sm font-bold shrink-0">{i + 1}</div>
+                <div className="flex-1 text-sm text-slate-700">{form.language === 'ar' ? it.ar : it.en}</div>
+                <input type="number" value={itemPrices[i] || ''} placeholder="0.000"
+                  onChange={e => { const v = parseFloat(e.target.value) || 0; setItemPrices(prev => prev.map((p, idx) => idx === i ? v : p)) }}
+                  className="w-32 h-9 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400 text-center" dir="ltr" />
               </div>
             ))}
           </div>
         </div>
 
-        {/* الإجماليات */}
+        {/* البنود الإضافية الاختيارية */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h2 className="font-semibold text-slate-700 mb-1">بنود إضافية (اختيارية)</h2>
+          <p className="text-xs text-slate-400 mb-4">فعّل البند لإضافته للعرض (يُحذف تلقائياً من قائمة "لا يشمل")</p>
+          <div className="space-y-2">
+            {OPTIONAL_ITEMS.map(opt => (
+              <div key={opt.key} className={`flex items-center gap-3 rounded-lg p-3 border transition-colors ${optionals[opt.key].enabled ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'}`}>
+                <input type="checkbox" checked={optionals[opt.key].enabled}
+                  onChange={e => setOptionals(prev => ({ ...prev, [opt.key]: { ...prev[opt.key], enabled: e.target.checked } }))}
+                  className="w-4 h-4 accent-green-600" />
+                <div className="flex-1 text-sm text-slate-700">{form.language === 'ar' ? opt.ar : opt.en}</div>
+                {optionals[opt.key].enabled && (
+                  <input type="number" value={optionals[opt.key].price || ''} placeholder="0.000"
+                    onChange={e => { const v = parseFloat(e.target.value) || 0; setOptionals(prev => ({ ...prev, [opt.key]: { ...prev[opt.key], price: v } })) }}
+                    className="w-32 h-9 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-green-400 text-center" dir="ltr" />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* الإجمالي + الشروط */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
             <Select label="حالة العرض" value={form.status}
@@ -339,40 +357,62 @@ export default function QuotationForm() {
                 { value: 'accepted', label: 'مقبول' },
                 { value: 'rejected', label: 'مرفوض' },
               ]} />
-            <Textarea label="الشروط والأحكام" value={form.terms} onChange={e => setForm(f => ({ ...f, terms: e.target.value }))} rows={3} />
-            <Textarea label="ملاحظات" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} />
+            <Textarea label={form.language === 'ar' ? 'الشروط (عربي)' : 'Terms (English)'}
+              value={form.language === 'ar' ? form.terms_ar : form.terms_en}
+              onChange={e => setForm(f => form.language === 'ar' ? ({ ...f, terms_ar: e.target.value }) : ({ ...f, terms_en: e.target.value }))}
+              rows={4} dir={form.language === 'ar' ? 'rtl' : 'ltr'} />
+            <Textarea label="ملاحظات (داخلية)" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} />
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h2 className="font-semibold text-slate-700 mb-4">ملخّص التكلفة</h2>
+            <h2 className="font-semibold text-slate-700 mb-4">الإجمالي</h2>
             <div className="space-y-3">
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">المجموع الفرعي</span>
-                <span className="font-medium">{formatCurrency(subtotal)}</span>
+                <span className="text-slate-500">مجموع البنود السبعة</span>
+                <span className="font-medium" dir="ltr">{fmt(itemsSum)}</span>
               </div>
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-500">الخصم</span>
-                <input type="number" value={form.discount} onChange={e => setForm(f => ({ ...f, discount: parseFloat(e.target.value) || 0 }))}
-                  className="w-28 h-8 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400 text-left" />
-              </div>
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-500">الضريبة (%)</span>
-                <input type="number" value={form.tax_rate} onChange={e => setForm(f => ({ ...f, tax_rate: parseFloat(e.target.value) || 0 }))}
-                  className="w-28 h-8 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400 text-left" />
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-500">قيمة الضريبة</span>
-                <span className="font-medium">{formatCurrency(taxAmount)}</span>
-              </div>
+              {optSum > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">البنود الإضافية</span>
+                  <span className="font-medium" dir="ltr">{fmt(optSum)}</span>
+                </div>
+              )}
+              {calculatedTotal === 0 && (
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-500">الإجمالي اليدوي</span>
+                  <input type="number" value={form.grand_total} placeholder="0.000"
+                    onChange={e => setForm(f => ({ ...f, grand_total: e.target.value }))}
+                    className="w-32 h-9 px-2 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400 text-center" dir="ltr" />
+                </div>
+              )}
+              <div className="text-xs text-slate-400 bg-slate-50 rounded-lg p-2">الضريبة: معفى (صفر)</div>
               <div className="border-t border-slate-200 pt-3 flex justify-between items-center">
-                <span className="font-semibold text-slate-700">الإجمالي النهائي</span>
-                <span className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{formatCurrency(grandTotal)}</span>
+                <span className="font-semibold text-slate-700">الإجمالي (د.ب)</span>
+                <span className="text-xl font-bold" dir="ltr" style={{ color: '#c4925a' }}>{fmt(grandTotal)}</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* أزرار */}
+        {/* معاينة قائمة لا يشمل */}
+        <div className="bg-slate-50 rounded-xl border border-slate-200 p-5">
+          <h2 className="font-semibold text-slate-700 mb-3 text-sm">قائمة "لا يشمل" (تظهر في العرض تلقائياً)</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
+            {(form.language === 'ar' ? EXCLUDED_AR : EXCLUDED_EN)
+              .filter(ex => {
+                // إخفاء الجبس/الصباغة من "لا يشمل" لو البند الإضافي مفعّل
+                if (optionals.gypsum.enabled && (ex.includes('الدهان') || ex.includes('painting'))) return false
+                return true
+              })
+              .map((ex, i) => (
+                <div key={i} className="flex gap-1.5">
+                  <span className="text-slate-400">{i + 1}.</span>
+                  <span>{ex}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+
         <div className="flex gap-3">
           <Button loading={saving} onClick={handleSave}>{isEdit ? 'حفظ التعديلات' : 'حفظ العرض'}</Button>
           <Button variant="secondary" onClick={() => navigate('/quotations')}>إلغاء</Button>
