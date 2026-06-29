@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { 
-  ArrowLeft, Plus, FileText, Edit, 
-  TrendingUp, TrendingDown, 
+import {
+  ArrowRight, FileText,
+  TrendingUp, TrendingDown,
   DollarSign, Briefcase, Users, ShoppingCart
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import type { 
-  Project, ProjectMilestone, VariationOrder, DailyLog 
+import type {
+  Project, ProjectMilestone, VariationOrder, DailyLog
 } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/utils';
 import Button from '../../components/ui/Button';
@@ -30,6 +30,8 @@ const MILESTONE_STATUS_COLORS: Record<string, string> = {
   paid: 'green'
 };
 
+const today = () => new Date().toISOString().slice(0, 10);
+
 export default function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -40,10 +42,12 @@ export default function ProjectDetail() {
   const [tab, setTab] = useState<'milestones' | 'vos' | 'logs'>('milestones');
   const [loading, setLoading] = useState(true);
 
+  // المصاريف الفعلية المدفوعة فقط (التدفق النقدي الحقيقي)
   const [boxExpenses, setBoxExpenses] = useState<number>(0);
-  const [purchaseInvoicesSum, setPurchaseInvoicesSum] = useState<number>(0);
-  const [subcontractorAgreedSum, setSubcontractorAgreedSum] = useState<number>(0);
-  const [workersSalaryShare, setWorkersSalaryShare] = useState<number>(0);
+  const [purchasePaid, setPurchasePaid] = useState<number>(0);       // مشتريات مدفوعة فعلاً
+  const [purchaseDeferred, setPurchaseDeferred] = useState<number>(0); // شيكات آجلة لم تُصرف بعد (للعرض فقط)
+  const [subcontractorPaidSum, setSubcontractorPaidSum] = useState<number>(0);
+  const [workersLaborCost, setWorkersLaborCost] = useState<number>(0); // تكلفة العمالة للمعرفة فقط (لا تُخصم)
 
   const load = async () => {
     if (!id) return;
@@ -61,6 +65,7 @@ export default function ProjectDetail() {
       if (vRes.data) setVos(vRes.data as VariationOrder[]);
       if (lRes.data) setLogs(lRes.data as DailyLog[]);
 
+      // 1. نثريات الصندوق (كلها مدفوعة فعلاً)
       const { data: expensesData } = await supabase
         .from('accounts_payable')
         .select('amount')
@@ -68,28 +73,52 @@ export default function ProjectDetail() {
       const totalBox = (expensesData || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
       setBoxExpenses(totalBox);
 
+      // 2. فواتير الموردين — نفصل المدفوع فعلاً عن الشيكات الآجلة
       const { data: piData } = await supabase
         .from('purchase_invoices')
-        .select('amount')
+        .select('amount, payment_method, check_due_date')
         .eq('project_id', id);
-      const totalPI = (piData || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      setPurchaseInvoicesSum(totalPI);
+      let paid = 0, deferred = 0;
+      const t = today();
+      for (const pi of (piData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
+        const amt = Number(pi.amount || 0);
+        // شيك آجل لم يحل موعده بعد = لم يُصرف فعلياً → لا يُحسب مصروفاً
+        if (pi.payment_method === 'deferred_cheque' && pi.check_due_date && pi.check_due_date > t) {
+          deferred += amt;
+        } else {
+          paid += amt;
+        }
+      }
+      setPurchasePaid(paid);
+      setPurchaseDeferred(deferred);
 
-      const { data: subAssignData } = await supabase
-        .from('subcontractor_assignments')
-        .select('agreed_amount')
+      // 3. مقاولو الباطن — المدفوع فعلاً فقط (من جدول المدفوعات، باستثناء الشيكات الآجلة)
+      const { data: subPayData } = await supabase
+        .from('subcontractor_payments')
+        .select('amount, payment_method, check_due_date')
         .eq('project_id', id);
-      
-      const totalSubAgreed = (subAssignData || []).reduce((sum, item) => sum + Number(item.agreed_amount || 0), 0);
-      setSubcontractorAgreedSum(totalSubAgreed);
+      let subPaid = 0;
+      for (const sp of (subPayData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
+        const amt = Number(sp.amount || 0);
+        if (sp.payment_method === 'cheque' && sp.check_due_date && sp.check_due_date > t) {
+          // شيك مقاول باطن آجل لم يُصرف → لا يُحسب
+          continue;
+        }
+        subPaid += amt;
+      }
+      setSubcontractorPaidSum(subPaid);
 
+      // 4. تكلفة العمالة على هذا الموقع — للمعرفة فقط (لا تُخصم من الربح)
+      // (أيام الحضور الفعلي × متوسط الأجر اليومي المقدّر)
       const { data: attendanceData } = await supabase
         .from('worker_attendance')
-        .select('worker_id')
+        .select('worker_id, status')
         .eq('project_id', id);
-      
-      const totalWorkersCost = (attendanceData || []).length * 15; 
-      setWorkersSalaryShare(totalWorkersCost);
+      const presentDays = (attendanceData || []).filter(a =>
+        (a as { status?: string }).status === 'present' || !(a as { status?: string }).status
+      ).length;
+      // تقدير تكلفة العمالة بمتوسط أجر يومي (يُعرض فقط، لا يدخل حساب الربح)
+      setWorkersLaborCost(presentDays * 20);
 
     } catch (error) {
       toast.error('حدث خطأ أثناء تحميل البيانات المالية للمشروع');
@@ -108,9 +137,10 @@ export default function ProjectDetail() {
       const { data: existing } = await supabase
         .from('invoices')
         .select('invoice_number');
-      
-      const nums = (existing || []).map(r => r.invoice_number);
-      const nextNum = 'INV-' + (nums.length + 184);
+
+      const nextNum = 'INV-' + String((existing?.length || 0) + 1).padStart(4, '0');
+
+      const amount = Number(milestone.amount);
 
       const { data: inv, error } = await supabase
         .from('invoices')
@@ -120,10 +150,13 @@ export default function ProjectDetail() {
           customer_name: project.client_name,
           project_id: project.id,
           milestone_id: milestone.id,
-          issue_date: new Date().toISOString().slice(0, 10),
+          issue_date: today(),
           status: 'draft',
-          subtotal: Number(milestone.amount),
-          total: Number(milestone.amount),
+          subtotal: amount,
+          tax_rate: 0,        // البناء الجديد معفى من الضريبة (صفر)
+          tax_amount: 0,      // لا ضريبة
+          discount: 0,
+          total: amount,      // الإجمالي = المبلغ بدون ضريبة
           notes: `فاتورة مرحلة: ${milestone.name}`
         })
         .select()
@@ -135,8 +168,8 @@ export default function ProjectDetail() {
         invoice_id: inv.id,
         description: milestone.name,
         quantity: 1,
-        unit_price: Number(milestone.amount),
-        total: Number(milestone.amount)
+        unit_price: amount,
+        total: amount
       });
 
       await supabase
@@ -144,7 +177,7 @@ export default function ProjectDetail() {
         .update({ status: 'invoiced', invoice_id: inv.id })
         .eq('id', milestone.id);
 
-      toast.success('تم إنشاء الفاتورة بنجاح كمسودة');
+      toast.success('تم إنشاء الفاتورة بنجاح كمسودة (معفاة من الضريبة)');
       load();
     } catch (e) {
       toast.error('حدث خطأ أثناء إصدار الفاتورة');
@@ -168,16 +201,17 @@ export default function ProjectDetail() {
   const approvedVOs = vos.filter(v => v.status === 'approved' && v.billable).reduce((sum, v) => sum + Number(v.amount || 0), 0);
   const totalRevenue = contractValue + approvedVOs;
 
-  const totalExpenses = boxExpenses + purchaseInvoicesSum + subcontractorAgreedSum + workersSalaryShare;
+  // المصاريف الفعلية المدفوعة فقط — تكلفة العمالة والشيكات الآجلة لا تدخل (حسب رؤية السيولة)
+  const totalExpenses = boxExpenses + purchasePaid + subcontractorPaidSum;
   const netProfit = totalRevenue - totalExpenses;
   const isProfitable = netProfit >= 0;
 
   return (
-    <div className="p-4 max-w-7xl mx-auto space-y-6 select-text">
+    <div className="p-4 max-w-7xl mx-auto space-y-6 select-text" dir="rtl">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/projects')} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg">
-            <ArrowLeft size={20} />
+            <ArrowRight size={20} />
           </button>
           <div>
             <h1 className="text-xl font-bold text-slate-800">{project.project_name}</h1>
@@ -194,7 +228,7 @@ export default function ProjectDetail() {
             {isProfitable ? <TrendingUp size={28} /> : <TrendingDown size={28} />}
             {formatCurrency(netProfit)}
           </div>
-          <p className="text-xs text-white/70">تُحسب تلقائياً بطرح كافّة المصاريف والمشتريات ومقاولي الباطن من عقد المالك</p>
+          <p className="text-xs text-white/70">يُحسب بطرح المصاريف المدفوعة فعلاً (نثريات + مشتريات مصروفة + مقاولو باطن) من إجمالي الدخل. الشيكات الآجلة وتكلفة العمالة لا تُخصم.</p>
         </div>
         <div className="grid grid-cols-2 gap-4 w-full md:w-auto text-slate-900">
           <div className="bg-white/90 p-3 rounded-xl min-w-[140px]">
@@ -202,7 +236,7 @@ export default function ProjectDetail() {
             <div className="text-base font-bold text-slate-800">{formatCurrency(totalRevenue)}</div>
           </div>
           <div className="bg-white/90 p-3 rounded-xl min-w-[140px]">
-            <div className="text-[10px] text-slate-500">إجمالي المصاريف الكلية</div>
+            <div className="text-[10px] text-slate-500">المصاريف المدفوعة فعلاً</div>
             <div className="text-base font-bold text-rose-600">{formatCurrency(totalExpenses)}</div>
           </div>
         </div>
@@ -214,23 +248,27 @@ export default function ProjectDetail() {
           <div className="text-lg font-bold text-slate-800">{formatCurrency(contractValue)}</div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
-          <div className="text-xs text-slate-400 flex items-center gap-1"><ShoppingCart size={14} /> فواتير وشيكات الموردين</div>
-          <div className="text-lg font-bold text-amber-600">{formatCurrency(purchaseInvoicesSum)}</div>
+          <div className="text-xs text-slate-400 flex items-center gap-1"><ShoppingCart size={14} /> مشتريات مدفوعة فعلاً</div>
+          <div className="text-lg font-bold text-amber-600">{formatCurrency(purchasePaid)}</div>
+          {purchaseDeferred > 0 && (
+            <div className="text-[10px] text-orange-500">+ {formatCurrency(purchaseDeferred)} شيكات آجلة (لم تُصرف)</div>
+          )}
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
-          <div className="text-xs text-slate-400 flex items-center gap-1"><Users size={14} /> عقود مقاولي الباطن</div>
-          <div className="text-lg font-bold text-blue-600">{formatCurrency(subcontractorAgreedSum)}</div>
+          <div className="text-xs text-slate-400 flex items-center gap-1"><Users size={14} /> مقاولو الباطن (مدفوع)</div>
+          <div className="text-lg font-bold text-blue-600">{formatCurrency(subcontractorPaidSum)}</div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
-          <div className="text-xs text-slate-400 flex items-center gap-1"><Briefcase size={14} /> نثريات الصندوق وأجور العمال</div>
-          <div className="text-lg font-bold text-purple-600">{formatCurrency(boxExpenses + workersSalaryShare)}</div>
+          <div className="text-xs text-slate-400 flex items-center gap-1"><Briefcase size={14} /> تكلفة العمالة (للمعرفة فقط)</div>
+          <div className="text-lg font-bold text-purple-600">{formatCurrency(workersLaborCost)}</div>
+          <div className="text-[10px] text-slate-400">لا تُخصم من ربح المشروع</div>
         </div>
       </div>
 
       <div className="flex gap-2 p-1 bg-slate-100 rounded-xl w-fit">
         {(['milestones', 'vos', 'logs'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${tab === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>
-            {t === 'milestones' ? 'مراحل الدفع فواتير الزبون' : t === 'vos' ? 'أوامر التغيير (VO)' : 'التقارير اليومية للموقع'}
+            {t === 'milestones' ? 'مراحل الدفع وفواتير الزبون' : t === 'vos' ? 'أوامر التغيير (VO)' : 'التقارير اليومية للموقع'}
           </button>
         ))}
       </div>
@@ -253,12 +291,14 @@ export default function ProjectDetail() {
                     <td className="p-3 font-medium text-slate-800">{m.name}</td>
                     <td className="p-3 font-bold text-slate-700">{formatCurrency(Number(m.amount))}</td>
                     <td className="p-3">
-                      <Badge color={(MILESTONE_STATUS_COLORS[m.status] || 'gray') as any}>{MILESTONE_STATUS_LABELS[m.status] || m.status}</Badge>
+                      <Badge color={(MILESTONE_STATUS_COLORS[m.status] || 'gray') as 'gray' | 'yellow' | 'blue' | 'amber' | 'green'}>{MILESTONE_STATUS_LABELS[m.status] || m.status}</Badge>
                     </td>
-                    <td className="p-3 flex gap-2">
+                    <td className="p-3 flex gap-2 flex-wrap">
                       {m.status === 'pending' && <Button onClick={() => updateMilestoneStatus(m.id, 'in_progress')}>تفعيل جاري</Button>}
                       {m.status === 'in_progress' && <Button onClick={() => updateMilestoneStatus(m.id, 'completed')}>اكتمال المرحلة</Button>}
                       {m.status === 'completed' && <Button onClick={() => generateInvoice(m)}>إصدار الفاتورة</Button>}
+                      {/* إرجاع المرحلة من مفوتر إلى جاري (لتعديل الفاتورة عند الحاجة) */}
+                      {m.status === 'invoiced' && <Button variant="outline" onClick={() => updateMilestoneStatus(m.id, 'in_progress')}>إرجاع إلى جاري</Button>}
                       {m.invoice_id && <Link to={`/invoices/${m.invoice_id}/view`} className="p-1.5 text-xs bg-blue-50 text-blue-600 rounded-lg flex items-center gap-1"><FileText size={14} /> عرض الفاتورة</Link>}
                     </td>
                   </tr>
