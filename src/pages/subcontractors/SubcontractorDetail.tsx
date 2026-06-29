@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ChevronLeft, Plus, DollarSign } from 'lucide-react'
+import { ChevronRight, Plus, DollarSign, MessageCircle, Paperclip, Eye, X, FileText, Image as ImageIcon, Upload, Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency, formatDate, subcontractorSpecialtyLabel } from '../../lib/utils'
+import { formatCurrency, formatDate, subcontractorSpecialtyLabel, openWhatsApp } from '../../lib/utils'
+import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -32,6 +33,8 @@ interface Assignment {
   end_date: string | null
   status: string
   notes: string
+  contract_data?: string
+  contract_name?: string
 }
 
 interface Payment {
@@ -43,6 +46,9 @@ interface Payment {
   check_due_date: string | null
   check_number: string
   notes: string
+  project_id?: string | null
+  payment_proof_data?: string
+  invoice_copy_data?: string
 }
 
 interface Project { id: string; project_name: string }
@@ -62,15 +68,55 @@ const PAY_METHODS = [
   { value: 'cheque', label: 'شيك آجل' },
 ]
 
+const PAY_LABELS: Record<string, string> = { cash: 'نقداً', bank_transfer: 'تحويل بنكي', cheque: 'شيك' }
+
 const emptyForm: Omit<Subcontractor, 'id'> = {
   name: '', specialty: 'electrical', phone: '', whatsapp: '',
   cr_number: '', bank_iban: '', notes: '', status: 'active',
 }
 
+const isImageData = (d?: string) => !!d && d.startsWith('data:image')
+const isPdfData = (d?: string) => !!d && d.startsWith('data:application/pdf')
+const hasFile = (d?: string) => isImageData(d) || isPdfData(d)
+const fileToData = async (file: File) => file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+
+// مكوّن رفع + معاينة موحّد
+function AttachField({ label, data, onUpload, onPreview, compact }: {
+  label: string; data?: string; onUpload: (f: File) => void; onPreview: (d: string) => void; compact?: boolean
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+  const handle = async (f: File) => { setBusy(true); try { await onUpload(f) } finally { setBusy(false) } }
+  return (
+    <div>
+      <input ref={ref} type="file" accept="image/*,application/pdf" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = '' }} />
+      {hasFile(data) ? (
+        <div className={`flex items-center gap-2 ${compact ? '' : 'bg-slate-50 rounded-lg p-2 border border-slate-200'}`}>
+          <button onClick={() => onPreview(data!)}
+            className="flex items-center gap-1.5 text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 hover:border-amber-300 hover:bg-amber-50 transition-colors">
+            {isImageData(data) ? <ImageIcon size={13} className="text-blue-500" /> : <FileText size={13} className="text-red-500" />}
+            <Eye size={12} /> عرض {label}
+          </button>
+          <button onClick={() => ref.current?.click()} disabled={busy} className="text-xs text-slate-400 hover:text-amber-600">
+            {busy ? <Loader2 size={13} className="animate-spin" /> : 'تغيير'}
+          </button>
+        </div>
+      ) : (
+        <button onClick={() => ref.current?.click()} disabled={busy}
+          className="w-full flex items-center justify-center gap-2 text-xs text-slate-500 border border-dashed border-slate-300 rounded-lg py-2 hover:border-amber-400 hover:text-amber-600 transition-colors">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} إرفاق {label}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function SubcontractorDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const isNew = id === 'new'
+  // محصّن: "جديد" إذا لم يكن id معرّفاً حقيقياً (يغطي 'new'/undefined/قيم غير صالحة)
+  const isNew = !id || id === 'new' || id === 'undefined'
 
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
@@ -79,16 +125,17 @@ export default function SubcontractorDetail() {
   const [payments, setPayments] = useState<Payment[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [activeTab, setActiveTab] = useState<'info' | 'assignments' | 'payments'>('info')
+  const [previewImg, setPreviewImg] = useState<string | null>(null)
 
   const [showAssignForm, setShowAssignForm] = useState(false)
   const [assignForm, setAssignForm] = useState({
-    project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '',
+    project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '', contract_data: '', contract_name: '',
   })
 
   const [showPayForm, setShowPayForm] = useState(false)
   const [payForm, setPayForm] = useState({
     assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10),
-    payment_method: 'cash', check_due_date: '', check_number: '', notes: '',
+    payment_method: 'cash', check_due_date: '', check_number: '', notes: '', payment_proof_data: '', invoice_copy_data: '',
   })
 
   const load = async () => {
@@ -116,25 +163,38 @@ export default function SubcontractorDetail() {
     setForm(f => ({ ...f, [k]: val }))
   }
 
+  const openDoc = (data: string) => { if (isImageData(data)) setPreviewImg(data); else openStoredFile(data) }
+
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('أدخل اسم المقاول'); return }
     setSaving(true)
     try {
-      if (isNew) {
+      // التفريق المحصّن: نعتبره "جديد" إذا لم يكن id قيمة معرّف حقيقية
+      // (يغطي 'new' و undefined وأي قيمة غير صالحة) → يمنع PATCH بـ id فاضي
+      const validId = id && id !== 'new' && id !== 'undefined'
+      if (!validId) {
         const { data, error } = await supabase.from('subcontractors').insert(form).select().single()
         if (error) throw error
         toast.success('تم إضافة المقاول')
         navigate(`/subcontractors/${(data as Subcontractor).id}`)
       } else {
-        const { error } = await supabase.from('subcontractors').update({ ...form, updated_at: new Date().toISOString() }).eq('id', id!)
+        const { error } = await supabase.from('subcontractors').update({ ...form, updated_at: new Date().toISOString() }).eq('id', id)
         if (error) throw error
         toast.success('تم الحفظ')
       }
-    } catch {
-      toast.error('حدث خطأ')
+    } catch (e) {
+      const msg = (e as { message?: string })?.message
+      toast.error(msg ? `خطأ: ${msg}` : 'حدث خطأ')
     } finally {
       setSaving(false)
     }
+  }
+
+  const sendWhatsApp = () => {
+    const phone = form.whatsapp || form.phone
+    if (!phone) { toast.error('لا يوجد رقم واتساب للمقاول'); return }
+    const msg = `السلام عليكم ${form.name}، `
+    openWhatsApp(phone, msg)
   }
 
   const handleAddAssignment = async () => {
@@ -150,12 +210,14 @@ export default function SubcontractorDetail() {
         start_date: assignForm.start_date || null,
         end_date: assignForm.end_date || null,
         notes: assignForm.notes,
+        contract_data: assignForm.contract_data,
+        contract_name: assignForm.contract_name,
         status: 'active',
       })
       if (error) throw error
       toast.success('تم إضافة التكليف')
       setShowAssignForm(false)
-      setAssignForm({ project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '' })
+      setAssignForm({ project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '', contract_data: '', contract_name: '' })
       load()
     } catch { toast.error('حدث خطأ') }
   }
@@ -175,6 +237,8 @@ export default function SubcontractorDetail() {
         check_due_date: payForm.check_due_date || null,
         check_number: payForm.check_number,
         notes: payForm.notes,
+        payment_proof_data: payForm.payment_proof_data,
+        invoice_copy_data: payForm.invoice_copy_data,
       })
       if (payErr) throw payErr
       if (assign) {
@@ -184,7 +248,7 @@ export default function SubcontractorDetail() {
       }
       toast.success('تم تسجيل الدفعة')
       setShowPayForm(false)
-      setPayForm({ assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'cash', check_due_date: '', check_number: '', notes: '' })
+      setPayForm({ assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'cash', check_due_date: '', check_number: '', notes: '', payment_proof_data: '', invoice_copy_data: '' })
       load()
     } catch { toast.error('حدث خطأ') }
   }
@@ -200,14 +264,20 @@ export default function SubcontractorDetail() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/subcontractors')} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">
-            <ChevronLeft size={20} />
+            <ChevronRight size={20} />
           </button>
           <div>
             <h1 className="text-2xl font-bold text-slate-800">{isNew ? 'إضافة مقاول جديد' : form.name}</h1>
             {!isNew && <p className="text-slate-500 text-sm">{subcontractorSpecialtyLabel[form.specialty] ?? form.specialty}</p>}
           </div>
         </div>
-        <Button loading={saving} onClick={handleSave}>حفظ</Button>
+        <div className="flex items-center gap-2">
+          {!isNew && (form.whatsapp || form.phone) && (
+            <Button variant="outline" size="sm" icon={<MessageCircle size={15} className="text-green-600" />}
+              className="border-green-300 text-green-700 hover:bg-green-50" onClick={sendWhatsApp}>واتساب</Button>
+          )}
+          <Button loading={saving} onClick={handleSave}>حفظ</Button>
+        </div>
       </div>
 
       {!isNew && (
@@ -243,12 +313,12 @@ export default function SubcontractorDetail() {
             <Select label="التخصص *" value={form.specialty} onChange={set('specialty')} options={SPECIALTY_OPTIONS} />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label="رقم الهاتف" value={form.phone} onChange={set('phone')} placeholder="3XXXXXXX" />
-            <Input label="واتساب" value={form.whatsapp} onChange={set('whatsapp')} placeholder="973XXXXXXXX" />
+            <Input label="رقم الهاتف" value={form.phone} onChange={set('phone')} placeholder="3XXXXXXX" dir="ltr" />
+            <Input label="واتساب" value={form.whatsapp} onChange={set('whatsapp')} placeholder="973XXXXXXXX" dir="ltr" />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label="رقم السجل التجاري" value={form.cr_number} onChange={set('cr_number')} />
-            <Input label="IBAN البنكي" value={form.bank_iban} onChange={set('bank_iban')} />
+            <Input label="رقم السجل التجاري" value={form.cr_number} onChange={set('cr_number')} dir="ltr" />
+            <Input label="IBAN البنكي" value={form.bank_iban} onChange={set('bank_iban')} dir="ltr" />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={set('notes')} rows={2} />
         </div>
@@ -280,6 +350,13 @@ export default function SubcontractorDetail() {
                 <Input label="تاريخ النهاية" value={assignForm.end_date}
                   onChange={e => setAssignForm(f => ({ ...f, end_date: e.target.value }))} type="date" />
               </div>
+              {/* إرفاق عقد التكليف */}
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">عقد التكليف (صورة أو PDF)</label>
+                <AttachField label="العقد" data={assignForm.contract_data}
+                  onUpload={async f => { const d = await fileToData(f); setAssignForm(p => ({ ...p, contract_data: d, contract_name: f.name })) }}
+                  onPreview={openDoc} />
+              </div>
               <div className="flex gap-2">
                 <Button onClick={handleAddAssignment}>حفظ</Button>
                 <Button variant="secondary" onClick={() => setShowAssignForm(false)}>إلغاء</Button>
@@ -297,7 +374,7 @@ export default function SubcontractorDetail() {
                 return (
                   <div key={a.id} className="bg-white rounded-xl border border-slate-200 p-4">
                     <div className="flex justify-between items-start">
-                      <div>
+                      <div className="flex-1">
                         <div className="font-medium text-slate-800">{a.project_name || 'بدون مشروع'}</div>
                         <div className="text-sm text-slate-600 mt-0.5">{a.scope}</div>
                         {(a.start_date || a.end_date) && (
@@ -305,8 +382,15 @@ export default function SubcontractorDetail() {
                             {a.start_date && formatDate(a.start_date)} {a.end_date && `— ${formatDate(a.end_date)}`}
                           </div>
                         )}
+                        {/* عرض العقد المرفق */}
+                        {hasFile(a.contract_data) && (
+                          <button onClick={() => openDoc(a.contract_data!)}
+                            className="flex items-center gap-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg px-2.5 py-1 mt-2 hover:bg-amber-100 transition-colors">
+                            <Paperclip size={12} /> <Eye size={12} /> عرض العقد
+                          </button>
+                        )}
                       </div>
-                      <div className="text-left">
+                      <div className="text-left shrink-0">
                         <div className="text-xs text-slate-400">المتفق</div>
                         <div className="font-bold text-slate-700">{formatCurrency(Number(a.agreed_amount))}</div>
                         <div className="text-xs text-slate-400 mt-0.5">مدفوع: {formatCurrency(Number(a.paid_amount))}</div>
@@ -360,6 +444,21 @@ export default function SubcontractorDetail() {
                 </div>
               )}
               <Input label="ملاحظات" value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))} />
+              {/* إرفاق إثبات الدفع + الفاتورة */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">إثبات الدفع</label>
+                  <AttachField label="الإثبات" data={payForm.payment_proof_data}
+                    onUpload={async f => { const d = await fileToData(f); setPayForm(p => ({ ...p, payment_proof_data: d })) }}
+                    onPreview={openDoc} />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">فاتورة المقاول</label>
+                  <AttachField label="الفاتورة" data={payForm.invoice_copy_data}
+                    onUpload={async f => { const d = await fileToData(f); setPayForm(p => ({ ...p, invoice_copy_data: d })) }}
+                    onPreview={openDoc} />
+                </div>
+              </div>
               <div className="flex gap-2">
                 <Button onClick={handleAddPayment}>تسجيل الدفعة</Button>
                 <Button variant="secondary" onClick={() => setShowPayForm(false)}>إلغاء</Button>
@@ -377,31 +476,61 @@ export default function SubcontractorDetail() {
                     <th className="px-4 py-3 text-right font-semibold text-slate-600">التاريخ</th>
                     <th className="px-4 py-3 text-right font-semibold text-slate-600">المبلغ</th>
                     <th className="px-4 py-3 text-right font-semibold text-slate-600">الطريقة</th>
+                    <th className="px-4 py-3 text-center font-semibold text-slate-600">المستندات</th>
                     <th className="px-4 py-3 text-right font-semibold text-slate-600">ملاحظات</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {payments.map(p => (
-                    <tr key={p.id} className="hover:bg-slate-50/50">
-                      <td className="px-4 py-3 text-slate-700">{formatDate(p.payment_date)}</td>
-                      <td className="px-4 py-3 font-bold text-green-700">{formatCurrency(Number(p.amount))}</td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {p.payment_method === 'cash' ? 'نقداً' : p.payment_method === 'bank_transfer' ? 'تحويل بنكي' : `شيك${p.check_due_date ? ` (${formatDate(p.check_due_date)})` : ''}`}
-                      </td>
-                      <td className="px-4 py-3 text-slate-500 text-xs">{p.notes || '—'}</td>
-                    </tr>
-                  ))}
+                  {payments.map(p => {
+                    const docs: { label: string; data: string }[] = []
+                    if (hasFile(p.payment_proof_data)) docs.push({ label: 'إثبات الدفع', data: p.payment_proof_data! })
+                    if (hasFile(p.invoice_copy_data)) docs.push({ label: 'الفاتورة', data: p.invoice_copy_data! })
+                    return (
+                      <tr key={p.id} className="hover:bg-slate-50/50">
+                        <td className="px-4 py-3 text-slate-700">{formatDate(p.payment_date)}</td>
+                        <td className="px-4 py-3 font-bold text-green-700">{formatCurrency(Number(p.amount))}</td>
+                        <td className="px-4 py-3 text-slate-600">
+                          {PAY_LABELS[p.payment_method] ?? p.payment_method}{p.payment_method === 'cheque' && p.check_due_date ? ` (${formatDate(p.check_due_date)})` : ''}
+                        </td>
+                        <td className="px-4 py-3">
+                          {docs.length > 0 ? (
+                            <div className="flex items-center justify-center gap-1">
+                              {docs.map((doc, di) => (
+                                <button key={di} onClick={() => openDoc(doc.data)} title={doc.label}
+                                  className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2 py-1 rounded-lg transition-colors">
+                                  {isImageData(doc.data) ? <ImageIcon size={12} /> : <FileText size={12} />}
+                                </button>
+                              ))}
+                            </div>
+                          ) : <div className="text-center text-slate-300 text-xs">—</div>}
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 text-xs">{p.notes || '—'}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
                 <tfoot className="bg-slate-50 border-t border-slate-200">
                   <tr>
                     <td className="px-4 py-3 font-semibold text-slate-700">الإجمالي</td>
                     <td className="px-4 py-3 font-bold text-green-700">{formatCurrency(payments.reduce((s, p) => s + Number(p.amount), 0))}</td>
-                    <td colSpan={2} />
+                    <td colSpan={3} />
                   </tr>
                 </tfoot>
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* معاينة الصورة بملء الشاشة */}
+      {previewImg && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setPreviewImg(null)}>
+          <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setPreviewImg(null)} className="absolute -top-3 -right-3 bg-white text-slate-700 rounded-full w-8 h-8 flex items-center justify-center shadow-lg hover:bg-slate-100">
+              <X size={18} />
+            </button>
+            <img src={previewImg} alt="معاينة" className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl" />
+          </div>
         </div>
       )}
     </div>
