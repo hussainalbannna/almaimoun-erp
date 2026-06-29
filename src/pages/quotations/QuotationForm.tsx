@@ -41,6 +41,8 @@ export default function QuotationForm() {
     customer_name: '',
     customer_address: '',
     customer_phone: '',
+    project_desc_ar: 'بناء فيلا من طابقين',
+    project_desc_en: 'construction for two story villa',
     location: '',
     area: '',
     issue_date: new Date().toISOString().slice(0, 10),
@@ -74,6 +76,8 @@ export default function QuotationForm() {
             customer_name: q.customer_name ?? '',
             customer_address: q.customer_address ?? '',
             customer_phone: q.customer_phone ?? '',
+            project_desc_ar: q.project_desc_ar ?? 'بناء فيلا من طابقين',
+            project_desc_en: q.project_desc_en ?? 'construction for two story villa',
             location: q.location ?? '',
             area: q.area ?? '',
             issue_date: q.issue_date ?? new Date().toISOString().slice(0, 10),
@@ -98,17 +102,15 @@ export default function QuotationForm() {
       }
       loadQuote()
     } else {
-      // رقم تلقائي بصيغة الميمون: تسلسلي/يوم/شهر/سنة
+      // رقم تلقائي بصيغة QT-2026-001
       supabase.from('quotations').select('quote_number').order('created_at', { ascending: false }).limit(50).then(({ data }) => {
+        const year = new Date().getFullYear()
         const nums = (data ?? []).map(q => {
-          const m = String(q.quote_number).match(/^(\d+)/)
+          const m = String(q.quote_number).match(/(\d+)$/)
           return m ? parseInt(m[1]) : 0
         })
-        const next = (nums.length ? Math.max(...nums) : 635) + 1
-        const d = new Date()
-        const dd = String(d.getDate()).padStart(2, '0')
-        const mm = String(d.getMonth() + 1).padStart(2, '0')
-        setForm(f => ({ ...f, quote_number: `${next}/${dd}/${mm}/${d.getFullYear()}` }))
+        const next = (nums.length ? Math.max(...nums) : 0) + 1
+        setForm(f => ({ ...f, quote_number: `QT-${year}-${String(next).padStart(3, '0')}` }))
       })
     }
   }, [id, isEdit])
@@ -145,7 +147,9 @@ export default function QuotationForm() {
         customer_name: form.customer_name,
         customer_address: form.customer_address,
         customer_phone: form.customer_phone,
-        project_name: 'فيلا دورين',
+        project_name: form.project_desc_ar,
+        project_desc_ar: form.project_desc_ar,
+        project_desc_en: form.project_desc_en,
         location: form.location,
         area: form.area,
         issue_date: form.issue_date,
@@ -243,7 +247,12 @@ export default function QuotationForm() {
             <Input label="الموقع" value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="مدينة سترة" />
             <Input label="مساحة البناء (م²)" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} dir="ltr" placeholder="470.61" />
           </div>
-          <p className="text-xs text-slate-400 mt-3">المشروع ثابت: "فيلا دورين" + الموقع + المساحة (يظهر في سطر الموضوع)</p>
+          {/* وصف المشروع المتغيّر (عربي + إنجليزي) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-100">
+            <Input label="وصف المشروع (عربي)" value={form.project_desc_ar} onChange={e => setForm(f => ({ ...f, project_desc_ar: e.target.value }))} placeholder="بناء فيلا من طابقين" />
+            <Input label="وصف المشروع (إنجليزي)" value={form.project_desc_en} onChange={e => setForm(f => ({ ...f, project_desc_en: e.target.value }))} dir="ltr" placeholder="construction for two story villa" />
+          </div>
+          <p className="text-xs text-slate-400 mt-3">وصف المشروع متغيّر (فيلا طابق/طابقين، مبنى تجاري...). يظهر في سطر الموضوع + الموقع + المساحة.</p>
         </div>
 
         {/* نوع البناء (داخلي — لا يظهر للعميل) */}
