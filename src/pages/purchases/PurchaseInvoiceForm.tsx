@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowRight, Plus, Trash2, X, Sparkles, Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery, PurchasePaymentMethod } from '../../types'
-import { readDocumentText, extractJSON, compressImage, fileToDataUrl, hasApiKey } from '../../lib/ai'
+import { readDocumentText, extractJSON, compressImage, fileToDataUrl, hasApiKey, openStoredFile } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
@@ -16,6 +16,41 @@ const PAYMENT_METHODS: { value: PurchasePaymentMethod; label: string }[] = [
   { value: 'bank_transfer', label: 'تحويل بنكي' },
   { value: 'deferred_cheque', label: 'شيك آجل' },
 ]
+
+// كشف نوع المرفق من الـ dataURL (صورة أو PDF أو غيره)
+const isImageData = (data: string) => !!data && data.startsWith('data:image')
+const isPdfData = (data: string) => !!data && data.startsWith('data:application/pdf')
+
+// معاينة مرفق واحد: صورة تتكبّر، PDF يفتح، مع زر حذف
+function AttachmentPreview({ data, label, onRemove, onPreviewImage }: {
+  data: string; label: string; onRemove: () => void; onPreviewImage: (d: string) => void
+}) {
+  if (!data) return null
+  const img = isImageData(data)
+  const pdf = isPdfData(data)
+  return (
+    <div className="mt-2 relative inline-block">
+      {img ? (
+        <button type="button" onClick={() => onPreviewImage(data)}
+          className="block w-24 h-24 rounded-lg border border-slate-200 overflow-hidden group relative">
+          <img src={data} alt={label} className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors">
+            <span className="text-white text-xs opacity-0 group-hover:opacity-100">عرض</span>
+          </div>
+        </button>
+      ) : (
+        <button type="button" onClick={() => openStoredFile(data, pdf ? 'application/pdf' : '')}
+          className="w-24 h-24 rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1 hover:bg-slate-100 transition-colors">
+          <span className="text-2xl">📄</span>
+          <span className="text-[10px] text-slate-600">عرض الملف</span>
+        </button>
+      )}
+      <button type="button" onClick={onRemove} className="absolute -top-1 -left-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+        <X size={12} />
+      </button>
+    </div>
+  )
+}
 
 export default function PurchaseInvoiceForm() {
   const { id } = useParams()
@@ -175,12 +210,17 @@ export default function PurchaseInvoiceForm() {
   }
 
   const handleFileUpload = async (field: 'invoice_copy_data' | 'payment_proof_data' | 'check_image_data', file: File) => {
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('حجم الملف يجب أن يكون أقل من 5 ميجابايت')
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('حجم الملف يجب أن يكون أقل من 10 ميجابايت')
       return
     }
-    const base64 = await fileToBase64(file)
-    setForm(f => ({ ...f, [field]: base64 }))
+    try {
+      // الصور تُضغط لتصغير الحجم، الـ PDF وغيره يُحفظ كما هو
+      const data = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+      setForm(f => ({ ...f, [field]: data }))
+    } catch (e) {
+      toast.error('تعذّر رفع الملف: ' + ((e as Error)?.message ?? ''))
+    }
   }
 
   const handleDeliveryImageUpload = async (idx: number, file: File) => {
@@ -404,17 +444,14 @@ export default function PurchaseInvoiceForm() {
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">صورة الشيك</label>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,.pdf"
                   onChange={e => e.target.files?.[0] && handleFileUpload('check_image_data', e.target.files[0])}
                   className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200"
                 />
                 {form.check_image_data && (
-                  <div className="mt-2 relative inline-block">
-                    <img src={form.check_image_data} alt="Check" className="w-24 h-24 object-cover rounded-lg border border-slate-200 cursor-pointer" onClick={() => setPreviewImage(form.check_image_data)} />
-                    <button onClick={() => setForm(f => ({ ...f, check_image_data: '' }))} className="absolute -top-1 -left-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                      <X size={12} />
-                    </button>
-                  </div>
+                  <AttachmentPreview data={form.check_image_data} label="Check"
+                    onRemove={() => setForm(f => ({ ...f, check_image_data: '' }))}
+                    onPreviewImage={setPreviewImage} />
                 )}
               </div>
             </div>
@@ -435,12 +472,9 @@ export default function PurchaseInvoiceForm() {
                 className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
               />
               {form.invoice_copy_data && (
-                <div className="mt-2 relative inline-block">
-                  <img src={form.invoice_copy_data} alt="Invoice" className="w-24 h-24 object-cover rounded-lg border border-slate-200 cursor-pointer" onClick={() => setPreviewImage(form.invoice_copy_data)} />
-                  <button onClick={() => setForm(f => ({ ...f, invoice_copy_data: '' }))} className="absolute -top-1 -left-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                    <X size={12} />
-                  </button>
-                </div>
+                <AttachmentPreview data={form.invoice_copy_data} label="Invoice"
+                  onRemove={() => setForm(f => ({ ...f, invoice_copy_data: '' }))}
+                  onPreviewImage={setPreviewImage} />
               )}
             </div>
 
@@ -454,12 +488,9 @@ export default function PurchaseInvoiceForm() {
                 className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
               />
               {form.payment_proof_data && (
-                <div className="mt-2 relative inline-block">
-                  <img src={form.payment_proof_data} alt="Proof" className="w-24 h-24 object-cover rounded-lg border border-slate-200 cursor-pointer" onClick={() => setPreviewImage(form.payment_proof_data)} />
-                  <button onClick={() => setForm(f => ({ ...f, payment_proof_data: '' }))} className="absolute -top-1 -left-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                    <X size={12} />
-                  </button>
-                </div>
+                <AttachmentPreview data={form.payment_proof_data} label="Proof"
+                  onRemove={() => setForm(f => ({ ...f, payment_proof_data: '' }))}
+                  onPreviewImage={setPreviewImage} />
               )}
             </div>
           </div>
