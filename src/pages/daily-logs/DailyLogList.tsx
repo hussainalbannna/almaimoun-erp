@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp, ShoppingCart, Sparkles, Loader2, Cloud, Users } from 'lucide-react'
+import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp, ShoppingCart, Sparkles, Loader2, Cloud, Users, Eye } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
 import { formatDate } from '../../lib/utils'
@@ -25,12 +25,12 @@ const EMPTY_FORM = (projectId = '') => ({
 
 const WEATHER_OPTIONS = [
   { value: '', label: 'حالة الطقس' },
-  { value: 'مشمس', label: '☀️ مشمس' },
-  { value: 'غائم', label: '☁️ غائم' },
-  { value: 'حار', label: '🔥 حار جداً' },
-  { value: 'ممطر', label: '🌧️ ممطر' },
-  { value: 'غبار', label: '🌫️ غبار / أتربة' },
-  { value: 'رطب', label: '💧 رطوبة عالية' },
+  { value: 'مشمس', label: 'مشمس' },
+  { value: 'غائم', label: 'غائم' },
+  { value: 'حار', label: 'حار جداً' },
+  { value: 'ممطر', label: 'ممطر' },
+  { value: 'غبار', label: 'غبار / أتربة' },
+  { value: 'رطب', label: 'رطوبة عالية' },
 ]
 
 // ─── Print document generator ──────────────────────────────────────────────
@@ -49,7 +49,7 @@ function buildPrintHTML(logs: PrintLog[]): string {
   const photoGrid = (photos: string[]) => {
     if (!photos?.length) return ''
     const items = photos.map(src => `
-      <div style="break-inside:avoid;aspect-ratio:1;overflow:hidden;border-radius:6px;border:1px solid #e2e8f0;">
+      <div style="break-inside:avoid;aspect-ratio:1;overflow:hidden;border-radius:6px;border:1px solid #e5d9c8;">
         <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
       </div>`).join('')
     return `
@@ -63,14 +63,16 @@ function buildPrintHTML(logs: PrintLog[]): string {
 
   const logCards = logs.map((log, i) => `
     <div class="report-card" ${i > 0 ? 'style="page-break-before:always;"' : ''}>
-      <!-- Corporate header -->
+      <div class="watermark">M</div>
       <div class="corp-header">
-        <div class="corp-title">مؤسسة الميمون للمقاولات</div>
-        <div class="corp-subtitle">Almaimoun Construction Est.</div>
+        <div class="corp-brand">
+          <div class="corp-title">مؤسسة الميمون للمقاولات</div>
+          <div class="corp-subtitle">ALMAIMOUN CONSTRUCTION</div>
+          <div class="corp-contact">سجل تجاري: 120637-2 &nbsp;|&nbsp; +973 37055576 &nbsp;|&nbsp; info@almaimoun-construction.com</div>
+        </div>
         <div class="doc-type">تقرير يومي للموقع</div>
       </div>
 
-      <!-- Meta row -->
       <div class="meta-row">
         <div class="meta-item">
           <span class="meta-label">التاريخ</span>
@@ -97,7 +99,6 @@ function buildPrintHTML(logs: PrintLog[]): string {
         </div>` : ''}
       </div>
 
-      <!-- Tasks description -->
       <div class="section">
         <div class="section-title">وصف الأعمال المنجزة</div>
         <div class="section-body">${(log.description ?? '').replace(/\n/g, '<br/>')}</div>
@@ -109,7 +110,6 @@ function buildPrintHTML(logs: PrintLog[]): string {
         <div class="section-body">${log.material_requests.replace(/\n/g, '<br/>')}</div>
       </div>` : ''}
 
-      <!-- Workers list -->
       ${(log.worker_names?.length ?? 0) > 0 ? `
       <div class="section">
         <div class="section-title">العمال المتواجدون في الموقع (${log.worker_names!.length})</div>
@@ -118,17 +118,14 @@ function buildPrintHTML(logs: PrintLog[]): string {
         </div>
       </div>` : ''}
 
-      <!-- Additional notes -->
       ${log.additional_notes ? `
       <div class="section">
         <div class="section-title">ملاحظات إضافية</div>
         <div class="section-body notes-body">${log.additional_notes.replace(/\n/g, '<br/>')}</div>
       </div>` : ''}
 
-      <!-- Photos -->
       ${photoGrid(log.photos ?? [])}
 
-      <!-- Footer -->
       <div class="footer">
         <div>توقيع مشرف الموقع: ___________________________</div>
         <div>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-SA')}</div>
@@ -143,154 +140,99 @@ function buildPrintHTML(logs: PrintLog[]): string {
   <title>تقرير يومي — مؤسسة الميمون للمقاولات</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
-
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
       font-family: 'Cairo', 'Segoe UI', Arial, sans-serif;
       direction: rtl;
-      background: #fff;
+      background: #f1f5f9;
       color: #1e293b;
       font-size: 13px;
       line-height: 1.6;
     }
-
     .report-card {
       max-width: 794px;
-      margin: 0 auto;
-      padding: 32px 40px 40px;
+      margin: 20px auto;
+      padding: 36px 40px 40px;
+      background: #fff;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 1px 8px rgba(0,0,0,0.08);
+      border-radius: 8px;
     }
-
-    /* Corporate header */
+    .report-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 6px;
+      background: linear-gradient(90deg, #c4925a 0%, #7b4a2d 50%, #c4925a 100%);
+      z-index: 2;
+    }
+    .watermark {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%) rotate(-12deg);
+      font-size: 320px;
+      font-weight: 900;
+      color: #7b4a2d;
+      opacity: 0.035;
+      pointer-events: none;
+      font-family: 'Arial Black', sans-serif;
+      z-index: 0;
+    }
+    .report-card > *:not(.watermark) { position: relative; z-index: 1; }
     .corp-header {
-      text-align: center;
-      border-bottom: 3px solid #1e3a5f;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      border-bottom: 3px solid #c4925a;
       padding-bottom: 18px;
       margin-bottom: 22px;
     }
-    .corp-title {
-      font-size: 24px;
-      font-weight: 800;
-      color: #1e3a5f;
-      letter-spacing: -0.5px;
-    }
-    .corp-subtitle {
-      font-size: 12px;
-      color: #64748b;
-      margin-top: 2px;
-      letter-spacing: 1px;
-    }
+    .corp-title { font-size: 22px; font-weight: 800; color: #7b4a2d; letter-spacing: -0.5px; }
+    .corp-subtitle { font-size: 12px; color: #c4925a; margin-top: 2px; letter-spacing: 2px; font-weight: 700; }
+    .corp-contact { font-size: 10px; color: #94a3b8; margin-top: 6px; direction: ltr; text-align: right; }
     .doc-type {
       display: inline-block;
-      margin-top: 10px;
-      background: #1e3a5f;
+      background: linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%);
       color: #fff;
       font-size: 13px;
       font-weight: 700;
-      padding: 4px 20px;
+      padding: 6px 20px;
       border-radius: 20px;
+      white-space: nowrap;
     }
-
-    /* Meta row */
     .meta-row {
       display: flex;
       gap: 0;
-      border: 1px solid #e2e8f0;
+      border: 1px solid #e5d9c8;
       border-radius: 8px;
       overflow: hidden;
       margin-bottom: 20px;
     }
-    .meta-item {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      padding: 10px 14px;
-      border-left: 1px solid #e2e8f0;
-    }
+    .meta-item { flex: 1; display: flex; flex-direction: column; padding: 10px 14px; border-left: 1px solid #e5d9c8; }
     .meta-item:last-child { border-left: none; }
-    .meta-label {
-      font-size: 10px;
-      font-weight: 700;
-      color: #94a3b8;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 3px;
-    }
-    .meta-value {
-      font-size: 13px;
-      font-weight: 600;
-      color: #1e293b;
-    }
-    .badge {
-      display: inline-block;
-      background: #dbeafe;
-      color: #1d4ed8;
-      padding: 1px 8px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: 700;
-    }
-
-    /* Sections */
-    .section {
-      margin-bottom: 18px;
-    }
+    .meta-label { font-size: 10px; font-weight: 700; color: #b89968; letter-spacing: 0.5px; margin-bottom: 3px; }
+    .meta-value { font-size: 13px; font-weight: 600; color: #1e293b; }
+    .badge { display: inline-block; background: #f3e9dc; color: #7b4a2d; padding: 1px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; }
+    .section { margin-bottom: 18px; }
     .section-title {
       font-size: 11px;
       font-weight: 800;
-      color: #1e3a5f;
-      text-transform: uppercase;
+      color: #7b4a2d;
       letter-spacing: 0.8px;
-      border-bottom: 1.5px solid #e2e8f0;
+      border-bottom: 1.5px solid #e5d9c8;
       padding-bottom: 5px;
       margin-bottom: 8px;
     }
-    .section-body {
-      font-size: 13px;
-      color: #334155;
-      line-height: 1.75;
-      background: #f8fafc;
-      border-radius: 6px;
-      padding: 10px 14px;
-    }
-    .notes-body {
-      background: #fefce8;
-      border-right: 3px solid #eab308;
-    }
-
-    /* Workers */
-    .workers-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 6px;
-    }
-    .worker-chip {
-      background: #f1f5f9;
-      border: 1px solid #e2e8f0;
-      border-radius: 20px;
-      padding: 3px 12px;
-      font-size: 12px;
-      font-weight: 600;
-      color: #374151;
-    }
-
-    /* Footer */
-    .footer {
-      margin-top: 32px;
-      padding-top: 14px;
-      border-top: 1px dashed #cbd5e1;
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      color: #94a3b8;
-    }
-
-    /* Print overrides */
+    .section-body { font-size: 13px; color: #334155; line-height: 1.75; background: #faf6f1; border-radius: 6px; padding: 10px 14px; }
+    .notes-body { background: #fefce8; border-right: 3px solid #eab308; }
+    .workers-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .worker-chip { background: #faf6f1; border: 1px solid #e5d9c8; border-radius: 20px; padding: 3px 12px; font-size: 12px; font-weight: 600; color: #374151; }
+    .footer { margin-top: 32px; padding-top: 14px; border-top: 1px dashed #d6c3a8; display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; }
     @media print {
       @page { margin: 15mm 12mm; }
       html, body { background: white !important; margin: 0; }
-      .report-card { padding: 0; max-width: 100%; }
+      .report-card { padding: 0; max-width: 100%; margin: 0; box-shadow: none; border-radius: 0; }
       .corp-title { font-size: 20px; }
     }
   </style>
@@ -371,8 +313,6 @@ export default function DailyLogList() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // ── Photo handling ──────────────────────────────────────────────────────
-
   const fileToDataUrl = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader()
@@ -399,7 +339,6 @@ export default function DailyLogList() {
     setForm(prev => ({ ...prev, photos: prev.photos.filter((_, i) => i !== idx) }))
   }
 
-  // ── قراءة طلب المواد بالذكاء الاصطناعي ──────────────────────────────────
   const handleScanMaterials = async (file: File) => {
     if (!hasApiKey()) {
       toast.error('فعّل مفتاح الذكاء الاصطناعي من الإعدادات أولاً')
@@ -422,10 +361,8 @@ export default function DailyLogList() {
     }
   }
 
-  // ── تحويل طلب المواد إلى أمر شراء ────────────────────────────────────────
   const convertToLPO = (log: DailyLog & { project_name?: string }) => {
     if (!log.material_requests?.trim()) { toast.error('لا توجد طلبات مواد في هذا التقرير'); return }
-    // تمرير البيانات لصفحة إنشاء أمر شراء عبر الرابط
     const params = new URLSearchParams({
       project: log.project_id,
       materials: log.material_requests,
@@ -434,13 +371,9 @@ export default function DailyLogList() {
     navigate(`/lpos/new?${params.toString()}`)
   }
 
-  // ── Save / Delete ───────────────────────────────────────────────────────
-
   const syncAttendance = async (logId: string, logDate: string, projectId: string, workerIds: string[]) => {
     const projectName = projects.find(p => p.id === projectId)?.project_name ?? ''
-    // Remove old auto-attendance records for this log
     await supabase.from('worker_attendance').delete().eq('log_id', logId)
-    // Insert attendance records for each selected worker
     if (workerIds.length > 0) {
       const records = workerIds.map(wid => ({
         worker_id: wid,
@@ -486,7 +419,6 @@ export default function DailyLogList() {
       for (const wid of selectedWorkers) {
         await supabase.from('daily_log_workers').insert({ log_id: logId, worker_id: wid })
       }
-      // Auto-sync attendance records
       await syncAttendance(logId, form.log_date, form.project_id, selectedWorkers)
       toast.success(editingId ? 'تم تحديث التقرير' : 'تم تسجيل التقرير اليومي')
       resetForm()
@@ -512,8 +444,6 @@ export default function DailyLogList() {
     setDeletingId(null)
   }
 
-  // ── Print ───────────────────────────────────────────────────────────────
-
   const resolveWorkerNames = async (logId: string): Promise<string[]> => {
     const { data } = await supabase
       .from('daily_log_workers')
@@ -524,8 +454,32 @@ export default function DailyLogList() {
     return workers.filter(w => ids.includes(w.id)).map(w => w.name)
   }
 
+  // معاينة: تفتح التقرير في تبويب جديد للاستعراض (مع زر طباعة عائم)
+  const openPreviewWindow = (html: string) => {
+    const win = window.open('', '_blank')
+    if (!win) {
+      toast.error('فعّل النوافذ المنبثقة للمعاينة، أو استخدم زر الطباعة')
+      return
+    }
+    const previewBar = `
+      <div id="__preview_bar__" style="position:fixed;top:0;left:0;right:0;background:#7b4a2d;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center;z-index:9999;font-family:Cairo,Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.2);">
+        <span style="font-weight:700;font-size:14px;">معاينة التقرير اليومي</span>
+        <div style="display:flex;gap:8px;">
+          <button onclick="window.print()" style="background:#c4925a;color:#fff;border:0;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px;">طباعة / حفظ PDF</button>
+          <button onclick="window.close()" style="background:rgba(255,255,255,0.2);color:#fff;border:0;padding:8px 16px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;">إغلاق</button>
+        </div>
+      </div>
+      <style>
+        body { padding-top: 56px !important; }
+        @media print { #__preview_bar__ { display: none !important; } body { padding-top: 0 !important; } }
+      </style>`
+    const htmlWithBar = html.replace('<body>', `<body>${previewBar}`)
+    win.document.open()
+    win.document.write(htmlWithBar)
+    win.document.close()
+  }
+
   const openPrintWindow = (html: string) => {
-    // Create a hidden iframe — avoids popup blockers entirely
     const iframe = document.createElement('iframe')
     iframe.setAttribute('aria-hidden', 'true')
     iframe.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none;'
@@ -542,8 +496,6 @@ export default function DailyLogList() {
       if (document.body.contains(iframe)) document.body.removeChild(iframe)
     }
 
-    // Inject a parent-level @media print rule that hides the app shell
-    // so if any browser decides to print the outer page, only the iframe shows.
     const parentStyle = document.createElement('style')
     parentStyle.id = '__print_guard__'
     parentStyle.textContent = `@media print { body > *:not(iframe[aria-hidden]) { display: none !important; } }`
@@ -558,13 +510,11 @@ export default function DailyLogList() {
         iframe.contentWindow?.focus()
         iframe.contentWindow?.print()
 
-        // afterprint fires when the print dialog closes (all modern browsers)
         const iframeWin = iframe.contentWindow
         if (iframeWin) {
           const onAfter = () => { cleanup(); removeGuard(); iframeWin.removeEventListener('afterprint', onAfter) }
           iframeWin.addEventListener('afterprint', onAfter)
         }
-        // Belt-and-suspenders: clean up after 2 min in case afterprint never fires
         setTimeout(() => { cleanup(); removeGuard() }, 120_000)
       } catch {
         cleanup()
@@ -573,22 +523,29 @@ export default function DailyLogList() {
     }
   }
 
+  const handlePreviewSingle = async (log: DailyLog & { project_name?: string }) => {
+    const worker_names = await resolveWorkerNames(log.id)
+    openPreviewWindow(buildPrintHTML([{ ...log, worker_names }]))
+  }
+
   const handlePrintSingle = async (log: DailyLog & { project_name?: string }) => {
     const worker_names = await resolveWorkerNames(log.id)
     openPrintWindow(buildPrintHTML([{ ...log, worker_names }]))
   }
 
+  const handlePreviewAll = async () => {
+    const logsWithWorkers = await Promise.all(
+      filtered.map(async log => ({ ...log, worker_names: await resolveWorkerNames(log.id) }))
+    )
+    openPreviewWindow(buildPrintHTML(logsWithWorkers))
+  }
+
   const handlePrintAll = async () => {
     const logsWithWorkers = await Promise.all(
-      filtered.map(async log => ({
-        ...log,
-        worker_names: await resolveWorkerNames(log.id),
-      }))
+      filtered.map(async log => ({ ...log, worker_names: await resolveWorkerNames(log.id) }))
     )
     openPrintWindow(buildPrintHTML(logsWithWorkers))
   }
-
-  // ────────────────────────────────────────────────────────────────────────
 
   const filtered = logs.filter(l => !filterProject || l.project_id === filterProject)
 
@@ -600,34 +557,27 @@ export default function DailyLogList() {
   return (
     <>
       <div className="p-6" ref={printRef}>
-        {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold text-slate-800">التقارير اليومية</h1>
             <p className="text-slate-500 text-sm mt-0.5">متابعة الموقع اليومية لجميع المشاريع</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              icon={<Printer size={16} />}
-              onClick={handlePrintAll}
-              disabled={filtered.length === 0}
-            >
+            <Button variant="outline" icon={<Eye size={16} />} onClick={handlePreviewAll} disabled={filtered.length === 0}>
+              معاينة الكل
+            </Button>
+            <Button variant="outline" icon={<Printer size={16} />} onClick={handlePrintAll} disabled={filtered.length === 0}>
               طباعة الكل
             </Button>
-            <Button
-              icon={<Plus size={16} />}
-              onClick={() => { setEditingId(null); setForm(EMPTY_FORM(prefillProject)); setSelectedWorkers([]); setShowForm(true) }}
-            >
+            <Button icon={<Plus size={16} />} onClick={() => { setEditingId(null); setForm(EMPTY_FORM(prefillProject)); setSelectedWorkers([]); setShowForm(true) }}>
               تسجيل تقرير جديد
             </Button>
           </div>
         </div>
 
-        {/* Form */}
         {showForm && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-6 overflow-hidden">
-            <div className="bg-gradient-to-l from-slate-700 to-slate-800 px-5 py-4 flex items-center justify-between">
+            <div className="px-5 py-4 flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #c4925a 100%)' }}>
               <h2 className="text-white font-semibold text-base">
                 {editingId ? 'تعديل التقرير اليومي' : 'تقرير يومي جديد'}
               </h2>
@@ -638,32 +588,14 @@ export default function DailyLogList() {
 
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <Select
-                  label="المشروع *"
-                  value={form.project_id}
+                <Select label="المشروع *" value={form.project_id}
                   onChange={e => setForm(p => ({ ...p, project_id: e.target.value }))}
-                  options={[{ value: '', label: 'اختر المشروع' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))]}
-                />
-                <Input
-                  label="التاريخ"
-                  type="date"
-                  value={form.log_date}
-                  onChange={e => setForm(p => ({ ...p, log_date: e.target.value }))}
-                />
-                <Select
-                  label="حالة الطقس"
-                  value={form.weather}
-                  onChange={e => setForm(p => ({ ...p, weather: e.target.value }))}
-                  options={WEATHER_OPTIONS}
-                />
+                  options={[{ value: '', label: 'اختر المشروع' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))]} />
+                <Input label="التاريخ" type="date" value={form.log_date} onChange={e => setForm(p => ({ ...p, log_date: e.target.value }))} />
+                <Select label="حالة الطقس" value={form.weather} onChange={e => setForm(p => ({ ...p, weather: e.target.value }))} options={WEATHER_OPTIONS} />
               </div>
 
-              <Textarea
-                label="وصف الأعمال المنجزة اليوم *"
-                value={form.description}
-                onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
-                rows={3}
-              />
+              <Textarea label="وصف الأعمال المنجزة اليوم *" value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} rows={3} />
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
@@ -677,22 +609,14 @@ export default function DailyLogList() {
                     قراءة من صورة
                   </button>
                 </div>
-                <Textarea
-                  label=""
-                  value={form.material_requests}
-                  onChange={e => setForm(p => ({ ...p, material_requests: e.target.value }))}
-                  rows={2}
-                  placeholder="اكتب أو صوّر طلب المواد المكتوب بخط اليد..."
-                />
+                <Textarea label="" value={form.material_requests} onChange={e => setForm(p => ({ ...p, material_requests: e.target.value }))} rows={2}
+                  placeholder="اكتب أو صوّر طلب المواد المكتوب بخط اليد..." />
               </div>
 
               <label className="flex items-center gap-2.5 text-sm font-medium text-slate-700 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={form.inspector_meeting}
+                <input type="checkbox" checked={form.inspector_meeting}
                   onChange={e => setForm(p => ({ ...p, inspector_meeting: e.target.checked }))}
-                  className="w-4 h-4 rounded border-slate-300 text-slate-700"
-                />
+                  className="w-4 h-4 rounded border-slate-300" style={{ accentColor: '#7b4a2d' }} />
                 التنسيق مع الاستشاري لموعد الفحص
               </label>
 
@@ -701,24 +625,16 @@ export default function DailyLogList() {
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-50 rounded-lg border border-slate-200">
                   {workers.map(w => (
                     <label key={w.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedWorkers.includes(w.id)}
-                        onChange={e => setSelectedWorkers(prev =>
-                          e.target.checked ? [...prev, w.id] : prev.filter(x => x !== w.id)
-                        )}
-                        className="rounded"
-                      />
+                      <input type="checkbox" checked={selectedWorkers.includes(w.id)}
+                        onChange={e => setSelectedWorkers(prev => e.target.checked ? [...prev, w.id] : prev.filter(x => x !== w.id))}
+                        className="rounded" style={{ accentColor: '#7b4a2d' }} />
                       <span className="text-slate-700 truncate">{w.name}</span>
                     </label>
                   ))}
                 </div>
-                {selectedWorkers.length > 0 && (
-                  <p className="text-xs text-slate-500 mt-1">{selectedWorkers.length} عامل محدد</p>
-                )}
+                {selectedWorkers.length > 0 && <p className="text-xs text-slate-500 mt-1">{selectedWorkers.length} عامل محدد</p>}
               </div>
 
-              {/* Site photos uploader */}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
                   <Camera size={15} className="text-slate-500" />
@@ -730,25 +646,18 @@ export default function DailyLogList() {
                   onDrop={e => { e.preventDefault(); setDragOver(false); handlePhotoFiles(e.dataTransfer.files) }}
                   onClick={() => photoInputRef.current?.click()}
                   className={`relative border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-colors
-                    ${dragOver ? 'border-slate-500 bg-slate-50' : 'border-slate-300 hover:border-slate-400 hover:bg-slate-50'}`}
-                >
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={e => e.target.files && handlePhotoFiles(e.target.files)}
-                  />
+                    ${dragOver ? 'border-amber-500 bg-amber-50' : 'border-slate-300 hover:border-amber-400 hover:bg-amber-50/50'}`}>
+                  <input ref={photoInputRef} type="file" accept="image/*" multiple className="hidden"
+                    onChange={e => e.target.files && handlePhotoFiles(e.target.files)} />
                   {photoUploading ? (
                     <div className="flex flex-col items-center gap-2 py-2">
-                      <div className="w-6 h-6 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+                      <div className="w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
                       <p className="text-xs text-slate-500">جاري معالجة الصور...</p>
                     </div>
                   ) : (
                     <div className="flex flex-col items-center gap-2 py-1">
-                      <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center">
-                        <ImagePlus size={20} className="text-slate-500" />
+                      <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center">
+                        <ImagePlus size={20} className="text-amber-600" />
                       </div>
                       <p className="text-sm font-medium text-slate-700">إضافة صورة</p>
                       <p className="text-xs text-slate-400">اسحب الصور هنا أو انقر للاختيار</p>
@@ -761,10 +670,8 @@ export default function DailyLogList() {
                     {form.photos.map((url, idx) => (
                       <div key={idx} className="relative group aspect-square rounded-lg overflow-hidden border border-slate-200">
                         <img src={url} alt="" className="w-full h-full object-cover" />
-                        <button
-                          onClick={e => { e.stopPropagation(); removePhoto(idx) }}
-                          className="absolute top-1 left-1 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
+                        <button onClick={e => { e.stopPropagation(); removePhoto(idx) }}
+                          className="absolute top-1 left-1 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                           <X size={10} />
                         </button>
                       </div>
@@ -773,37 +680,23 @@ export default function DailyLogList() {
                 )}
               </div>
 
-              <Textarea
-                label="ملاحظات إضافية"
-                value={form.additional_notes}
-                onChange={e => setForm(p => ({ ...p, additional_notes: e.target.value }))}
-                rows={2}
-                placeholder="أي ملاحظات إدارية أو تعليمات للموقع..."
-              />
+              <Textarea label="ملاحظات إضافية" value={form.additional_notes} onChange={e => setForm(p => ({ ...p, additional_notes: e.target.value }))} rows={2}
+                placeholder="أي ملاحظات إدارية أو تعليمات للموقع..." />
 
               <div className="flex gap-3 pt-1">
-                <Button loading={saving} onClick={handleSave}>
-                  {editingId ? 'حفظ التعديلات' : 'حفظ التقرير'}
-                </Button>
+                <Button loading={saving} onClick={handleSave}>{editingId ? 'حفظ التعديلات' : 'حفظ التقرير'}</Button>
                 <Button variant="secondary" onClick={resetForm}>إلغاء</Button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Filter bar */}
         <div className="flex gap-3 mb-4">
           <div className="w-64">
-            <Select
-              label=""
-              value={filterProject}
-              onChange={e => setFilterProject(e.target.value)}
-              options={projectOptions}
-            />
+            <Select label="" value={filterProject} onChange={e => setFilterProject(e.target.value)} options={projectOptions} />
           </div>
         </div>
 
-        {/* Log list */}
         {loading ? (
           <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
         ) : filtered.length === 0 ? (
@@ -819,16 +712,9 @@ export default function DailyLogList() {
               const isExpanded = expandedLog === log.id
               const isDeleting = deletingId === log.id
               return (
-                <div
-                  key={log.id}
-                  className={`bg-white rounded-xl border transition-all
-                    ${isExpanded ? 'border-slate-300 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
-                >
-                  {/* Card header */}
-                  <div
-                    className="flex items-start justify-between p-4 cursor-pointer"
-                    onClick={() => setExpandedLog(isExpanded ? null : log.id)}
-                  >
+                <div key={log.id}
+                  className={`bg-white rounded-xl border transition-all ${isExpanded ? 'border-amber-300 shadow-sm' : 'border-slate-200 hover:border-amber-300'}`}>
+                  <div className="flex items-start justify-between p-4 cursor-pointer" onClick={() => setExpandedLog(isExpanded ? null : log.id)}>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
                         <span className="font-semibold text-slate-800 text-sm">{formatDate(log.log_date)}</span>
@@ -836,7 +722,7 @@ export default function DailyLogList() {
                           <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{log.project_name}</span>
                         )}
                         {log.inspector_meeting && (
-                          <span className="text-xs bg-blue-50 text-blue-600 border border-blue-100 px-2 py-0.5 rounded-full">تنسيق استشاري</span>
+                          <span className="text-xs px-2 py-0.5 rounded-full border" style={{ background: '#f3e9dc', color: '#7b4a2d', borderColor: '#e5d9c8' }}>تنسيق استشاري</span>
                         )}
                         {(log.photos?.length ?? 0) > 0 && (
                           <span className="text-xs bg-emerald-50 text-emerald-600 border border-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -860,49 +746,41 @@ export default function DailyLogList() {
                       )}
                     </div>
 
-                    {/* Action buttons */}
                     <div className="flex items-center gap-1 mr-3 shrink-0" onClick={e => e.stopPropagation()}>
                       {log.material_requests?.trim() && (
-                        <button
-                          onClick={() => convertToLPO(log)}
+                        <button onClick={() => convertToLPO(log)}
                           className="p-1.5 text-amber-600 hover:text-white hover:bg-amber-600 rounded-lg transition-colors"
-                          title="تحويل طلبات المواد إلى أمر شراء"
-                        >
+                          title="تحويل طلبات المواد إلى أمر شراء">
                           <ShoppingCart size={15} />
                         </button>
                       )}
-                      <button
-                        onClick={() => handlePrintSingle(log)}
+                      <button onClick={() => handlePreviewSingle(log)}
+                        className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors"
+                        title="معاينة هذا التقرير">
+                        <Eye size={15} />
+                      </button>
+                      <button onClick={() => handlePrintSingle(log)}
                         className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="طباعة هذا التقرير"
-                      >
+                        title="طباعة هذا التقرير">
                         <Printer size={15} />
                       </button>
-                      <button
-                        onClick={() => openEdit(log)}
+                      <button onClick={() => openEdit(log)}
                         className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="تعديل"
-                      >
+                        title="تعديل">
                         <Pencil size={15} />
                       </button>
-                      <button
-                        onClick={() => setDeleteTarget(log.id)}
-                        disabled={isDeleting}
+                      <button onClick={() => setDeleteTarget(log.id)} disabled={isDeleting}
                         className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
-                        title="حذف"
-                      >
+                        title="حذف">
                         <Trash2 size={15} />
                       </button>
-                      <button
-                        onClick={() => setExpandedLog(isExpanded ? null : log.id)}
-                        className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors"
-                      >
+                      <button onClick={() => setExpandedLog(isExpanded ? null : log.id)}
+                        className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors">
                         {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                       </button>
                     </div>
                   </div>
 
-                  {/* Expanded detail */}
                   {isExpanded && (
                     <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
                       {log.description && (
