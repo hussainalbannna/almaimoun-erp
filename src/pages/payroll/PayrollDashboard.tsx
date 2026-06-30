@@ -7,8 +7,8 @@ import { formatCurrency } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
-const BRANCHES = ['all', '2', '3', '5']
-const BRANCH_LABELS: Record<string, string> = { all: 'الكل', '2': 'الفرع 2', '3': 'الفرع 3', '5': 'الفرع 5' }
+const BRANCHES = ['all', '2', '4', '5']
+const BRANCH_LABELS: Record<string, string> = { all: 'الكل', '2': 'الفرع 2', '4': 'الفرع 4', '5': 'الفرع 5' }
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
 
 type WorkerWithAdvances = Worker & { advances: WorkerAdvance[]; paid?: boolean }
