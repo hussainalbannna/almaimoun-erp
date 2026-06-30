@@ -104,7 +104,7 @@ export default function Dashboard() {
         safe(supabase.from('subcontractor_assignments').select('agreed_amount, paid_amount')),
         safe(supabase.from('receipts').select('project_id, amount, receipt_date')),
         safe(supabase.from('workers').select('id, name, visa_expiry, cpr_expiry, passport_expiry').eq('status', 'active')),
-        safe(supabase.from('assets').select('id, name, insurance_expiry, registration_expiry')),
+        safe(supabase.from('assets').select('id, name, insurance_expiry, registration_expiry, payment_method, bank_name, monthly_installment, total_installments, paid_installments, next_installment_date')),
       ])
 
       const projs = projects as { id: string; project_name: string; contract_value: number; status: string }[]
@@ -232,8 +232,10 @@ export default function Dashboard() {
         if (a.payment_method === 'installment' && a.next_installment_date) {
           const paid = Number(a.paid_installments) || 0
           const total = Number(a.total_installments) || 0
-          // فقط لو باقي أقساط لم تُسدّد
-          if (paid < total) {
+          // يظهر التنبيه طالما فيه تاريخ قسط قادم ولم تُسدّد كل الأقساط
+          // (لو total = 0 يعني غير محدد، نعتبره غير مكتمل)
+          const notFullyPaid = total === 0 || paid < total
+          if (notFullyPaid) {
             const d = daysUntil(a.next_installment_date)
             if (d <= 7) {
               const monthly = Number(a.monthly_installment) || 0
@@ -244,7 +246,7 @@ export default function Dashboard() {
                 amount: monthly,
                 due_date: a.next_installment_date,
                 days_left: d,
-                remaining: (total - paid) * monthly,
+                remaining: total > 0 ? (total - paid) * monthly : 0,
               })
             }
           }
