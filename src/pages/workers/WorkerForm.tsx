@@ -14,7 +14,7 @@ import toast from 'react-hot-toast'
 const BRANCH_OPTIONS = [
   { value: '', label: 'اختر الفرع' },
   { value: '2', label: 'الفرع 2' },
-  { value: '3', label: 'الفرع 3' },
+  { value: '4', label: 'الفرع 4' },
   { value: '5', label: 'الفرع 5' },
 ]
 
@@ -168,12 +168,12 @@ export default function WorkerForm() {
           <h2 className="font-semibold text-slate-700 mb-4">البيانات الشخصية</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input label="الاسم بالعربي *" value={form.name ?? ''} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
-            <Input label="الاسم بالإنجليزي" value={form.name_en ?? ''} onChange={e => setForm(p => ({ ...p, name_en: e.target.value }))} />
-            <Input label="رقم السجل المدني (CPR)" value={form.cpr ?? ''} onChange={e => setForm(p => ({ ...p, cpr: e.target.value }))} />
+            <Input label="الاسم بالإنجليزي" value={form.name_en ?? ''} onChange={e => setForm(p => ({ ...p, name_en: e.target.value }))} dir="ltr" />
+            <Input label="رقم السجل المدني (CPR)" value={form.cpr ?? ''} onChange={e => setForm(p => ({ ...p, cpr: e.target.value }))} dir="ltr" />
             <Input label="الجنسية" value={form.nationality ?? ''} onChange={e => setForm(p => ({ ...p, nationality: e.target.value }))} />
             <Input label="المهنة / الوظيفة" value={form.profession ?? ''} onChange={e => setForm(p => ({ ...p, profession: e.target.value }))} />
-            <Input label="رقم الهاتف" value={form.phone ?? ''} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} />
-            <Input label="رقم الجواز" value={form.passport_number ?? ''} onChange={e => setForm(p => ({ ...p, passport_number: e.target.value }))} />
+            <Input label="رقم الهاتف" value={form.phone ?? ''} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} dir="ltr" />
+            <Input label="رقم الجواز" value={form.passport_number ?? ''} onChange={e => setForm(p => ({ ...p, passport_number: e.target.value }))} dir="ltr" />
             <Input label="تاريخ انتهاء الجواز" type="date" value={form.passport_expiry ?? ''} onChange={e => setForm(p => ({ ...p, passport_expiry: e.target.value || null }))} />
             <Input label="تاريخ الانضمام" type="date" value={form.join_date ?? ''} onChange={e => setForm(p => ({ ...p, join_date: e.target.value }))} />
             <Input label="تاريخ انتهاء التأشيرة / الإقامة" type="date" value={form.visa_expiry ?? ''} onChange={e => setForm(p => ({ ...p, visa_expiry: e.target.value || null }))} />
@@ -186,7 +186,7 @@ export default function WorkerForm() {
           <h2 className="font-semibold text-slate-700 mb-4">جهة الاتصال في الطوارئ</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Input label="الاسم" value={form.emergency_name ?? ''} onChange={e => setForm(p => ({ ...p, emergency_name: e.target.value }))} />
-            <Input label="رقم الهاتف" value={form.emergency_phone ?? ''} onChange={e => setForm(p => ({ ...p, emergency_phone: e.target.value }))} />
+            <Input label="رقم الهاتف" value={form.emergency_phone ?? ''} onChange={e => setForm(p => ({ ...p, emergency_phone: e.target.value }))} dir="ltr" />
             <Input label="صلة القرابة" value={form.emergency_relation ?? ''} onChange={e => setForm(p => ({ ...p, emergency_relation: e.target.value }))} placeholder="أخ / زوجة / صديق" />
           </div>
         </div>
@@ -223,7 +223,7 @@ export default function WorkerForm() {
             ) : (
               <Input label="الأجر اليومي (د.ب)" type="number" value={String(form.daily_rate ?? 0)} onChange={e => setForm(p => ({ ...p, daily_rate: parseFloat(e.target.value) || 0 }))} />
             )}
-            <Input label="رقم IBAN" value={form.iban ?? ''} onChange={e => setForm(p => ({ ...p, iban: e.target.value }))} />
+            <Input label="رقم IBAN" value={form.iban ?? ''} onChange={e => setForm(p => ({ ...p, iban: e.target.value }))} dir="ltr" />
           </div>
         </div>
 
