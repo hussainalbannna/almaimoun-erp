@@ -95,6 +95,7 @@ export default function PurchaseInvoiceForm() {
     vendor_invoice_number: '',
     entry_date: todayISO(),
     amount: '',
+    tax_rate: '10',
     payment_method: 'cash' as PurchasePaymentMethod,
     check_due_date: '',
     check_image_data: '',
@@ -122,7 +123,11 @@ export default function PurchaseInvoiceForm() {
       const loadInvoice = async () => {
         const { data } = await supabase.from('purchase_invoices').select('*').eq('id', id).single()
         if (data) {
-          const inv = data as PurchaseInvoice & { entry_date?: string | null; created_at?: string }
+          const inv = data as PurchaseInvoice & { entry_date?: string | null; created_at?: string; tax_rate?: number; subtotal?: number }
+          // amount مخزّن شامل الضريبة. نعرض المبلغ قبل الضريبة في الإدخال
+          const taxRate = inv.tax_rate != null ? Number(inv.tax_rate) : 10
+          const total = Number(inv.amount ?? 0)
+          const sub = inv.subtotal && Number(inv.subtotal) > 0 ? Number(inv.subtotal) : (taxRate > 0 ? total / (1 + taxRate / 100) : total)
           setForm({
             supplier_id: inv.supplier_id ?? '',
             supplier_name: inv.supplier_name ?? '',
@@ -132,7 +137,8 @@ export default function PurchaseInvoiceForm() {
             lpo_number: inv.lpo_number ?? '',
             vendor_invoice_number: inv.vendor_invoice_number ?? '',
             entry_date: (inv.entry_date || inv.created_at || new Date().toISOString()).slice(0, 10),
-            amount: String(inv.amount ?? ''),
+            amount: sub > 0 ? String(Number(sub.toFixed(3))) : '',
+            tax_rate: String(taxRate),
             payment_method: inv.payment_method,
             check_due_date: inv.check_due_date ?? '',
             check_image_data: inv.check_image_data ?? '',
@@ -195,12 +201,17 @@ export default function PurchaseInvoiceForm() {
       const dataUrl = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
       const validDate = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : ''
 
+      // المبلغ المستخرج من الفاتورة شامل الضريبة → نحوّله لقبل الضريبة حسب النسبة الحالية
+      const extractedTotal = parsed.amount ? Number(parsed.amount) : 0
+      const curRate = Number(form.tax_rate) || 0
+      const extractedSubtotal = extractedTotal > 0 && curRate > 0 ? extractedTotal / (1 + curRate / 100) : extractedTotal
+
       setForm(f => ({
         ...f,
         supplier_id: matchedSupplierId || f.supplier_id,
         supplier_name: matchedSupplierName || f.supplier_name,
         vendor_invoice_number: parsed.vendor_invoice_number || f.vendor_invoice_number,
-        amount: parsed.amount ? String(parsed.amount) : f.amount,
+        amount: extractedSubtotal > 0 ? String(Number(extractedSubtotal.toFixed(3))) : f.amount,
         entry_date: validDate || f.entry_date,
         invoice_copy_data: dataUrl,
       }))
@@ -247,6 +258,12 @@ export default function PurchaseInvoiceForm() {
   const addDelivery = () => setDeliveries(prev => [...prev, { delivery_note_number: '', delivery_image_data: '', notes: '' }])
   const removeDelivery = (idx: number) => setDeliveries(prev => prev.filter((_, i) => i !== idx))
 
+  // ── حساب الضريبة الحي (المُدخل = المبلغ قبل الضريبة) ──
+  const subtotalNum = Number(form.amount) || 0
+  const taxRateNum = Number(form.tax_rate) || 0
+  const taxAmount = subtotalNum * (taxRateNum / 100)
+  const totalWithTax = subtotalNum + taxAmount
+
   const handleSave = async () => {
     if (!form.supplier_id) { toast.error('يرجى اختيار المورد'); return }
     if (!form.amount || Number(form.amount) <= 0) { toast.error('يرجى إدخال المبلغ'); return }
@@ -263,7 +280,9 @@ export default function PurchaseInvoiceForm() {
       lpo_number: form.lpo_number,
       vendor_invoice_number: form.vendor_invoice_number,
       entry_date: form.entry_date,
-      amount: Number(form.amount),
+      subtotal: Number(subtotalNum.toFixed(3)),       // المبلغ قبل الضريبة
+      tax_rate: taxRateNum,                            // نسبة الضريبة
+      amount: Number(totalWithTax.toFixed(3)),         // المجموع الشامل (يبقى amount)
       payment_method: form.payment_method,
       check_due_date: form.payment_method === 'deferred_cheque' && form.check_due_date ? form.check_due_date : null,
       check_image_data: form.payment_method === 'deferred_cheque' ? form.check_image_data : '',
@@ -394,14 +413,49 @@ export default function PurchaseInvoiceForm() {
                 placeholder="أدخل رقم فاتورة المورد" />
             </div>
 
-            {/* المبلغ */}
+            {/* المبلغ قبل الضريبة */}
             <div>
-              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Wallet size={14} className="text-slate-400" /> المبلغ (د.ب) *</label>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Wallet size={14} className="text-slate-400" /> المبلغ قبل الضريبة (د.ب) *</label>
               <input type="number" step="0.001" min="0" value={form.amount}
                 onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className={inputCls} dir="ltr"
                 placeholder="0.000" />
             </div>
+
+            {/* نسبة الضريبة */}
+            <div>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Receipt size={14} className="text-slate-400" /> ضريبة القيمة المضافة</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setForm(f => ({ ...f, tax_rate: '10' }))}
+                  className={`py-2.5 rounded-lg border-2 text-sm font-medium transition-colors ${form.tax_rate === '10' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'}`}>
+                  10% (قياسي)
+                </button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, tax_rate: '0' }))}
+                  className={`py-2.5 rounded-lg border-2 text-sm font-medium transition-colors ${form.tax_rate === '0' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'}`}>
+                  معفى (0%)
+                </button>
+              </div>
+            </div>
           </div>
+
+          {/* بطاقة تفصيل الضريبة الحي */}
+          {subtotalNum > 0 && (
+            <div className="mt-4 rounded-xl border border-amber-200 overflow-hidden">
+              <div className="grid grid-cols-3 divide-x divide-x-reverse divide-amber-100">
+                <div className="p-3 text-center bg-slate-50">
+                  <div className="text-[11px] text-slate-400 mb-0.5">المبلغ قبل الضريبة</div>
+                  <div className="text-sm font-bold text-slate-700" dir="ltr">{subtotalNum.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</div>
+                </div>
+                <div className="p-3 text-center bg-amber-50/50">
+                  <div className="text-[11px] text-amber-600 mb-0.5">الضريبة ({taxRateNum}%)</div>
+                  <div className="text-sm font-bold text-amber-700" dir="ltr">{taxAmount.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</div>
+                </div>
+                <div className="p-3 text-center text-white" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
+                  <div className="text-[11px] text-white/80 mb-0.5">المجموع الشامل</div>
+                  <div className="text-sm font-black" dir="ltr">{totalWithTax.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ═══ طريقة الدفع ═══ */}
