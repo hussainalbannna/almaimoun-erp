@@ -275,7 +275,7 @@ export default function DailyLogList() {
     setLoading(true)
     const [pRes, wRes, lRes] = await Promise.all([
       supabase.from('projects').select('id, project_name').order('project_name'),
-      supabase.from('workers').select('id, name, branch').eq('status', 'active').order('name'),
+      supabase.from('workers').select('id, name, name_en, branch').eq('status', 'active').order('name'),
       supabase.from('daily_logs').select('*').order('log_date', { ascending: false }).limit(200),
     ])
     const ps = (pRes.data ?? []) as Project[]
@@ -451,7 +451,7 @@ export default function DailyLogList() {
       .eq('log_id', logId)
     if (!data?.length) return []
     const ids = data.map((r: { worker_id: string }) => r.worker_id)
-    return workers.filter(w => ids.includes(w.id)).map(w => w.name)
+    return workers.filter(w => ids.includes(w.id)).map(w => (w as Worker & { name_en?: string }).name_en || w.name)
   }
 
   // معاينة: تفتح التقرير في تبويب جديد للاستعراض (مع زر طباعة عائم)
@@ -628,7 +628,7 @@ export default function DailyLogList() {
                       <input type="checkbox" checked={selectedWorkers.includes(w.id)}
                         onChange={e => setSelectedWorkers(prev => e.target.checked ? [...prev, w.id] : prev.filter(x => x !== w.id))}
                         className="rounded" style={{ accentColor: '#7b4a2d' }} />
-                      <span className="text-slate-700 truncate">{w.name}</span>
+                      <span className="text-slate-700 truncate">{(w as Worker & { name_en?: string }).name_en || w.name}</span>
                     </label>
                   ))}
                 </div>
