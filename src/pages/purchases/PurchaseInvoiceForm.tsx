@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowRight, Plus, Trash2, X, Sparkles, Loader2 } from 'lucide-react'
+import {
+  ArrowRight, Plus, Trash2, X, Sparkles, Loader2, Upload, FileText,
+  Building2, User, Calendar, Hash, Wallet, CreditCard, Paperclip, Truck, Receipt
+} from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery, PurchasePaymentMethod } from '../../types'
 import { readDocumentText, extractJSON, compressImage, fileToDataUrl, hasApiKey, openStoredFile } from '../../lib/ai'
@@ -11,17 +14,17 @@ interface SupplierOption { id: string; name: string }
 interface ProjectOption { id: string; project_name: string }
 interface LPOOption { id: string; lpo_number: string }
 
-const PAYMENT_METHODS: { value: PurchasePaymentMethod; label: string }[] = [
-  { value: 'cash', label: 'نقداً' },
-  { value: 'bank_transfer', label: 'تحويل بنكي' },
-  { value: 'deferred_cheque', label: 'شيك آجل' },
+const PAYMENT_METHODS: { value: PurchasePaymentMethod; label: string; icon: React.ReactNode }[] = [
+  { value: 'cash', label: 'نقداً', icon: <Wallet size={16} /> },
+  { value: 'bank_transfer', label: 'تحويل بنكي', icon: <Building2 size={16} /> },
+  { value: 'deferred_cheque', label: 'شيك آجل', icon: <CreditCard size={16} /> },
 ]
 
-// كشف نوع المرفق من الـ dataURL (صورة أو PDF أو غيره)
+const todayISO = () => new Date().toISOString().slice(0, 10)
 const isImageData = (data: string) => !!data && data.startsWith('data:image')
 const isPdfData = (data: string) => !!data && data.startsWith('data:application/pdf')
 
-// معاينة مرفق واحد: صورة تتكبّر، PDF يفتح، مع زر حذف
+// ── معاينة مرفق: صورة تتكبّر، PDF يفتح، مع زر حذف ──
 function AttachmentPreview({ data, label, onRemove, onPreviewImage }: {
   data: string; label: string; onRemove: () => void; onPreviewImage: (d: string) => void
 }) {
@@ -32,22 +35,40 @@ function AttachmentPreview({ data, label, onRemove, onPreviewImage }: {
     <div className="mt-2 relative inline-block">
       {img ? (
         <button type="button" onClick={() => onPreviewImage(data)}
-          className="block w-24 h-24 rounded-lg border border-slate-200 overflow-hidden group relative">
+          className="block w-28 h-28 rounded-xl border border-slate-200 overflow-hidden group relative">
           <img src={data} alt={label} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors">
-            <span className="text-white text-xs opacity-0 group-hover:opacity-100">عرض</span>
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 flex items-center justify-center transition-colors">
+            <span className="text-white text-xs font-medium opacity-0 group-hover:opacity-100">عرض بالحجم الكامل</span>
           </div>
         </button>
       ) : (
         <button type="button" onClick={() => openStoredFile(data, pdf ? 'application/pdf' : '')}
-          className="w-24 h-24 rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1 hover:bg-slate-100 transition-colors">
-          <span className="text-2xl">📄</span>
-          <span className="text-[10px] text-slate-600">عرض الملف</span>
+          className="w-28 h-28 rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1.5 hover:bg-slate-100 transition-colors">
+          <FileText size={30} className="text-red-500" />
+          <span className="text-[11px] text-slate-600 font-medium">عرض الملف</span>
         </button>
       )}
-      <button type="button" onClick={onRemove} className="absolute -top-1 -left-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-        <X size={12} />
+      <button type="button" onClick={onRemove} className="absolute -top-2 -left-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center shadow-md transition-colors">
+        <X size={13} />
       </button>
+    </div>
+  )
+}
+
+// ── حقل رفع موحّد ──
+function UploadField({ label, accept, onFile, children }: {
+  label: string; accept: string; onFile: (f: File) => void; children?: React.ReactNode
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-slate-600 mb-1.5">{label}</label>
+      <label className="flex items-center gap-2 px-3 py-2.5 border border-dashed border-slate-300 rounded-lg text-sm text-slate-500 cursor-pointer hover:border-amber-400 hover:bg-amber-50/40 transition-colors">
+        <Upload size={15} className="text-slate-400" />
+        <span>اختر ملفاً (صورة أو PDF)</span>
+        <input type="file" accept={accept} className="hidden"
+          onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = '' }} />
+      </label>
+      {children}
     </div>
   )
 }
@@ -72,7 +93,7 @@ export default function PurchaseInvoiceForm() {
     lpo_id: '',
     lpo_number: '',
     vendor_invoice_number: '',
-    entry_date: new Date().toISOString().slice(0, 10),
+    entry_date: todayISO(),
     amount: '',
     payment_method: 'cash' as PurchasePaymentMethod,
     check_due_date: '',
@@ -104,20 +125,20 @@ export default function PurchaseInvoiceForm() {
           const inv = data as PurchaseInvoice & { entry_date?: string | null; created_at?: string }
           setForm({
             supplier_id: inv.supplier_id ?? '',
-            supplier_name: inv.supplier_name,
+            supplier_name: inv.supplier_name ?? '',
             project_id: inv.project_id ?? '',
-            project_name: inv.project_name,
+            project_name: inv.project_name ?? '',
             lpo_id: inv.lpo_id ?? '',
-            lpo_number: inv.lpo_number,
-            vendor_invoice_number: inv.vendor_invoice_number,
+            lpo_number: inv.lpo_number ?? '',
+            vendor_invoice_number: inv.vendor_invoice_number ?? '',
             entry_date: (inv.entry_date || inv.created_at || new Date().toISOString()).slice(0, 10),
-            amount: String(inv.amount),
+            amount: String(inv.amount ?? ''),
             payment_method: inv.payment_method,
             check_due_date: inv.check_due_date ?? '',
-            check_image_data: inv.check_image_data,
-            invoice_copy_data: inv.invoice_copy_data,
-            payment_proof_data: inv.payment_proof_data,
-            notes: inv.notes,
+            check_image_data: inv.check_image_data ?? '',
+            invoice_copy_data: inv.invoice_copy_data ?? '',
+            payment_proof_data: inv.payment_proof_data ?? '',
+            notes: inv.notes ?? '',
           })
         }
         const { data: delData } = await supabase.from('purchase_invoice_deliveries').select('*').eq('purchase_invoice_id', id).order('created_at')
@@ -142,7 +163,7 @@ export default function PurchaseInvoiceForm() {
     setForm(f => ({ ...f, lpo_id: lpoId, lpo_number: l?.lpo_number ?? '' }))
   }
 
-  // ── قراءة الفاتورة بالذكاء الاصطناعي ──────────────────────────────────
+  // ── قراءة الفاتورة بالذكاء الاصطناعي ──
   const handleScanInvoice = async (file: File) => {
     if (!hasApiKey()) {
       toast.error('فعّل مفتاح الذكاء الاصطناعي من الإعدادات أولاً')
@@ -162,7 +183,6 @@ export default function PurchaseInvoiceForm() {
       const parsed = extractJSON<{ supplier_name?: string; vendor_invoice_number?: string; amount?: number; date?: string }>(text)
       if (!parsed) { toast.error('تعذّر فهم الفاتورة', { id: 'inv-scan' }); return }
 
-      // محاولة مطابقة المورد بالاسم
       let matchedSupplierId = ''
       let matchedSupplierName = ''
       if (parsed.supplier_name) {
@@ -172,10 +192,7 @@ export default function PurchaseInvoiceForm() {
         if (match) { matchedSupplierId = match.id; matchedSupplierName = match.name }
       }
 
-      // تخزين نسخة الفاتورة (مضغوطة إن كانت صورة)
       const dataUrl = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
-
-      // التحقق من صحة التاريخ المستخرج قبل استخدامه
       const validDate = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : ''
 
       setForm(f => ({
@@ -200,22 +217,13 @@ export default function PurchaseInvoiceForm() {
     }
   }
 
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
-  }
-
+  // رفع مرفق رئيسي (يضغط الصور، يحفظ PDF كما هو)
   const handleFileUpload = async (field: 'invoice_copy_data' | 'payment_proof_data' | 'check_image_data', file: File) => {
     if (file.size > 10 * 1024 * 1024) {
       toast.error('حجم الملف يجب أن يكون أقل من 10 ميجابايت')
       return
     }
     try {
-      // الصور تُضغط لتصغير الحجم، الـ PDF وغيره يُحفظ كما هو
       const data = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
       setForm(f => ({ ...f, [field]: data }))
     } catch (e) {
@@ -224,26 +232,26 @@ export default function PurchaseInvoiceForm() {
   }
 
   const handleDeliveryImageUpload = async (idx: number, file: File) => {
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('حجم الملف يجب أن يكون أقل من 5 ميجابايت')
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('حجم الملف يجب أن يكون أقل من 10 ميجابايت')
       return
     }
-    const base64 = await fileToBase64(file)
-    setDeliveries(prev => prev.map((d, i) => i === idx ? { ...d, delivery_image_data: base64 } : d))
+    try {
+      const data = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+      setDeliveries(prev => prev.map((d, i) => i === idx ? { ...d, delivery_image_data: data } : d))
+    } catch (e) {
+      toast.error('تعذّر رفع الملف: ' + ((e as Error)?.message ?? ''))
+    }
   }
 
-  const addDelivery = () => {
-    setDeliveries(prev => [...prev, { delivery_note_number: '', delivery_image_data: '', notes: '' }])
-  }
-
-  const removeDelivery = (idx: number) => {
-    setDeliveries(prev => prev.filter((_, i) => i !== idx))
-  }
+  const addDelivery = () => setDeliveries(prev => [...prev, { delivery_note_number: '', delivery_image_data: '', notes: '' }])
+  const removeDelivery = (idx: number) => setDeliveries(prev => prev.filter((_, i) => i !== idx))
 
   const handleSave = async () => {
     if (!form.supplier_id) { toast.error('يرجى اختيار المورد'); return }
     if (!form.amount || Number(form.amount) <= 0) { toast.error('يرجى إدخال المبلغ'); return }
     if (!form.entry_date) { toast.error('يرجى إدخال تاريخ الفاتورة'); return }
+    if (form.payment_method === 'deferred_cheque' && !form.check_due_date) { toast.error('يرجى إدخال تاريخ استحقاق الشيك'); return }
 
     setSaving(true)
     const payload = {
@@ -275,12 +283,12 @@ export default function PurchaseInvoiceForm() {
       invoiceId = data.id
     }
 
-    // Save deliveries
     if (isEdit) {
       await supabase.from('purchase_invoice_deliveries').delete().eq('purchase_invoice_id', id)
     }
-    if (deliveries.length > 0) {
-      const deliveryPayload = deliveries.map(d => ({
+    const validDeliveries = deliveries.filter(d => d.delivery_note_number?.trim() || d.delivery_image_data || d.notes?.trim())
+    if (validDeliveries.length > 0) {
+      const deliveryPayload = validDeliveries.map(d => ({
         purchase_invoice_id: invoiceId,
         delivery_note_number: d.delivery_note_number,
         delivery_image_data: d.delivery_image_data,
@@ -294,21 +302,27 @@ export default function PurchaseInvoiceForm() {
     navigate('/purchases')
   }
 
+  const inputCls = "w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-300"
+
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6 max-w-4xl mx-auto" dir="rtl">
+      {/* الترويسة */}
       <div className="flex items-center gap-3 mb-6">
         <button onClick={() => navigate('/purchases')} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-600">
           <ArrowRight size={20} />
         </button>
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">
-            {isEdit ? 'تعديل فاتورة شراء' : 'تسجيل فاتورة شراء جديدة'}
-          </h1>
-          <p className="text-slate-500 text-sm mt-0.5">إدخال بيانات المشتريات والمدفوعات</p>
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
+            <Receipt size={22} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">{isEdit ? 'تعديل فاتورة شراء' : 'تسجيل فاتورة شراء جديدة'}</h1>
+            <p className="text-slate-500 text-sm mt-0.5">إدخال بيانات المشتريات والمدفوعات والمرفقات</p>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-6">
+      <div className="space-y-5">
         {/* ═══ قراءة الفاتورة بالذكاء الاصطناعي ═══ */}
         <div className="rounded-xl border-2 border-dashed p-4" style={{ borderColor: '#c4925a55', background: '#fdf9f4' }}>
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -317,8 +331,8 @@ export default function PurchaseInvoiceForm() {
                 <Sparkles size={18} className="text-white" />
               </div>
               <div>
-                <div className="font-semibold text-slate-800 text-sm">قراءة الفاتورة تلقائياً</div>
-                <div className="text-xs text-slate-500">ارفع صورة أو PDF لفاتورة المورد (حتى الممسوحة) ويملأ المبلغ ورقم الفاتورة والمورد والتاريخ</div>
+                <div className="font-semibold text-slate-800 text-sm">قراءة الفاتورة تلقائياً بالذكاء الاصطناعي</div>
+                <div className="text-xs text-slate-500">ارفع صورة أو PDF لفاتورة المورد (حتى الممسوحة) ليملأ المبلغ ورقم الفاتورة والمورد والتاريخ</div>
               </div>
             </div>
             <label className="cursor-pointer">
@@ -333,257 +347,189 @@ export default function PurchaseInvoiceForm() {
           </div>
         </div>
 
-        {/* Main Fields */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {/* Supplier */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">اختر المورد *</label>
-            <select
-              value={form.supplier_id}
-              onChange={e => handleSupplierChange(e.target.value)}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-            >
-              <option value="">— اختر المورد —</option>
-              {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </div>
+        {/* ═══ البيانات الأساسية ═══ */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h2 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><FileText size={17} className="text-amber-600" /> بيانات الفاتورة</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* المورد */}
+            <div>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><User size={14} className="text-slate-400" /> المورد *</label>
+              <select value={form.supplier_id} onChange={e => handleSupplierChange(e.target.value)} className={inputCls}>
+                <option value="">— اختر المورد —</option>
+                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
 
-          {/* Project */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">اختر المشروع</label>
-            <select
-              value={form.project_id}
-              onChange={e => handleProjectChange(e.target.value)}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-            >
-              <option value="">— اختر المشروع —</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.project_name}</option>)}
-            </select>
-          </div>
+            {/* المشروع */}
+            <div>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Building2 size={14} className="text-slate-400" /> المشروع</label>
+              <select value={form.project_id} onChange={e => handleProjectChange(e.target.value)} className={inputCls}>
+                <option value="">— اختر المشروع —</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.project_name}</option>)}
+              </select>
+            </div>
 
-          {/* تاريخ الفاتورة — قابل للتغيير حتى للفواتير القديمة */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">تاريخ الفاتورة *</label>
-            <input
-              type="date"
-              value={form.entry_date}
-              max={new Date().toISOString().slice(0, 10)}
-              onChange={e => setForm(f => ({ ...f, entry_date: e.target.value }))}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-            />
-            <p className="text-xs text-slate-400 mt-1">يمكنك اختيار تاريخ سابق لإدخال فواتير المشاريع القديمة</p>
-          </div>
+            {/* تاريخ الفاتورة */}
+            <div>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Calendar size={14} className="text-slate-400" /> تاريخ الفاتورة *</label>
+              <input type="date" value={form.entry_date} max={todayISO()}
+                onChange={e => setForm(f => ({ ...f, entry_date: e.target.value }))} className={inputCls} />
+              <p className="text-xs text-slate-400 mt-1">تاريخ الفاتورة الفعلي — يمكن اختيار تاريخ سابق للفواتير القديمة</p>
+            </div>
 
-          {/* Linked LPO */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">LPO المرتبط</label>
-            <select
-              value={form.lpo_id}
-              onChange={e => handleLpoChange(e.target.value)}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-            >
-              <option value="">— اختياري —</option>
-              {lpos.map(l => <option key={l.id} value={l.id}>{l.lpo_number}</option>)}
-            </select>
-          </div>
+            {/* LPO */}
+            <div>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Hash size={14} className="text-slate-400" /> LPO المرتبط</label>
+              <select value={form.lpo_id} onChange={e => handleLpoChange(e.target.value)} className={inputCls}>
+                <option value="">— اختياري —</option>
+                {lpos.map(l => <option key={l.id} value={l.id}>{l.lpo_number}</option>)}
+              </select>
+            </div>
 
-          {/* Vendor Invoice Number */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">رقم فاتورة البائع</label>
-            <input
-              type="text"
-              value={form.vendor_invoice_number}
-              onChange={e => setForm(f => ({ ...f, vendor_invoice_number: e.target.value }))}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-              placeholder="أدخل رقم فاتورة المورد"
-            />
-          </div>
+            {/* رقم فاتورة البائع */}
+            <div>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Hash size={14} className="text-slate-400" /> رقم فاتورة البائع</label>
+              <input type="text" value={form.vendor_invoice_number}
+                onChange={e => setForm(f => ({ ...f, vendor_invoice_number: e.target.value }))} className={inputCls}
+                placeholder="أدخل رقم فاتورة المورد" />
+            </div>
 
-          {/* Amount */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">المبلغ (د.ب) *</label>
-            <input
-              type="number"
-              step="0.001"
-              min="0"
-              value={form.amount}
-              onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-              placeholder="0.000"
-            />
-          </div>
-
-          {/* Payment Method */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">طريقة الدفع *</label>
-            <select
-              value={form.payment_method}
-              onChange={e => setForm(f => ({ ...f, payment_method: e.target.value as PurchasePaymentMethod }))}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-            >
-              {PAYMENT_METHODS.map(pm => <option key={pm.value} value={pm.value}>{pm.label}</option>)}
-            </select>
+            {/* المبلغ */}
+            <div>
+              <label className="text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5"><Wallet size={14} className="text-slate-400" /> المبلغ (د.ب) *</label>
+              <input type="number" step="0.001" min="0" value={form.amount}
+                onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className={inputCls} dir="ltr"
+                placeholder="0.000" />
+            </div>
           </div>
         </div>
 
-        {/* Conditional: Post-Dated Check Fields */}
-        {form.payment_method === 'deferred_cheque' && (
-          <div className="border border-orange-200 bg-orange-50/50 rounded-xl p-5 space-y-4">
-            <h3 className="text-sm font-bold text-orange-800">بيانات الشيك الآجل</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">تاريخ استحقاق الشيك *</label>
-                <input
-                  type="date"
-                  value={form.check_due_date}
-                  onChange={e => setForm(f => ({ ...f, check_due_date: e.target.value }))}
-                  className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">صورة الشيك</label>
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  onChange={e => e.target.files?.[0] && handleFileUpload('check_image_data', e.target.files[0])}
-                  className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200"
-                />
-                {form.check_image_data && (
-                  <AttachmentPreview data={form.check_image_data} label="Check"
-                    onRemove={() => setForm(f => ({ ...f, check_image_data: '' }))}
-                    onPreviewImage={setPreviewImage} />
-                )}
+        {/* ═══ طريقة الدفع ═══ */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h2 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Wallet size={17} className="text-amber-600" /> طريقة الدفع</h2>
+          <div className="grid grid-cols-3 gap-3">
+            {PAYMENT_METHODS.map(pm => (
+              <button key={pm.value} type="button" onClick={() => setForm(f => ({ ...f, payment_method: pm.value }))}
+                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-colors ${form.payment_method === pm.value ? 'border-amber-500 bg-amber-50' : 'border-slate-200 bg-slate-50 hover:border-slate-300'}`}>
+                <div className={form.payment_method === pm.value ? 'text-amber-600' : 'text-slate-400'}>{pm.icon}</div>
+                <span className={`text-sm font-medium ${form.payment_method === pm.value ? 'text-amber-700' : 'text-slate-600'}`}>{pm.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* الشيك الآجل */}
+          {form.payment_method === 'deferred_cheque' && (
+            <div className="mt-4 border border-orange-200 bg-orange-50/50 rounded-xl p-5 space-y-4">
+              <h3 className="text-sm font-bold text-orange-800 flex items-center gap-1.5"><CreditCard size={15} /> بيانات الشيك الآجل</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">تاريخ استحقاق الشيك *</label>
+                  <input type="date" value={form.check_due_date}
+                    onChange={e => setForm(f => ({ ...f, check_due_date: e.target.value }))}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30" />
+                  <p className="text-xs text-orange-600/70 mt-1">لا يُحتسب مصروفاً فعلياً حتى يحين تاريخ الاستحقاق</p>
+                </div>
+                <UploadField label="صورة الشيك" accept="image/*,.pdf" onFile={f => handleFileUpload('check_image_data', f)}>
+                  {form.check_image_data && (
+                    <AttachmentPreview data={form.check_image_data} label="Check"
+                      onRemove={() => setForm(f => ({ ...f, check_image_data: '' }))} onPreviewImage={setPreviewImage} />
+                  )}
+                </UploadField>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        {/* File Attachments */}
-        <div className="border border-slate-200 rounded-xl p-5 space-y-4">
-          <h3 className="text-sm font-bold text-slate-700">المرفقات</h3>
+        {/* ═══ المرفقات ═══ */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h2 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Paperclip size={17} className="text-amber-600" /> المرفقات</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Invoice Copy */}
-            <div>
-              <label className="block text-sm font-medium text-slate-600 mb-1.5">نسخة الفاتورة</label>
-              <input
-                type="file"
-                accept="image/*,.pdf"
-                onChange={e => e.target.files?.[0] && handleFileUpload('invoice_copy_data', e.target.files[0])}
-                className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
-              />
+            <UploadField label="نسخة الفاتورة" accept="image/*,.pdf" onFile={f => handleFileUpload('invoice_copy_data', f)}>
               {form.invoice_copy_data && (
                 <AttachmentPreview data={form.invoice_copy_data} label="Invoice"
-                  onRemove={() => setForm(f => ({ ...f, invoice_copy_data: '' }))}
-                  onPreviewImage={setPreviewImage} />
+                  onRemove={() => setForm(f => ({ ...f, invoice_copy_data: '' }))} onPreviewImage={setPreviewImage} />
               )}
-            </div>
-
-            {/* Payment Proof */}
-            <div>
-              <label className="block text-sm font-medium text-slate-600 mb-1.5">إثبات الدفع</label>
-              <input
-                type="file"
-                accept="image/*,.pdf"
-                onChange={e => e.target.files?.[0] && handleFileUpload('payment_proof_data', e.target.files[0])}
-                className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
-              />
+            </UploadField>
+            <UploadField label="إثبات الدفع" accept="image/*,.pdf" onFile={f => handleFileUpload('payment_proof_data', f)}>
               {form.payment_proof_data && (
                 <AttachmentPreview data={form.payment_proof_data} label="Proof"
-                  onRemove={() => setForm(f => ({ ...f, payment_proof_data: '' }))}
-                  onPreviewImage={setPreviewImage} />
+                  onRemove={() => setForm(f => ({ ...f, payment_proof_data: '' }))} onPreviewImage={setPreviewImage} />
               )}
-            </div>
+            </UploadField>
           </div>
         </div>
 
-        {/* Delivery Notes */}
-        <div className="border border-slate-200 rounded-xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-700">بيانات التوصيل (Delivery Notes)</h3>
-            <button
-              onClick={addDelivery}
-              className="flex items-center gap-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <Plus size={14} /> إضافة ديلفري نوت
+        {/* ═══ بيانات التوصيل ═══ */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-bold text-slate-700 flex items-center gap-2"><Truck size={17} className="text-amber-600" /> بيانات التوصيل (Delivery Notes)</h2>
+            <button onClick={addDelivery}
+              className="flex items-center gap-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-3 py-1.5 rounded-lg transition-colors">
+              <Plus size={14} /> إضافة
             </button>
           </div>
 
-          {deliveries.length === 0 && (
-            <p className="text-sm text-slate-400 text-center py-4">لا يوجد بيانات توصيل — اضغط "إضافة" لتسجيل دفعة توصيل</p>
-          )}
-
-          <div className="space-y-3">
-            {deliveries.map((d, idx) => (
-              <div key={idx} className="flex items-start gap-3 bg-slate-50 rounded-lg p-4 border border-slate-100">
-                <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">رقم الديلفري نوت</label>
-                    <input
-                      type="text"
-                      value={d.delivery_note_number}
-                      onChange={e => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, delivery_note_number: e.target.value } : x))}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-                      placeholder="DN-001"
-                    />
+          {deliveries.length === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-6 bg-slate-50 rounded-lg">لا يوجد بيانات توصيل — اضغط "إضافة" لتسجيل دفعة توصيل</p>
+          ) : (
+            <div className="space-y-3">
+              {deliveries.map((d, idx) => (
+                <div key={idx} className="flex items-start gap-3 bg-slate-50 rounded-lg p-4 border border-slate-100">
+                  <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">رقم الديلفري نوت</label>
+                      <input type="text" value={d.delivery_note_number}
+                        onChange={e => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, delivery_note_number: e.target.value } : x))}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="DN-001" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">ملاحظات</label>
+                      <input type="text" value={d.notes}
+                        onChange={e => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, notes: e.target.value } : x))}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="تفاصيل الدفعة" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">صورة / PDF الديلفري</label>
+                      <label className="flex items-center gap-1.5 px-2 py-2 border border-dashed border-slate-300 rounded-lg text-xs text-slate-500 cursor-pointer hover:border-amber-400 transition-colors">
+                        <Upload size={13} /> اختر ملفاً
+                        <input type="file" accept="image/*,.pdf" className="hidden"
+                          onChange={e => { const f = e.target.files?.[0]; if (f) handleDeliveryImageUpload(idx, f); e.target.value = '' }} />
+                      </label>
+                      {d.delivery_image_data && (
+                        <AttachmentPreview data={d.delivery_image_data} label="DN"
+                          onRemove={() => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, delivery_image_data: '' } : x))}
+                          onPreviewImage={setPreviewImage} />
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">ملاحظات</label>
-                    <input
-                      type="text"
-                      value={d.notes}
-                      onChange={e => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, notes: e.target.value } : x))}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-                      placeholder="تفاصيل الدفعة"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">صورة الديلفري نوت</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={e => e.target.files?.[0] && handleDeliveryImageUpload(idx, e.target.files[0])}
-                      className="w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:bg-slate-200 file:text-slate-700"
-                    />
-                    {d.delivery_image_data && (
-                      <div className="mt-2 relative inline-block">
-                        <img src={d.delivery_image_data} alt="DN" className="w-16 h-16 object-cover rounded border border-slate-200 cursor-pointer" onClick={() => setPreviewImage(d.delivery_image_data)} />
-                      </div>
-                    )}
-                  </div>
+                  <button onClick={() => removeDelivery(idx)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg mt-5">
+                    <Trash2 size={16} />
+                  </button>
                 </div>
-                <button onClick={() => removeDelivery(idx)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg mt-5">
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Notes */}
-        <div>
-          <label className="block text-sm font-semibold text-slate-700 mb-1.5">ملاحظات</label>
-          <textarea
-            value={form.notes}
-            onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-            rows={3}
+        {/* ═══ ملاحظات ═══ */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <label className="font-bold text-slate-700 mb-3 flex items-center gap-2"><FileText size={17} className="text-amber-600" /> ملاحظات</label>
+          <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={3}
             className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 resize-none"
-            placeholder="ملاحظات إضافية..."
-          />
+            placeholder="ملاحظات إضافية..." />
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-3 pt-2">
-          <Button onClick={handleSave} loading={saving}>
-            {isEdit ? 'تحديث الفاتورة' : 'حفظ فاتورة الشراء'}
-          </Button>
+        {/* ═══ الأزرار ═══ */}
+        <div className="flex gap-3 pt-1">
+          <Button onClick={handleSave} loading={saving}>{isEdit ? 'تحديث الفاتورة' : 'حفظ فاتورة الشراء'}</Button>
           <Button variant="secondary" onClick={() => navigate('/purchases')}>إلغاء</Button>
         </div>
       </div>
 
-      {/* Fullscreen Image Preview */}
+      {/* معاينة الصورة بملء الشاشة */}
       {previewImage && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setPreviewImage(null)}>
-          <div className="relative max-w-4xl max-h-[90vh]">
+          <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
             <button onClick={() => setPreviewImage(null)} className="absolute -top-3 -right-3 bg-white text-slate-700 rounded-full w-8 h-8 flex items-center justify-center shadow-lg hover:bg-slate-100">
               <X size={18} />
             </button>
