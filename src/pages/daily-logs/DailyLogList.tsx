@@ -20,6 +20,8 @@ const EMPTY_FORM = (projectId = '') => ({
   inspector_meeting: false,
   additional_notes: '',
   weather: '',
+  overtime_amount: '',
+  overtime_notes: '',
   photos: [] as string[],
 })
 
@@ -304,6 +306,8 @@ export default function DailyLogList() {
       inspector_meeting: log.inspector_meeting ?? false,
       additional_notes: log.additional_notes ?? '',
       weather: (log as DailyLog & { weather?: string }).weather ?? '',
+      overtime_amount: (log as DailyLog & { overtime_amount?: number }).overtime_amount ? String((log as DailyLog & { overtime_amount?: number }).overtime_amount) : '',
+      overtime_notes: (log as DailyLog & { overtime_notes?: string }).overtime_notes ?? '',
       photos: log.photos ?? [],
     })
     const { data } = await supabase.from('daily_log_workers').select('worker_id').eq('log_id', log.id)
@@ -402,6 +406,8 @@ export default function DailyLogList() {
         inspector_meeting: form.inspector_meeting,
         additional_notes: form.additional_notes,
         weather: form.weather,
+        overtime_amount: Number(form.overtime_amount) || 0,
+        overtime_notes: form.overtime_notes,
         workers_count: selectedWorkers.length,
         photos: form.photos,
       }
@@ -619,6 +625,28 @@ export default function DailyLogList() {
                   className="w-4 h-4 rounded border-slate-300" style={{ accentColor: '#7b4a2d' }} />
                 التنسيق مع الاستشاري لموعد الفحص
               </label>
+
+              {/* الأوفر تايم */}
+              <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-4">
+                <label className="block text-sm font-semibold text-amber-800 mb-2">أوفر تايم (اختياري)</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">المبلغ الإجمالي (د.ب)</label>
+                    <input type="number" step="0.001" min="0" value={form.overtime_amount} dir="ltr"
+                      onChange={e => setForm(p => ({ ...p, overtime_amount: e.target.value }))}
+                      placeholder="0.000"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-medium text-slate-500 mb-1">السبب / التفاصيل</label>
+                    <input type="text" value={form.overtime_notes}
+                      onChange={e => setForm(p => ({ ...p, overtime_notes: e.target.value }))}
+                      placeholder="مثال: عمل يوم الجمعة، ساعات إضافية..."
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
+                  </div>
+                </div>
+                <p className="text-xs text-amber-600/70 mt-1.5">يُضاف لتكلفة العمالة في حساب ربح المشروع المرتبط</p>
+              </div>
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">العمال المتواجدون في الموقع</label>
