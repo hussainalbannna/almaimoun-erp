@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Building2, FileText, Users, BookOpen,
   ClipboardList, GitMerge, Layers, CalendarDays,
-  ChevronLeft, TrendingUp, TrendingDown, BellRing, ChevronRight
+  ChevronLeft, TrendingUp, TrendingDown, ChevronRight
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { formatCurrency, formatDate } from '../lib/utils'
@@ -30,12 +30,12 @@ interface Stats {
   recentLogs: { id: string; log_date: string; description: string; project_name?: string }[]
 }
 
-// ألوان المستويات — موحّدة مع مركز الإشعارات
+// ألوان المستويات — موحّدة مع مركز الإشعارات (خلفيات أوضح للفت الانتباه)
 const LEVEL_STYLE: Record<AlertLevel, { dot: string; border: string; bg: string; text: string; btn: string }> = {
-  overdue: { dot: '#475569', border: '#cbd5e1', bg: '#f1f5f9', text: '#475569', btn: '#475569' },
-  danger: { dot: '#dc2626', border: '#fecaca', bg: '#fef2f2', text: '#b91c1c', btn: '#dc2626' },
-  warning: { dot: '#d97706', border: '#fde68a', bg: '#fffbeb', text: '#b45309', btn: '#d97706' },
-  info: { dot: '#ca8a04', border: '#fde68a', bg: '#fefce8', text: '#a16207', btn: '#ca8a04' },
+  overdue: { dot: '#475569', border: '#94a3b8', bg: '#e2e8f0', text: '#334155', btn: '#475569' },   // رمادي حزين
+  danger: { dot: '#dc2626', border: '#f87171', bg: '#fee2e2', text: '#991b1b', btn: '#dc2626' },      // أحمر
+  warning: { dot: '#ea580c', border: '#fb923c', bg: '#ffedd5', text: '#9a3412', btn: '#ea580c' },     // برتقالي
+  info: { dot: '#ca8a04', border: '#facc15', bg: '#fef9c3', text: '#854d0e', btn: '#ca8a04' },        // أصفر
 }
 const LEVEL_LABEL: Record<AlertLevel, string> = { overdue: 'متأخر', danger: 'عاجل', warning: 'تحذير', info: 'تنبيه' }
 
@@ -146,47 +146,35 @@ export default function Dashboard() {
         <p className="text-slate-500 text-sm mt-0.5">مؤسسة الميمون للمقاولات — مملكة البحرين</p>
       </div>
 
-      {/* ═══ التنبيهات العاجلة (من مركز الإشعارات) ═══ */}
+      {/* ═══ التنبيهات العاجلة (من مركز الإشعارات) — كل بطاقة بلونها ═══ */}
       {urgentAlerts.length > 0 && (
-        <div className="mb-6 rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-          <div className="flex items-center justify-between px-5 py-3" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #c4925a 100%)' }}>
-            <div className="flex items-center gap-2.5">
-              <BellRing size={19} className="text-white" />
-              <h2 className="text-white font-bold text-sm">تنبيهات عاجلة تحتاج إجراءً</h2>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {counts.overdue > 0 && <span className="bg-white/25 text-white text-xs px-2 py-0.5 rounded-full font-bold">{counts.overdue} متأخر</span>}
-              {counts.danger > 0 && <span className="bg-white/25 text-white text-xs px-2 py-0.5 rounded-full font-bold">{counts.danger} عاجل</span>}
-              {counts.warning > 0 && <span className="bg-white/25 text-white text-xs px-2 py-0.5 rounded-full font-bold">{counts.warning} تحذير</span>}
-            </div>
-          </div>
-          <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
-            {urgentAlerts.slice(0, 8).map(a => {
-              const st = LEVEL_STYLE[a.level]
-              return (
-                <button key={a.id} onClick={() => a.link && navigate(a.link)}
-                  className="w-full flex items-center justify-between px-5 py-3 hover:bg-slate-50 transition-colors text-right">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${a.urgent ? 'animate-pulse' : ''}`} style={{ background: st.dot }} />
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold truncate" style={{ color: st.text }}>{a.title}</p>
-                      <p className="text-xs text-slate-500 mt-0.5 truncate">
-                        <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ml-1" style={{ background: st.bg, color: st.text }}>{LEVEL_LABEL[a.level]}</span>
-                        {a.subtitle}{a.date ? ` — ${formatDate(a.date)}` : ''}
-                      </p>
-                    </div>
+        <div className="mb-6 space-y-2.5">
+          {urgentAlerts.slice(0, 8).map(a => {
+            const st = LEVEL_STYLE[a.level]
+            return (
+              <button key={a.id} onClick={() => a.link && navigate(a.link)}
+                className={`w-full rounded-xl border-2 p-4 flex items-center justify-between text-right transition-all hover:shadow-md ${a.urgent ? 'animate-pulse' : ''}`}
+                style={{ background: st.bg, borderColor: st.dot }}>
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ background: st.dot }} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold truncate" style={{ color: st.text }}>{a.title}</p>
+                    <p className="text-xs mt-0.5 truncate" style={{ color: st.text, opacity: 0.85 }}>
+                      <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ml-1" style={{ background: st.dot, color: '#fff' }}>{LEVEL_LABEL[a.level]}</span>
+                      {a.subtitle}{a.date ? ` — ${formatDate(a.date)}` : ''}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {a.amount ? <span className="text-sm font-bold text-slate-700">{formatCurrency(a.amount)}</span> : null}
-                    <ChevronLeft size={15} className="text-slate-300" />
-                  </div>
-                </button>
-              )
-            })}
-          </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {a.amount ? <span className="text-sm font-bold" style={{ color: st.text }}>{formatCurrency(a.amount)}</span> : null}
+                  <ChevronLeft size={15} style={{ color: st.dot }} />
+                </div>
+              </button>
+            )
+          })}
           {(urgentAlerts.length > 8 || counts.info > 0) && (
             <button onClick={() => navigate('/notifications')}
-              className="w-full px-5 py-2.5 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-colors flex items-center justify-center gap-1 border-t border-slate-100">
+              className="w-full px-5 py-2.5 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-xl border border-slate-200 transition-colors flex items-center justify-center gap-1">
               عرض كل التنبيهات في مركز الإشعارات ({alerts.length}) <ChevronLeft size={13} />
             </button>
           )}
