@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, RefreshCw, CreditCard, UserCog, Package, FileText, ListTodo, Calculator, ChevronLeft, CheckCircle2 } from 'lucide-react'
+import { Bell, RefreshCw, CreditCard, UserCog, Package, FileText, ListTodo, Calculator, ChevronLeft, CheckCircle2, Landmark } from 'lucide-react'
 import { fetchAllAlerts, type AppAlert, type AlertKind, type AlertLevel } from '../../lib/notifications'
 import { formatCurrency, formatDate } from '../../lib/utils'
 
 const KIND_META: Record<AlertKind, { label: string; icon: typeof Bell }> = {
   cheque: { label: 'شيكات مستحقة', icon: CreditCard },
+  installment: { label: 'أقساط الأصول', icon: Landmark },
   worker_doc: { label: 'وثائق العمال', icon: UserCog },
   asset_doc: { label: 'وثائق المعدات', icon: Package },
   invoice: { label: 'فواتير', icon: FileText },
@@ -13,17 +14,24 @@ const KIND_META: Record<AlertKind, { label: string; icon: typeof Bell }> = {
   quote: { label: 'عروض أسعار', icon: Calculator },
 }
 
+// ألوان المستويات — متأخر (رمادي حزين) + عاجل/تحذير/معلومة
 const LEVEL_STYLE: Record<AlertLevel, { dot: string; border: string; bg: string; text: string }> = {
-  danger: { dot: '#dc2626', border: '#fecaca', bg: '#fef2f2', text: '#b91c1c' },
-  warning: { dot: '#d97706', border: '#fde68a', bg: '#fffbeb', text: '#b45309' },
-  info: { dot: '#0284c7', border: '#bae6fd', bg: '#f0f9ff', text: '#0369a1' },
+  overdue: { dot: '#475569', border: '#cbd5e1', bg: '#f1f5f9', text: '#475569' },   // رمادي حزين (فات)
+  danger: { dot: '#dc2626', border: '#fecaca', bg: '#fef2f2', text: '#b91c1c' },     // أحمر
+  warning: { dot: '#d97706', border: '#fde68a', bg: '#fffbeb', text: '#b45309' },    // برتقالي
+  info: { dot: '#ca8a04', border: '#fde68a', bg: '#fefce8', text: '#a16207' },       // أصفر
+}
+
+const LEVEL_LABEL: Record<AlertLevel, string> = {
+  overdue: 'متأخر', danger: 'عاجل', warning: 'تحذير', info: 'تنبيه',
 }
 
 const FILTERS: { key: 'all' | AlertLevel; label: string }[] = [
   { key: 'all', label: 'الكل' },
+  { key: 'overdue', label: 'متأخر' },
   { key: 'danger', label: 'عاجل' },
   { key: 'warning', label: 'تحذير' },
-  { key: 'info', label: 'معلومة' },
+  { key: 'info', label: 'تنبيه' },
 ]
 
 export default function NotificationsCenter() {
@@ -44,12 +52,13 @@ export default function NotificationsCenter() {
   const filtered = filter === 'all' ? alerts : alerts.filter(a => a.level === filter)
 
   const counts = {
+    overdue: alerts.filter(a => a.level === 'overdue').length,
     danger: alerts.filter(a => a.level === 'danger').length,
     warning: alerts.filter(a => a.level === 'warning').length,
     info: alerts.filter(a => a.level === 'info').length,
   }
 
-  // تجميع حسب النوع
+  // تجميع حسب النوع (مع الحفاظ على ترتيب الإلحاح من fetchAllAlerts)
   const byKind = filtered.reduce((acc, a) => {
     (acc[a.kind] ??= []).push(a)
     return acc
@@ -74,8 +83,8 @@ export default function NotificationsCenter() {
       </div>
 
       {/* ملخّص الأعداد */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        {(['danger', 'warning', 'info'] as AlertLevel[]).map(lvl => (
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        {(['overdue', 'danger', 'warning', 'info'] as AlertLevel[]).map(lvl => (
           <button key={lvl} onClick={() => setFilter(filter === lvl ? 'all' : lvl)}
             className="rounded-xl border p-4 text-right transition-all"
             style={{
@@ -84,9 +93,7 @@ export default function NotificationsCenter() {
               boxShadow: filter === lvl ? `0 0 0 2px ${LEVEL_STYLE[lvl].dot}33` : 'none',
             }}>
             <div className="text-2xl font-bold" style={{ color: LEVEL_STYLE[lvl].text }}>{counts[lvl]}</div>
-            <div className="text-xs mt-1" style={{ color: LEVEL_STYLE[lvl].text }}>
-              {lvl === 'danger' ? 'عاجل' : lvl === 'warning' ? 'تحذير' : 'معلومة'}
-            </div>
+            <div className="text-xs mt-1" style={{ color: LEVEL_STYLE[lvl].text }}>{LEVEL_LABEL[lvl]}</div>
           </button>
         ))}
       </div>
@@ -132,7 +139,7 @@ export default function NotificationsCenter() {
                       <button key={a.id} onClick={() => a.link && navigate(a.link)}
                         className="w-full bg-white rounded-xl border p-4 flex items-center gap-3 hover:shadow-sm transition-shadow text-right"
                         style={{ borderColor: st.border }}>
-                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: st.dot }} />
+                        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${a.urgent ? 'animate-pulse' : ''}`} style={{ background: st.dot }} />
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-slate-800 text-sm truncate">{a.title}</div>
                           <div className="text-xs mt-0.5" style={{ color: st.text }}>
