@@ -1,12 +1,13 @@
 import { supabase } from './supabase'
 
-export type AlertLevel = 'danger' | 'warning' | 'info'
-export type AlertKind = 'cheque' | 'worker_doc' | 'asset_doc' | 'invoice' | 'task' | 'quote'
+export type AlertLevel = 'overdue' | 'danger' | 'warning' | 'info'
+export type AlertKind = 'cheque' | 'installment' | 'worker_doc' | 'asset_doc' | 'invoice' | 'task' | 'quote'
 
 export interface AppAlert {
   id: string
   kind: AlertKind
   level: AlertLevel
+  urgent: boolean        // نبضة: اليوم أو باقي يوم واحد
   title: string
   subtitle: string
   date: string | null
@@ -26,13 +27,33 @@ export function daysUntil(dateStr: string | null | undefined): number | null {
   return Math.round((target.getTime() - today.getTime()) / 86400000)
 }
 
-function levelByDays(days: number | null, warnAt = 30): AlertLevel {
-  if (days === null) return 'info'
-  if (days < 0) return 'danger'
-  if (days <= 7) return 'danger'
-  if (days <= warnAt) return 'warning'
-  return 'info'
+// ═══ منطق المستوى الموحّد حسب نوع الإشعار ═══
+// مالي (أقساط/شيكات/فواتير/عروض): عتبات قصيرة (أكثر إلحاحاً)
+//   أحمر ≤ 3 | برتقالي ≤ 5 | أصفر ≤ 7
+// وثائق (إقامة/بطاقة/جواز/تأمين/استمارة): عتبات أطول (التجديد يحتاج وقت)
+//   أحمر ≤ 7 | برتقالي ≤ 15 | أصفر ≤ 30
+// فات الموعد = overdue (رمادي حزين) | اليوم أو باقي يوم = urgent (نبضة)
+
+type Track = 'financial' | 'document'
+
+function classify(days: number | null, track: Track): { level: AlertLevel; urgent: boolean } {
+  if (days === null) return { level: 'info', urgent: false }
+  if (days < 0) return { level: 'overdue', urgent: false }   // فات الموعد
+  const urgent = days <= 1                                     // اليوم أو باقي يوم → نبضة
+  if (track === 'financial') {
+    if (days <= 3) return { level: 'danger', urgent }
+    if (days <= 5) return { level: 'warning', urgent }
+    return { level: 'info', urgent }                           // ≤ 7
+  } else {
+    if (days <= 7) return { level: 'danger', urgent }
+    if (days <= 15) return { level: 'warning', urgent }
+    return { level: 'info', urgent }                           // ≤ 30
+  }
 }
+
+// عتبة الظهور القصوى لكل مسار
+const MAX_FINANCIAL = 7
+const MAX_DOCUMENT = 30
 
 // جلب كل التنبيهات من قاعدة البيانات
 export async function fetchAllAlerts(): Promise<AppAlert[]> {
@@ -43,8 +64,8 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   }
 
   const [workers, assets, invoices, purchaseInvoices, subPayments, tasks, quotes] = await Promise.all([
-    safe(supabase.from('workers').select('id,name,visa_expiry,cpr_expiry,passport_expiry,status')),
-    safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry')),
+    safe(supabase.from('workers').select('id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status')),
+    safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
     safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
     safe(supabase.from('purchase_invoices').select('id,supplier_name,amount,payment_method,check_due_date')),
     safe(supabase.from('subcontractor_payments').select('id,amount,payment_method,check_due_date')),
@@ -52,18 +73,22 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status,total')),
   ])
 
+  const subtitleDays = (d: number, verb: { past: string; today: string; future: string }) =>
+    d < 0 ? `${verb.past} ${Math.abs(d)} يوم` : d === 0 ? verb.today : `${verb.future} ${d} يوم`
+
   // وثائق العمال
   for (const w of workers as Record<string, unknown>[]) {
     if (w.status === 'inactive') continue
     for (const [label, field] of [['الإقامة/التأشيرة', 'visa_expiry'], ['البطاقة الذكية', 'cpr_expiry'], ['جواز السفر', 'passport_expiry']] as const) {
       const d = daysUntil(w[field] as string)
-      if (d !== null && d <= 45) {
+      if (d !== null && d <= MAX_DOCUMENT) {
+        const { level, urgent } = classify(d, 'document')
         alerts.push({
           id: `worker-${w.id}-${field}`,
           kind: 'worker_doc',
-          level: levelByDays(d, 45),
+          level, urgent,
           title: `${label} — ${w.name}`,
-          subtitle: d < 0 ? `منتهية منذ ${Math.abs(d)} يوم` : d === 0 ? 'تنتهي اليوم' : `تنتهي بعد ${d} يوم`,
+          subtitle: subtitleDays(d, { past: 'منتهية منذ', today: 'تنتهي اليوم', future: 'تنتهي بعد' }),
           date: w[field] as string,
           daysLeft: d,
           link: `/workers/${w.id}/edit`,
@@ -76,13 +101,14 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   for (const a of assets as Record<string, unknown>[]) {
     for (const [label, field] of [['تأمين', 'insurance_expiry'], ['استمارة', 'registration_expiry']] as const) {
       const d = daysUntil(a[field] as string)
-      if (d !== null && d <= 45) {
+      if (d !== null && d <= MAX_DOCUMENT) {
+        const { level, urgent } = classify(d, 'document')
         alerts.push({
           id: `asset-${a.id}-${field}`,
           kind: 'asset_doc',
-          level: levelByDays(d, 45),
+          level, urgent,
           title: `${label} ${a.name}`,
-          subtitle: d < 0 ? `منتهية منذ ${Math.abs(d)} يوم` : d === 0 ? 'تنتهي اليوم' : `تنتهي بعد ${d} يوم`,
+          subtitle: subtitleDays(d, { past: 'منتهية منذ', today: 'تنتهي اليوم', future: 'تنتهي بعد' }),
           date: a[field] as string,
           daysLeft: d,
           link: '/assets',
@@ -91,17 +117,47 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     }
   }
 
+  // أقساط الأصول (البيكاب والمعدات الممولة بنكياً)
+  for (const a of assets as Record<string, unknown>[]) {
+    if (a.payment_method === 'installment' && a.next_installment_date) {
+      const paid = Number(a.paid_installments) || 0
+      const total = Number(a.total_installments) || 0
+      const notFullyPaid = total === 0 || paid < total
+      if (notFullyPaid) {
+        const d = daysUntil(a.next_installment_date as string)
+        if (d !== null && d <= MAX_FINANCIAL) {
+          const { level, urgent } = classify(d, 'financial')
+          const monthly = Number(a.monthly_installment) || 0
+          const bank = (a.bank_name as string) || ''
+          const remaining = total > 0 ? (total - paid) * monthly : 0
+          alerts.push({
+            id: `installment-${a.id}`,
+            kind: 'installment',
+            level, urgent,
+            title: `قسط ${a.name}${bank ? ` — ${bank}` : ''}`,
+            subtitle: `${subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' })}${remaining > 0 ? ` • المتبقي ${remaining.toLocaleString('en-US')} د.ب` : ''}`,
+            date: a.next_installment_date as string,
+            daysLeft: d,
+            amount: monthly,
+            link: '/assets',
+          })
+        }
+      }
+    }
+  }
+
   // الشيكات الآجلة (موردين)
   for (const p of purchaseInvoices as Record<string, unknown>[]) {
     if (p.payment_method === 'deferred_cheque' && p.check_due_date) {
       const d = daysUntil(p.check_due_date as string)
-      if (d !== null && d <= 30) {
+      if (d !== null && d <= MAX_FINANCIAL) {
+        const { level, urgent } = classify(d, 'financial')
         alerts.push({
           id: `pcheque-${p.id}`,
           kind: 'cheque',
-          level: levelByDays(d, 30),
+          level, urgent,
           title: `شيك مستحق — ${p.supplier_name}`,
-          subtitle: d < 0 ? `تأخر ${Math.abs(d)} يوم` : d === 0 ? 'مستحق اليوم' : `بعد ${d} يوم`,
+          subtitle: subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' }),
           date: p.check_due_date as string,
           daysLeft: d,
           amount: Number(p.amount) || 0,
@@ -115,13 +171,14 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   for (const s of subPayments as Record<string, unknown>[]) {
     if (s.payment_method === 'cheque' && s.check_due_date) {
       const d = daysUntil(s.check_due_date as string)
-      if (d !== null && d <= 30) {
+      if (d !== null && d <= MAX_FINANCIAL) {
+        const { level, urgent } = classify(d, 'financial')
         alerts.push({
           id: `scheque-${s.id}`,
           kind: 'cheque',
-          level: levelByDays(d, 30),
+          level, urgent,
           title: 'شيك مقاول باطن مستحق',
-          subtitle: d < 0 ? `تأخر ${Math.abs(d)} يوم` : d === 0 ? 'مستحق اليوم' : `بعد ${d} يوم`,
+          subtitle: subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' }),
           date: s.check_due_date as string,
           daysLeft: d,
           amount: Number(s.amount) || 0,
@@ -135,13 +192,14 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   for (const inv of invoices as Record<string, unknown>[]) {
     if (inv.status !== 'paid' && inv.due_date) {
       const d = daysUntil(inv.due_date as string)
-      if (d !== null && d <= 14) {
+      if (d !== null && d <= MAX_FINANCIAL) {
+        const { level, urgent } = classify(d, 'financial')
         alerts.push({
           id: `invoice-${inv.id}`,
           kind: 'invoice',
-          level: levelByDays(d, 14),
+          level, urgent,
           title: `فاتورة ${inv.invoice_number} — ${inv.customer_name}`,
-          subtitle: d < 0 ? `متأخرة ${Math.abs(d)} يوم` : d === 0 ? 'تستحق اليوم' : `تستحق بعد ${d} يوم`,
+          subtitle: subtitleDays(d, { past: 'متأخرة', today: 'تستحق اليوم', future: 'تستحق بعد' }),
           date: inv.due_date as string,
           daysLeft: d,
           amount: Number(inv.total) || 0,
@@ -155,13 +213,14 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   for (const t of tasks as Record<string, unknown>[]) {
     if (t.status !== 'done' && t.due_date) {
       const d = daysUntil(t.due_date as string)
-      if (d !== null && d <= 3) {
+      if (d !== null && d <= MAX_FINANCIAL) {
+        const { level, urgent } = classify(d, 'financial')
         alerts.push({
           id: `task-${t.id}`,
           kind: 'task',
-          level: d < 0 ? 'danger' : d <= 1 ? 'warning' : 'info',
+          level, urgent,
           title: `مهمة: ${t.title}`,
-          subtitle: d < 0 ? `متأخرة ${Math.abs(d)} يوم` : d === 0 ? 'مستحقة اليوم' : `بعد ${d} يوم`,
+          subtitle: subtitleDays(d, { past: 'متأخرة', today: 'مستحقة اليوم', future: 'بعد' }),
           date: t.due_date as string,
           daysLeft: d,
           link: '/tasks',
@@ -174,13 +233,14 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   for (const q of quotes as Record<string, unknown>[]) {
     if (q.status === 'sent' && q.valid_until) {
       const d = daysUntil(q.valid_until as string)
-      if (d !== null && d <= 7) {
+      if (d !== null && d <= MAX_FINANCIAL) {
+        const { level, urgent } = classify(d, 'financial')
         alerts.push({
           id: `quote-${q.id}`,
           kind: 'quote',
-          level: d < 0 ? 'danger' : 'warning',
+          level, urgent,
           title: `عرض ${q.quote_number} — ${q.customer_name}`,
-          subtitle: d < 0 ? `انتهت صلاحيته منذ ${Math.abs(d)} يوم` : d === 0 ? 'ينتهي اليوم' : `ينتهي بعد ${d} يوم`,
+          subtitle: subtitleDays(d, { past: 'انتهت صلاحيته منذ', today: 'ينتهي اليوم', future: 'ينتهي بعد' }),
           date: q.valid_until as string,
           daysLeft: d,
           amount: Number(q.total) || 0,
@@ -190,10 +250,23 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     }
   }
 
-  // ترتيب: الأخطر أولاً، ثم الأقرب موعداً
-  const order: Record<AlertLevel, number> = { danger: 0, warning: 1, info: 2 }
+  // ═══ الترتيب حسب درجة اللون والإلحاح ═══
+  // 1. متأخر (overdue) أولاً — مشكلة قائمة تحتاج حل فوري
+  // 2. أحمر نابض (urgent) — اليوم/باقي يوم
+  // 3. أحمر (danger)
+  // 4. برتقالي (warning)
+  // 5. أصفر (info)
+  // داخل كل فئة: الأقرب موعداً أولاً
+  const rank = (a: AppAlert): number => {
+    if (a.level === 'overdue') return 0
+    if (a.urgent) return 1
+    if (a.level === 'danger') return 2
+    if (a.level === 'warning') return 3
+    return 4
+  }
   alerts.sort((a, b) => {
-    if (order[a.level] !== order[b.level]) return order[a.level] - order[b.level]
+    const ra = rank(a), rb = rank(b)
+    if (ra !== rb) return ra - rb
     return (a.daysLeft ?? 999) - (b.daysLeft ?? 999)
   })
 
