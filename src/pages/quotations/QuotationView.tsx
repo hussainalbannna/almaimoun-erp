@@ -244,6 +244,7 @@ export default function QuotationView() {
   const hasGypsum = optionalItems.some(it => optText(it).includes('جبس') || optText(it).includes('gypsum'))
   const hasPainting = optionalItems.some(it => optText(it).includes('صباغة') || optText(it).includes('دهان') || optText(it).includes('painting'))
   const hasExcavation = optionalItems.some(it => optText(it).includes('حفر') || optText(it).includes('excavation'))
+  const hasInsulation = optionalItems.some(it => optText(it).includes('عزل') || optText(it).includes('waterproof') || optText(it).includes('insulation') || optText(it).includes('thermal'))
 
   const excluded = (isAr ? EXCLUDED_AR : EXCLUDED_EN).filter(ex => {
     const e = ex.toLowerCase()
@@ -252,6 +253,8 @@ export default function QuotationView() {
     // الصباغة: يُحذف بند الدهان من "لا تشمل" لو أُضيفت الصباغة
     if (hasPainting && (ex.includes('الدهان') || ex.includes('الصباغة') || e.includes('painting'))) return false
     if (hasExcavation && (ex.includes('الحفر') || e.includes('excavation'))) return false
+    // العوازل: يُحذف بندا العزل المائي والحراري من "لا تشمل" لو أُضيف بند العوازل
+    if (hasInsulation && (ex.includes('العزل') || e.includes('waterproof') || e.includes('insulation') || e.includes('thermal'))) return false
     return true
   })
 
@@ -422,17 +425,24 @@ export default function QuotationView() {
           </tbody>
         </table>
 
-        {/* السعر الإجمالي فقط — بارز وراقٍ */}
-        <div className={`flex mb-6 ${isAr ? 'justify-start' : 'justify-end'}`}>
-          <div className="w-80">
-            <div className="flex justify-between items-center py-4 px-5 rounded-xl font-bold shadow-md" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)', color: 'white' }}>
-              <span className="text-base">{L.grandTotal}</span>
-              <span className="text-xl" dir="ltr">{fmt(quote.total)} <span className="text-sm font-medium opacity-90">{L.bd}</span></span>
+        {/* السعر الإجمالي — بارز وكبير والسعر في المنتصف */}
+        <div className="flex justify-center mb-10">
+          <div className="w-full max-w-md rounded-2xl shadow-lg overflow-hidden" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
+            {/* عنوان Grand Total — منفصل بشريط علوي */}
+            <div className="text-center py-3 px-5" style={{ background: 'rgba(0,0,0,0.15)', letterSpacing: '0.15em' }}>
+              <span className="text-white font-bold text-base" style={{ letterSpacing: isAr ? 'normal' : '0.15em' }}>{L.grandTotal}</span>
+            </div>
+            {/* السعر — كبير في المنتصف */}
+            <div className="text-center py-6 px-5">
+              <div className="text-white font-black leading-none" dir="ltr" style={{ fontSize: '44px' }}>
+                {fmt(quote.total)}
+              </div>
+              <div className="text-white font-medium mt-2 opacity-90 text-lg">{L.bd}</div>
             </div>
           </div>
         </div>
 
-        {/* لا تشمل — كرت أنيق */}
+        {/* لا تشمل — كرت أنيق (مفصول عن مربع السعر) */}
         <div className="rounded-xl p-4 mb-6" style={{ background: '#fbfaf8', border: '1px solid #efe4d4' }}>
           <div className="font-bold text-sm mb-2 flex items-center gap-2" style={{ color: '#7b4a2d' }}>
             <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#c4925a' }} />
