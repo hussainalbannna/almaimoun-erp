@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
   ArrowRight, FileText,
   TrendingUp, TrendingDown,
-  DollarSign, Briefcase, Users, ShoppingCart
+  DollarSign, Briefcase, Users, ShoppingCart, KeyRound
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import type {
@@ -47,6 +47,7 @@ export default function ProjectDetail() {
   const [purchasePaid, setPurchasePaid] = useState<number>(0);       // مشتريات مدفوعة فعلاً
   const [purchaseDeferred, setPurchaseDeferred] = useState<number>(0); // شيكات آجلة لم تُصرف بعد (للعرض فقط)
   const [subcontractorPaidSum, setSubcontractorPaidSum] = useState<number>(0);
+  const [rentalsPaidSum, setRentalsPaidSum] = useState<number>(0); // دفعات الإيجارات المرتبطة بالمشروع
   const [workersLaborCost, setWorkersLaborCost] = useState<number>(0); // تكلفة العمالة للمعرفة فقط (لا تُخصم)
 
   const load = async () => {
@@ -108,7 +109,24 @@ export default function ProjectDetail() {
       }
       setSubcontractorPaidSum(subPaid);
 
-      // 4. تكلفة العمالة على هذا الموقع — للمعرفة فقط (لا تُخصم من الربح)
+      // 4. الإيجارات والمصاريف الثابتة المرتبطة بهذا المشروع — الدفعات الفعلية المدفوعة
+      // نجلب إيجارات المشروع ثم دفعاتها (المدفوع فعلاً يُحسب مصروفاً، حسب رؤية السيولة)
+      const { data: projectRentals } = await supabase
+        .from('rentals')
+        .select('id')
+        .eq('project_id', id);
+      let rentalsPaid = 0;
+      const rentalIds = (projectRentals || []).map(r => (r as { id: string }).id);
+      if (rentalIds.length > 0) {
+        const { data: rentalPayData } = await supabase
+          .from('rental_payments')
+          .select('amount')
+          .in('rental_id', rentalIds);
+        rentalsPaid = (rentalPayData || []).reduce((sum, p) => sum + Number((p as { amount: number }).amount || 0), 0);
+      }
+      setRentalsPaidSum(rentalsPaid);
+
+      // 5. تكلفة العمالة على هذا الموقع — للمعرفة فقط (لا تُخصم من الربح)
       // (أيام الحضور الفعلي × متوسط الأجر اليومي المقدّر)
       const { data: attendanceData } = await supabase
         .from('worker_attendance')
@@ -202,7 +220,7 @@ export default function ProjectDetail() {
   const totalRevenue = contractValue + approvedVOs;
 
   // المصاريف الفعلية المدفوعة فقط — تكلفة العمالة والشيكات الآجلة لا تدخل (حسب رؤية السيولة)
-  const totalExpenses = boxExpenses + purchasePaid + subcontractorPaidSum;
+  const totalExpenses = boxExpenses + purchasePaid + subcontractorPaidSum + rentalsPaidSum;
   const netProfit = totalRevenue - totalExpenses;
   const isProfitable = netProfit >= 0;
 
@@ -228,7 +246,7 @@ export default function ProjectDetail() {
             {isProfitable ? <TrendingUp size={28} /> : <TrendingDown size={28} />}
             {formatCurrency(netProfit)}
           </div>
-          <p className="text-xs text-white/70">يُحسب بطرح المصاريف المدفوعة فعلاً (نثريات + مشتريات مصروفة + مقاولو باطن) من إجمالي الدخل. الشيكات الآجلة وتكلفة العمالة لا تُخصم.</p>
+          <p className="text-xs text-white/70">يُحسب بطرح المصاريف المدفوعة فعلاً (نثريات + مشتريات مصروفة + مقاولو باطن + إيجارات) من إجمالي الدخل. الشيكات الآجلة وتكلفة العمالة لا تُخصم.</p>
         </div>
         <div className="grid grid-cols-2 gap-4 w-full md:w-auto text-slate-900">
           <div className="bg-white/90 p-3 rounded-xl min-w-[140px]">
@@ -242,7 +260,7 @@ export default function ProjectDetail() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
           <div className="text-xs text-slate-400 flex items-center gap-1"><DollarSign size={14} /> قيمة العقد الأصلي</div>
           <div className="text-lg font-bold text-slate-800">{formatCurrency(contractValue)}</div>
@@ -257,6 +275,11 @@ export default function ProjectDetail() {
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
           <div className="text-xs text-slate-400 flex items-center gap-1"><Users size={14} /> مقاولو الباطن (مدفوع)</div>
           <div className="text-lg font-bold text-blue-600">{formatCurrency(subcontractorPaidSum)}</div>
+        </div>
+        <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
+          <div className="text-xs text-slate-400 flex items-center gap-1"><KeyRound size={14} /> الإيجارات (مدفوع)</div>
+          <div className="text-lg font-bold text-cyan-600">{formatCurrency(rentalsPaidSum)}</div>
+          <div className="text-[10px] text-slate-400">الإيجارات المرتبطة بالمشروع</div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
           <div className="text-xs text-slate-400 flex items-center gap-1"><Briefcase size={14} /> تكلفة العمالة (للمعرفة فقط)</div>
