@@ -31,6 +31,11 @@ const OPTIONAL_ITEMS = [
     ar: 'أعمال الصباغة', en: 'Painting works',
     detailAr: 'تجهيز الأسطح وتنفيذ أعمال الدهان الداخلي والخارجي بالدهانات المعتمدة.', detailEn: 'Surface preparation and execution of internal and external painting with approved paints.',
   },
+  {
+    key: 'insulation',
+    ar: 'أعمال العزل المائي والحراري', en: 'Waterproofing and thermal insulation works',
+    detailAr: 'توريد وتنفيذ أعمال العزل المائي والحراري للأسطح والحمامات والمناطق الرطبة بالمواد المعتمدة.', detailEn: 'Supply and application of waterproofing and thermal insulation for roofs, bathrooms, and wet areas using approved materials.',
+  },
 ]
 
 export default function QuotationForm() {
@@ -64,6 +69,7 @@ export default function QuotationForm() {
     excavation: { enabled: false, price: 0 },
     gypsum: { enabled: false, price: 0 },
     painting: { enabled: false, price: 0 },
+    insulation: { enabled: false, price: 0 },
   })
 
   useEffect(() => {
@@ -96,12 +102,13 @@ export default function QuotationForm() {
           }))
           const { data: its } = await supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order')
           if (its && its.length) {
-            const newOpt = { excavation: { enabled: false, price: 0 }, gypsum: { enabled: false, price: 0 }, painting: { enabled: false, price: 0 } }
+            const newOpt = { excavation: { enabled: false, price: 0 }, gypsum: { enabled: false, price: 0 }, painting: { enabled: false, price: 0 }, insulation: { enabled: false, price: 0 } }
             its.filter(it => it.category === 'optional').forEach(it => {
               const d = (it.description || '') + ' ' + (it.description_en || '').toLowerCase()
               let k = 'excavation'
               if (d.includes('جبس') || d.includes('gypsum')) k = 'gypsum'
               else if (d.includes('صباغة') || d.includes('دهان') || d.includes('painting')) k = 'painting'
+              else if (d.includes('عزل') || d.includes('waterproof') || d.includes('insulation') || d.includes('thermal')) k = 'insulation'
               newOpt[k] = { enabled: true, price: Number(it.unit_price) || 0 }
             })
             setOptionals(newOpt)
