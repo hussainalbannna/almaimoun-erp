@@ -346,10 +346,10 @@ export default function QuotationView() {
         <div className="flex items-start justify-between pb-5 mb-6" style={{ borderBottom: '2px solid', borderImage: 'linear-gradient(90deg, #c4925a, #e5d9c8) 1' }}>
           <div>
             <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{L.name_co}</div>
-            <div className="text-[11px] text-slate-500 mt-1.5 flex flex-col gap-0.5" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>
-              <span>C.R No: {FALLBACK.cr}</span>
-              <span>{FALLBACK.phone}</span>
-              <span>{FALLBACK.email}</span>
+            <div className="text-[11px] text-slate-500 mt-1.5" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>
+              <div style={{ display: 'block' }}>C.R No: {FALLBACK.cr}</div>
+              <div style={{ display: 'block' }}>{FALLBACK.phone}</div>
+              <div style={{ display: 'block' }}>{FALLBACK.email}</div>
             </div>
           </div>
           <div className={isAr ? 'text-left' : 'text-right'}>
