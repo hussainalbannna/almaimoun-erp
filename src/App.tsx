@@ -50,6 +50,9 @@ import CalendarView from './pages/calendar/CalendarView'
 import TasksBoard from './pages/tasks/TasksBoard'
 import FinanceDashboard from './pages/finance/FinanceDashboard'
 import NotificationsCenter from './pages/notifications/NotificationsCenter'
+// الإيجارات والمصاريف الثابتة
+import RentalsList from './pages/rentals/RentalsList'
+import RentalForm from './pages/rentals/RentalForm'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -92,6 +95,11 @@ export default function App() {
 
               {/* الأصول */}
               <Route path="assets" element={<AssetList />} />
+
+              {/* الإيجارات والمصاريف الثابتة */}
+              <Route path="rentals" element={<RentalsList />} />
+              <Route path="rentals/new" element={<RentalForm />} />
+              <Route path="rentals/:id/edit" element={<RentalForm />} />
 
               {/* الفواتير */}
               <Route path="invoices" element={<InvoiceList />} />
