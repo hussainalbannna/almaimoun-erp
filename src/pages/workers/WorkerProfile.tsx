@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, User, FileText, CalendarCheck, Stethoscope,
-  Plane, ShieldAlert, Wallet, Plus, Trash2, Upload, X
+  Plane, ShieldAlert, Wallet, Plus, Trash2, Upload, X, Eye, Loader2, Image as ImageIcon
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type {
@@ -11,6 +11,7 @@ import type {
   WorkerDisciplinary, WorkerDocType, DisciplinaryType, AttendanceStatus
 } from '../../types'
 import { formatDate } from '../../lib/utils'
+import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -32,7 +33,7 @@ type TabId = typeof TABS[number]['id']
 const BRANCH_OPTIONS = [
   { value: '', label: 'اختر الفرع' },
   { value: '2', label: 'الفرع 2' },
-  { value: '3', label: 'الفرع 3' },
+  { value: '4', label: 'الفرع 4' },
   { value: '5', label: 'الفرع 5' },
 ]
 
@@ -47,6 +48,8 @@ const DOC_LABELS: Record<WorkerDocType, string> = {
   iban_cert: 'صورة شهادة الآيبان IBAN',
   contract: 'صورة عقد العمل',
 }
+
+const isImg = (t?: string) => !!t && t.startsWith('image/')
 
 export default function WorkerProfile() {
   const { id } = useParams()
@@ -174,11 +177,11 @@ function InfoTab({ form, setForm, saving, onSave }: {
         <h2 className="font-semibold text-slate-700 mb-4">البيانات الشخصية</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Input label="الاسم بالعربي *" value={form.name ?? ''} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
-          <Input label="الاسم بالإنجليزي" value={form.name_en ?? ''} onChange={e => setForm(p => ({ ...p, name_en: e.target.value }))} />
-          <Input label="رقم السجل المدني (CPR)" value={form.cpr ?? ''} onChange={e => setForm(p => ({ ...p, cpr: e.target.value }))} />
+          <Input label="الاسم بالإنجليزي" value={form.name_en ?? ''} onChange={e => setForm(p => ({ ...p, name_en: e.target.value }))} dir="ltr" />
+          <Input label="رقم السجل المدني (CPR)" value={form.cpr ?? ''} onChange={e => setForm(p => ({ ...p, cpr: e.target.value }))} dir="ltr" />
           <Input label="الجنسية" value={form.nationality ?? ''} onChange={e => setForm(p => ({ ...p, nationality: e.target.value }))} />
           <Input label="المهنة / الوظيفة" value={form.profession ?? ''} onChange={e => setForm(p => ({ ...p, profession: e.target.value }))} />
-          <Input label="رقم الهاتف" value={form.phone ?? ''} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} />
+          <Input label="رقم الهاتف" value={form.phone ?? ''} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} dir="ltr" />
           <Input label="تاريخ الانضمام" type="date" value={form.join_date ?? ''} onChange={e => setForm(p => ({ ...p, join_date: e.target.value }))} />
           <Input label="تاريخ انتهاء التأشيرة / الإقامة" type="date" value={form.visa_expiry ?? ''} onChange={e => setForm(p => ({ ...p, visa_expiry: e.target.value || null }))} />
           <Input label="تاريخ انتهاء البطاقة الذكية CPR" type="date" value={form.cpr_expiry ?? ''} onChange={e => setForm(p => ({ ...p, cpr_expiry: e.target.value || null }))} />
@@ -213,7 +216,7 @@ function InfoTab({ form, setForm, saving, onSave }: {
           </>) : (
             <Input label="الأجر اليومي (د.ب)" type="number" value={String(form.daily_rate ?? 0)} onChange={e => setForm(p => ({ ...p, daily_rate: parseFloat(e.target.value) || 0 }))} />
           )}
-          <Input label="رقم IBAN" value={form.iban ?? ''} onChange={e => setForm(p => ({ ...p, iban: e.target.value }))} />
+          <Input label="رقم IBAN" value={form.iban ?? ''} onChange={e => setForm(p => ({ ...p, iban: e.target.value }))} dir="ltr" />
         </div>
       </div>
 
@@ -225,24 +228,42 @@ function InfoTab({ form, setForm, saving, onSave }: {
 
 // ─── Documents Tab ───────────────────────────────────────────────────────────
 
+interface CustomDoc {
+  id: string
+  name: string
+  file_url: string
+  file_type: string
+  created_at: string
+}
+
 function DocumentsTab({ workerId, documents, setDocuments }: {
   workerId: string; documents: WorkerDocument[]; setDocuments: React.Dispatch<React.SetStateAction<WorkerDocument[]>>
 }) {
+  const [previewImg, setPreviewImg] = useState<string | null>(null)
+  const [customDocs, setCustomDocs] = useState<CustomDoc[]>([])
+  const [uploadingCustom, setUploadingCustom] = useState(false)
+  const [customLabel, setCustomLabel] = useState('')
+  const customRef = useRef<HTMLInputElement>(null)
+
+  // تحميل المستندات المخصصة (من جدول documents العام)
+  useEffect(() => {
+    supabase.from('documents').select('id,name,file_url,file_type,created_at')
+      .eq('related_id', workerId).eq('related_type', 'worker').order('created_at', { ascending: false })
+      .then(({ data }) => setCustomDocs((data ?? []) as CustomDoc[]))
+  }, [workerId])
+
+  // ── المستندات الثابتة (البطاقة، الجواز، الآيبان، العقد) ──
   const handleUpload = async (docType: WorkerDocType, file: File) => {
-    const reader = new FileReader()
-    reader.onload = async () => {
-      const fileData = reader.result as string
-      const { data, error } = await supabase.from('worker_documents')
-        .upsert({ worker_id: workerId, doc_type: docType, file_data: fileData, file_name: file.name, uploaded_at: new Date().toISOString() }, { onConflict: 'worker_id,doc_type' })
-        .select().single()
-      if (error) { toast.error('حدث خطأ'); return }
-      setDocuments(prev => {
-        const filtered = prev.filter(d => d.doc_type !== docType)
-        return [...filtered, data as WorkerDocument]
-      })
-      toast.success('تم رفع المستند')
-    }
-    reader.readAsDataURL(file)
+    const fileData = isImg(file.type) ? await compressImage(file) : await fileToDataUrl(file)
+    const { data, error } = await supabase.from('worker_documents')
+      .upsert({ worker_id: workerId, doc_type: docType, file_data: fileData, file_name: file.name, file_type: file.type, uploaded_at: new Date().toISOString() }, { onConflict: 'worker_id,doc_type' })
+      .select().single()
+    if (error) { toast.error('حدث خطأ: ' + error.message); return }
+    setDocuments(prev => {
+      const filtered = prev.filter(d => d.doc_type !== docType)
+      return [...filtered, data as WorkerDocument]
+    })
+    toast.success('تم رفع المستند')
   }
 
   const handleDelete = async (docType: WorkerDocType) => {
@@ -251,36 +272,171 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
     toast.success('تم حذف المستند')
   }
 
+  // استعراض مستند ثابت (صورة fullscreen أو PDF)
+  const viewFixedDoc = (doc: WorkerDocument) => {
+    const ftype = (doc as WorkerDocument & { file_type?: string }).file_type || ''
+    const data = doc.file_data || ''
+    // لو نوع الملف صورة أو الداتا تبدأ بصورة
+    if (isImg(ftype) || data.startsWith('data:image')) setPreviewImg(data)
+    else openStoredFile(data, ftype || 'application/pdf')
+  }
+
+  // ── المستندات المخصصة (صورة شخصية، شهادات، أي مستند) ──
+  const handleCustomUpload = async (file: File) => {
+    setUploadingCustom(true)
+    try {
+      const fileData = isImg(file.type) ? await compressImage(file) : await fileToDataUrl(file)
+      const label = customLabel.trim() || file.name
+      const { data, error } = await supabase.from('documents').insert({
+        name: label, doc_type: 'worker_custom', file_url: fileData, file_type: file.type,
+        related_id: workerId, related_type: 'worker',
+      }).select('id,name,file_url,file_type,created_at').single()
+      if (error) throw error
+      setCustomDocs(prev => [data as CustomDoc, ...prev])
+      setCustomLabel('')
+      toast.success('تم رفع المستند')
+    } catch (e) {
+      toast.error('تعذّر الرفع: ' + ((e as Error)?.message ?? ''))
+    } finally {
+      setUploadingCustom(false)
+    }
+  }
+
+  const deleteCustom = async (docId: string) => {
+    await supabase.from('documents').delete().eq('id', docId)
+    setCustomDocs(prev => prev.filter(d => d.id !== docId))
+    toast.success('تم حذف المستند')
+  }
+
+  const viewCustom = (doc: CustomDoc) => {
+    if (isImg(doc.file_type) || doc.file_url.startsWith('data:image')) setPreviewImg(doc.file_url)
+    else openStoredFile(doc.file_url, doc.file_type || 'application/pdf')
+  }
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {(Object.keys(DOC_LABELS) as WorkerDocType[]).map(docType => {
-        const doc = documents.find(d => d.doc_type === docType)
-        return (
-          <div key={docType} className="bg-white rounded-xl border border-slate-200 p-4">
-            <h3 className="text-sm font-semibold text-slate-700 mb-3">{DOC_LABELS[docType]}</h3>
-            {doc?.file_data ? (
-              <div className="space-y-2">
-                <div className="aspect-[4/3] rounded-lg overflow-hidden border border-slate-200 bg-slate-50">
-                  <img src={doc.file_data} alt={DOC_LABELS[docType]} className="w-full h-full object-contain" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-500 truncate">{doc.file_name}</span>
-                  <button onClick={() => handleDelete(docType)} className="text-xs text-red-500 hover:text-red-700">حذف</button>
-                </div>
+    <div className="space-y-6">
+      {/* المستندات الرسمية الثابتة */}
+      <div>
+        <h2 className="text-sm font-bold text-slate-700 mb-3">المستندات الرسمية</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {(Object.keys(DOC_LABELS) as WorkerDocType[]).map(docType => {
+            const doc = documents.find(d => d.doc_type === docType)
+            const data = doc?.file_data || ''
+            const isImage = data.startsWith('data:image')
+            return (
+              <div key={docType} className="bg-white rounded-xl border border-slate-200 p-4">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3">{DOC_LABELS[docType]}</h3>
+                {data ? (
+                  <div className="space-y-2">
+                    {isImage ? (
+                      <button onClick={() => setPreviewImg(data)}
+                        className="block w-full aspect-[4/3] rounded-lg overflow-hidden border border-slate-200 bg-slate-50 group relative">
+                        <img src={data} alt={DOC_LABELS[docType]} className="w-full h-full object-contain" />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors">
+                          <Eye size={24} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                      </button>
+                    ) : (
+                      <button onClick={() => viewFixedDoc(doc!)}
+                        className="w-full aspect-[4/3] rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-2 hover:bg-slate-100 transition-colors">
+                        <FileText size={32} className="text-red-500" />
+                        <span className="text-xs text-slate-600 flex items-center gap-1"><Eye size={12} /> عرض الملف</span>
+                      </button>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-500 truncate">{doc?.file_name}</span>
+                      <button onClick={() => handleDelete(docType)} className="text-xs text-red-500 hover:text-red-700">حذف</button>
+                    </div>
+                  </div>
+                ) : (
+                  <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-amber-400 hover:bg-amber-50/50 transition-colors">
+                    <Upload size={24} className="text-slate-400" />
+                    <span className="text-sm text-slate-500">انقر لرفع الملف</span>
+                    <input type="file" accept="image/*,.pdf" className="hidden" onChange={e => {
+                      const f = e.target.files?.[0]
+                      if (f) handleUpload(docType, f)
+                    }} />
+                  </label>
+                )}
               </div>
-            ) : (
-              <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-slate-400 hover:bg-slate-50 transition-colors">
-                <Upload size={24} className="text-slate-400" />
-                <span className="text-sm text-slate-500">انقر لرفع الملف</span>
-                <input type="file" accept="image/*,.pdf" className="hidden" onChange={e => {
-                  const f = e.target.files?.[0]
-                  if (f) handleUpload(docType, f)
-                }} />
-              </label>
-            )}
+            )
+          })}
+        </div>
+      </div>
+
+      {/* المستندات الإضافية المرنة */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-slate-700">مستندات إضافية</h2>
+          <span className="text-xs text-slate-400">صورة شخصية، شهادات، أو أي مستند آخر</span>
+        </div>
+
+        {/* رفع مستند مخصص */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 mb-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+            <div className="md:col-span-2">
+              <label className="block text-xs text-slate-500 mb-1">اسم المستند (اختياري)</label>
+              <input value={customLabel} onChange={e => setCustomLabel(e.target.value)}
+                placeholder="مثال: صورة شخصية، شهادة صحية، رخصة قيادة..."
+                className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm outline-none focus:border-amber-400" />
+            </div>
+            <input ref={customRef} type="file" accept="image/*,application/pdf,.doc,.docx" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleCustomUpload(f); e.target.value = '' }} />
+            <Button icon={uploadingCustom ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+              loading={uploadingCustom} onClick={() => customRef.current?.click()}>
+              رفع مستند
+            </Button>
           </div>
-        )
-      })}
+        </div>
+
+        {/* قائمة المستندات المخصصة */}
+        {customDocs.length === 0 ? (
+          <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 text-sm">
+            لا توجد مستندات إضافية. ارفع صورة شخصية أو أي مستند تريد حفظه.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {customDocs.map(doc => {
+              const isImage = isImg(doc.file_type) || doc.file_url.startsWith('data:image')
+              return (
+                <div key={doc.id} className="bg-white rounded-xl border border-slate-200 overflow-hidden group">
+                  <button onClick={() => viewCustom(doc)} className="block w-full aspect-square bg-slate-50 relative">
+                    {isImage ? (
+                      <img src={doc.file_url} alt={doc.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <FileText size={36} className="text-red-500" />
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors">
+                      <Eye size={22} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                  </button>
+                  <div className="p-2 flex items-center justify-between gap-1">
+                    <span className="text-xs text-slate-600 truncate flex items-center gap-1">
+                      {isImage ? <ImageIcon size={11} className="shrink-0 text-blue-500" /> : <FileText size={11} className="shrink-0 text-red-500" />}
+                      {doc.name}
+                    </span>
+                    <button onClick={() => deleteCustom(doc.id)} className="p-1 text-slate-400 hover:text-red-600 shrink-0">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* معاينة الصورة fullscreen */}
+      {previewImg && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setPreviewImg(null)}>
+          <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setPreviewImg(null)} className="absolute -top-3 -right-3 bg-white text-slate-700 rounded-full w-8 h-8 flex items-center justify-center shadow-lg hover:bg-slate-100"><X size={18} /></button>
+            <img src={previewImg} alt="مستند" className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl" />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
