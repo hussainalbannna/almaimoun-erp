@@ -3,12 +3,13 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   Plus, Edit, Trash2, Search, FileText, AlertTriangle, Paperclip, Eye, X,
   Image as ImageIcon, Receipt, CreditCard, Building2, ChevronDown, ChevronLeft,
-  Calendar, Truck, Wallet, LayoutGrid, List as ListIcon
+  Calendar, Truck, Wallet, LayoutGrid, List as ListIcon, FileSpreadsheet
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
 import { formatCurrency, formatDate } from '../../lib/utils'
 import { openStoredFile } from '../../lib/ai'
+import * as XLSX from 'xlsx'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
@@ -31,8 +32,19 @@ const daysUntil = (date: string): number =>
   Math.round((new Date(date).getTime() - new Date(todayStr()).getTime()) / 86400000)
 
 // تاريخ الفاتورة الفعلي (entry_date) مع تراجع لتاريخ الإنشاء للفواتير القديمة
-type InvoiceRow = PurchaseInvoice & { entry_date?: string | null }
+type InvoiceRow = PurchaseInvoice & { entry_date?: string | null; tax_rate?: number; subtotal?: number }
 const invoiceDate = (inv: InvoiceRow): string => inv.entry_date || inv.created_at
+
+// ── حساب تفصيل الضريبة لكل فاتورة (amount = المجموع الشامل) ──
+// إن كان subtotal مخزّناً نستخدمه؛ وإلا نحسب من amount والنسبة (افتراض 10% للقديمة)
+const invTaxRate = (inv: InvoiceRow): number => inv.tax_rate != null ? Number(inv.tax_rate) : 10
+const invTotal = (inv: InvoiceRow): number => Number(inv.amount) || 0
+const invSubtotal = (inv: InvoiceRow): number => {
+  if (inv.subtotal != null && Number(inv.subtotal) > 0) return Number(inv.subtotal)
+  const rate = invTaxRate(inv)
+  return rate > 0 ? invTotal(inv) / (1 + rate / 100) : invTotal(inv)
+}
+const invTax = (inv: InvoiceRow): number => invTotal(inv) - invSubtotal(inv)
 
 interface DocItem { label: string; data: string }
 
@@ -113,7 +125,8 @@ export default function PurchaseInvoiceList() {
   const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
   const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
   const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
-  const recoverableVAT = totalAmount * (10 / 110)
+  const recoverableVAT = invoices.reduce((s, inv) => s + invTax(inv), 0)
+  const totalSubtotal = invoices.reduce((s, inv) => s + invSubtotal(inv), 0)
 
   // ── التجميع حسب المشروع ──
   const groups = useMemo(() => {
@@ -134,6 +147,90 @@ export default function PurchaseInvoiceList() {
 
   const toggleGroup = (key: string) => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }))
 
+  // ═══ تصدير Excel احترافي: ورقة شاملة + ورقة لكل مشروع + ملخّص الضريبة ═══
+  const exportToExcel = () => {
+    if (invoices.length === 0) { toast.error('لا توجد فواتير للتصدير'); return }
+    try {
+      const wb = XLSX.utils.book_new()
+      const t = today()
+
+      // تجهيز صفوف فاتورة لورقة
+      const buildRows = (list: InvoiceRow[]) => {
+        const rows = list.map((inv, i) => ({
+          'م': i + 1,
+          'المورد': inv.supplier_name || '',
+          'المشروع': inv.project_name || 'بدون مشروع',
+          'رقم الفاتورة': inv.vendor_invoice_number || '',
+          'LPO': inv.lpo_number || '',
+          'تاريخ الفاتورة': formatDate(invoiceDate(inv)),
+          'المبلغ قبل الضريبة': Number(invSubtotal(inv).toFixed(3)),
+          'نسبة الضريبة': invTaxRate(inv) + '%',
+          'مبلغ الضريبة': Number(invTax(inv).toFixed(3)),
+          'المجموع الشامل': Number(invTotal(inv).toFixed(3)),
+          'طريقة الدفع': PAYMENT_LABELS[inv.payment_method] ?? inv.payment_method,
+          'استحقاق الشيك': inv.check_due_date ? formatDate(inv.check_due_date) : '',
+          'حالة الدفع': inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > t ? 'شيك آجل (لم يُصرف)' : 'مدفوع',
+          'ملاحظات': inv.notes || '',
+        }))
+        // صف الإجماليات
+        const sumSub = list.reduce((s, inv) => s + invSubtotal(inv), 0)
+        const sumTax = list.reduce((s, inv) => s + invTax(inv), 0)
+        const sumTotal = list.reduce((s, inv) => s + invTotal(inv), 0)
+        rows.push({
+          'م': '' as never, 'المورد': 'الإجمالي' as never, 'المشروع': '', 'رقم الفاتورة': '', 'LPO': '',
+          'تاريخ الفاتورة': '', 'المبلغ قبل الضريبة': Number(sumSub.toFixed(3)), 'نسبة الضريبة': '',
+          'مبلغ الضريبة': Number(sumTax.toFixed(3)), 'المجموع الشامل': Number(sumTotal.toFixed(3)),
+          'طريقة الدفع': '', 'استحقاق الشيك': '', 'حالة الدفع': '', 'ملاحظات': '',
+        })
+        return rows
+      }
+
+      const colWidths = [
+        { wch: 4 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 12 }, { wch: 13 },
+        { wch: 16 }, { wch: 10 }, { wch: 13 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 18 }, { wch: 25 },
+      ]
+
+      // ── الورقة الشاملة (كل الفواتير) ──
+      const allSheet = XLSX.utils.json_to_sheet(buildRows(invoices))
+      allSheet['!cols'] = colWidths
+      XLSX.utils.book_append_sheet(wb, allSheet, 'كل الفواتير')
+
+      // ── ورقة لكل مشروع ──
+      for (const g of groups) {
+        const safeName = (g.name || 'بدون مشروع').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28)
+        const sheet = XLSX.utils.json_to_sheet(buildRows(g.invoices))
+        sheet['!cols'] = colWidths
+        XLSX.utils.book_append_sheet(wb, sheet, safeName || 'مشروع')
+      }
+
+      // ── ورقة ملخّص الضريبة حسب المشروع ──
+      const summaryRows = groups.map((g, i) => ({
+        'م': i + 1,
+        'المشروع': g.name,
+        'عدد الفواتير': g.invoices.length,
+        'المبلغ قبل الضريبة': Number(g.invoices.reduce((s, inv) => s + invSubtotal(inv), 0).toFixed(3)),
+        'مبلغ الضريبة (قابل للاسترداد)': Number(g.invoices.reduce((s, inv) => s + invTax(inv), 0).toFixed(3)),
+        'المجموع الشامل': Number(g.invoices.reduce((s, inv) => s + invTotal(inv), 0).toFixed(3)),
+      }))
+      summaryRows.push({
+        'م': '' as never, 'المشروع': 'الإجمالي الكلي' as never, 'عدد الفواتير': invoices.length as never,
+        'المبلغ قبل الضريبة': Number(totalSubtotal.toFixed(3)),
+        'مبلغ الضريبة (قابل للاسترداد)': Number(recoverableVAT.toFixed(3)),
+        'المجموع الشامل': Number(totalAmount.toFixed(3)),
+      })
+      const summarySheet = XLSX.utils.json_to_sheet(summaryRows)
+      summarySheet['!cols'] = [{ wch: 4 }, { wch: 24 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 16 }]
+      XLSX.utils.book_append_sheet(wb, summarySheet, 'ملخص الضريبة')
+
+      // تنزيل
+      const dateStr = t.replace(/-/g, '')
+      XLSX.writeFile(wb, `مشتريات_الميمون_${dateStr}.xlsx`)
+      toast.success('تم تصدير ملف Excel بنجاح')
+    } catch (e) {
+      toast.error('تعذّر التصدير: ' + ((e as Error)?.message ?? ''))
+    }
+  }
+
   // صف فاتورة (يُستخدم في وضع التجميع والوضع المسطّح)
   const InvoiceRowEl = ({ inv }: { inv: InvoiceRow }) => {
     const docs = getDocs(inv)
@@ -147,8 +244,12 @@ export default function PurchaseInvoiceList() {
           {inv.lpo_number && <div className="text-xs text-slate-400">LPO: {inv.lpo_number}</div>}
         </td>
         <td className="px-4 py-3 font-mono text-slate-600 text-xs">{inv.vendor_invoice_number || '—'}</td>
+        <td className="px-4 py-3 text-slate-600 whitespace-nowrap text-xs" dir="ltr">{formatCurrency(invSubtotal(inv))}</td>
+        <td className="px-4 py-3 whitespace-nowrap text-xs" dir="ltr">
+          {invTax(inv) > 0 ? <span className="text-emerald-600 font-medium">{formatCurrency(invTax(inv))}</span> : <span className="text-slate-300">معفى</span>}
+        </td>
         <td className="px-4 py-3 font-bold whitespace-nowrap" style={{ color: '#7b4a2d' }}>
-          {formatCurrency(num(inv.amount))}
+          {formatCurrency(invTotal(inv))}
         </td>
         <td className="px-4 py-3">
           <Badge color={PAYMENT_COLOR(inv.payment_method)}>{PAYMENT_LABELS[inv.payment_method] ?? inv.payment_method}</Badge>
@@ -186,7 +287,9 @@ export default function PurchaseInvoiceList() {
       <tr>
         <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">المورد</th>
         <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">رقم الفاتورة</th>
-        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">المبلغ</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">قبل الضريبة</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">الضريبة</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">المجموع</th>
         <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">طريقة الدفع</th>
         <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">مستندات</th>
         <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">تاريخ الفاتورة</th>
@@ -202,7 +305,13 @@ export default function PurchaseInvoiceList() {
           <h1 className="text-2xl font-bold text-slate-800">الفواتير والمدفوعات</h1>
           <p className="text-slate-500 text-sm mt-0.5">مشتريات الموردين مجمّعة حسب المشروع ومتابعة الشيكات الآجلة</p>
         </div>
-        <Button onClick={() => navigate('/purchases/new')} icon={<Plus size={16} />}>تسجيل فاتورة شراء</Button>
+        <div className="flex items-center gap-2">
+          <button onClick={exportToExcel}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors">
+            <FileSpreadsheet size={16} /> تصدير Excel
+          </button>
+          <Button onClick={() => navigate('/purchases/new')} icon={<Plus size={16} />}>تسجيل فاتورة شراء</Button>
+        </div>
       </div>
 
       {/* تنبيه الشيكات القريبة */}
@@ -217,21 +326,26 @@ export default function PurchaseInvoiceList() {
 
       {/* بطاقات ملخّص */}
       {!loading && invoices.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-5">
           <div className="bg-white rounded-xl border border-slate-200 p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Receipt size={13} /> إجمالي المشتريات</div>
             <div className="text-lg font-bold text-slate-800">{formatCurrency(totalAmount)}</div>
-            <div className="text-[11px] text-slate-400 mt-0.5">{invoices.length} فاتورة</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">{invoices.length} فاتورة (شامل الضريبة)</div>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Wallet size={13} /> المبلغ قبل الضريبة</div>
+            <div className="text-lg font-bold text-slate-700">{formatCurrency(totalSubtotal)}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">صافي قيمة المشتريات</div>
+          </div>
+          <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4">
+            <div className="text-xs text-emerald-700 flex items-center gap-1 mb-1"><Receipt size={13} /> ضريبة قابلة للاسترداد</div>
+            <div className="text-lg font-bold text-emerald-700">{formatCurrency(recoverableVAT)}</div>
+            <div className="text-[11px] text-emerald-600 mt-0.5">مجموع ضريبة كل الفواتير</div>
           </div>
           <div className={`rounded-xl border p-4 ${pendingChequesTotal > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
             <div className="text-xs flex items-center gap-1 mb-1" style={{ color: pendingChequesTotal > 0 ? '#b91c1c' : '#94a3b8' }}><CreditCard size={13} /> شيكات آجلة معلّقة</div>
             <div className="text-lg font-bold" style={{ color: pendingChequesTotal > 0 ? '#dc2626' : '#334155' }}>{formatCurrency(pendingChequesTotal)}</div>
             <div className="text-[11px] mt-0.5" style={{ color: pendingChequesTotal > 0 ? '#b91c1c' : '#94a3b8' }}>{pendingCheques.length} شيك لم ينصرف</div>
-          </div>
-          <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4">
-            <div className="text-xs text-emerald-700 flex items-center gap-1 mb-1"><Receipt size={13} /> ضريبة قابلة للاسترداد</div>
-            <div className="text-lg font-bold text-emerald-700">{formatCurrency(recoverableVAT)}</div>
-            <div className="text-[11px] text-emerald-600 mt-0.5">تقديري (10% من المشتريات)</div>
           </div>
           <div className="bg-white rounded-xl border border-slate-200 p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Wallet size={13} /> مدفوع فعلياً</div>
@@ -349,10 +463,22 @@ export default function PurchaseInvoiceList() {
             </div>
 
             <div className="p-5 space-y-5">
-              {/* المبلغ الكبير */}
-              <div className="rounded-xl p-4 flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
-                <span className="text-white/90 text-sm font-medium">المبلغ الإجمالي</span>
-                <span className="text-white font-black text-2xl" dir="ltr">{formatCurrency(num(viewInv.amount))}</span>
+              {/* المبلغ مع تفصيل الضريبة */}
+              <div className="rounded-xl overflow-hidden" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
+                <div className="grid grid-cols-3 divide-x divide-x-reverse divide-white/15">
+                  <div className="p-3 text-center">
+                    <div className="text-[11px] text-white/70 mb-0.5">قبل الضريبة</div>
+                    <div className="text-white font-bold text-sm" dir="ltr">{formatCurrency(invSubtotal(viewInv))}</div>
+                  </div>
+                  <div className="p-3 text-center">
+                    <div className="text-[11px] text-white/70 mb-0.5">الضريبة ({invTaxRate(viewInv)}%)</div>
+                    <div className="text-white font-bold text-sm" dir="ltr">{formatCurrency(invTax(viewInv))}</div>
+                  </div>
+                  <div className="p-3 text-center bg-black/15">
+                    <div className="text-[11px] text-white/80 mb-0.5">المجموع</div>
+                    <div className="text-white font-black text-base" dir="ltr">{formatCurrency(invTotal(viewInv))}</div>
+                  </div>
+                </div>
               </div>
 
               {/* تفاصيل */}
