@@ -37,6 +37,7 @@ export default function PurchaseInvoiceForm() {
     lpo_id: '',
     lpo_number: '',
     vendor_invoice_number: '',
+    entry_date: new Date().toISOString().slice(0, 10),
     amount: '',
     payment_method: 'cash' as PurchasePaymentMethod,
     check_due_date: '',
@@ -65,7 +66,7 @@ export default function PurchaseInvoiceForm() {
       const loadInvoice = async () => {
         const { data } = await supabase.from('purchase_invoices').select('*').eq('id', id).single()
         if (data) {
-          const inv = data as PurchaseInvoice
+          const inv = data as PurchaseInvoice & { entry_date?: string | null; created_at?: string }
           setForm({
             supplier_id: inv.supplier_id ?? '',
             supplier_name: inv.supplier_name,
@@ -74,6 +75,7 @@ export default function PurchaseInvoiceForm() {
             lpo_id: inv.lpo_id ?? '',
             lpo_number: inv.lpo_number,
             vendor_invoice_number: inv.vendor_invoice_number,
+            entry_date: (inv.entry_date || inv.created_at || new Date().toISOString()).slice(0, 10),
             amount: String(inv.amount),
             payment_method: inv.payment_method,
             check_due_date: inv.check_due_date ?? '',
@@ -138,12 +140,16 @@ export default function PurchaseInvoiceForm() {
       // تخزين نسخة الفاتورة (مضغوطة إن كانت صورة)
       const dataUrl = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
 
+      // التحقق من صحة التاريخ المستخرج قبل استخدامه
+      const validDate = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : ''
+
       setForm(f => ({
         ...f,
         supplier_id: matchedSupplierId || f.supplier_id,
         supplier_name: matchedSupplierName || f.supplier_name,
         vendor_invoice_number: parsed.vendor_invoice_number || f.vendor_invoice_number,
         amount: parsed.amount ? String(parsed.amount) : f.amount,
+        entry_date: validDate || f.entry_date,
         invoice_copy_data: dataUrl,
       }))
 
@@ -197,6 +203,7 @@ export default function PurchaseInvoiceForm() {
   const handleSave = async () => {
     if (!form.supplier_id) { toast.error('يرجى اختيار المورد'); return }
     if (!form.amount || Number(form.amount) <= 0) { toast.error('يرجى إدخال المبلغ'); return }
+    if (!form.entry_date) { toast.error('يرجى إدخال تاريخ الفاتورة'); return }
 
     setSaving(true)
     const payload = {
@@ -207,6 +214,7 @@ export default function PurchaseInvoiceForm() {
       lpo_id: form.lpo_id || null,
       lpo_number: form.lpo_number,
       vendor_invoice_number: form.vendor_invoice_number,
+      entry_date: form.entry_date,
       amount: Number(form.amount),
       payment_method: form.payment_method,
       check_due_date: form.payment_method === 'deferred_cheque' && form.check_due_date ? form.check_due_date : null,
@@ -220,10 +228,10 @@ export default function PurchaseInvoiceForm() {
     let invoiceId = id
     if (isEdit) {
       const { error } = await supabase.from('purchase_invoices').update(payload).eq('id', id)
-      if (error) { toast.error('فشل في الحفظ'); setSaving(false); return }
+      if (error) { toast.error('فشل في الحفظ: ' + error.message); setSaving(false); return }
     } else {
       const { data, error } = await supabase.from('purchase_invoices').insert(payload).select('id').single()
-      if (error || !data) { toast.error('فشل في الحفظ'); setSaving(false); return }
+      if (error || !data) { toast.error('فشل في الحفظ: ' + (error?.message ?? '')); setSaving(false); return }
       invoiceId = data.id
     }
 
@@ -270,7 +278,7 @@ export default function PurchaseInvoiceForm() {
               </div>
               <div>
                 <div className="font-semibold text-slate-800 text-sm">قراءة الفاتورة تلقائياً</div>
-                <div className="text-xs text-slate-500">ارفع صورة أو PDF لفاتورة المورد (حتى الممسوحة) ويملأ المبلغ ورقم الفاتورة والمورد</div>
+                <div className="text-xs text-slate-500">ارفع صورة أو PDF لفاتورة المورد (حتى الممسوحة) ويملأ المبلغ ورقم الفاتورة والمورد والتاريخ</div>
               </div>
             </div>
             <label className="cursor-pointer">
@@ -311,6 +319,19 @@ export default function PurchaseInvoiceForm() {
               <option value="">— اختر المشروع —</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.project_name}</option>)}
             </select>
+          </div>
+
+          {/* تاريخ الفاتورة — قابل للتغيير حتى للفواتير القديمة */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1.5">تاريخ الفاتورة *</label>
+            <input
+              type="date"
+              value={form.entry_date}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={e => setForm(f => ({ ...f, entry_date: e.target.value }))}
+              className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+            />
+            <p className="text-xs text-slate-400 mt-1">يمكنك اختيار تاريخ سابق لإدخال فواتير المشاريع القديمة</p>
           </div>
 
           {/* Linked LPO */}
