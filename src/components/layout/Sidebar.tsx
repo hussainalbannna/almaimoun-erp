@@ -3,7 +3,7 @@ import {
   LayoutDashboard, FileText, ShoppingCart, Users, Building2,
   Settings, FileArchive, X, HardHat, Receipt, UserCog,
   ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
-  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package
+  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound
 } from 'lucide-react'
 
 const navGroups = [
@@ -28,6 +28,7 @@ const navGroups = [
       { to: '/projects', label: 'المشاريع والمراحل', icon: HardHat },
       { to: '/daily-logs', label: 'تقارير الموقع وأوامر التغيير', icon: ClipboardList },
       { to: '/assets', label: 'الأصول والمعدات', icon: Package },
+      { to: '/rentals', label: 'الإيجارات والمصاريف', icon: KeyRound },
     ]
   },
   {
