@@ -425,19 +425,17 @@ export default function QuotationView() {
           </tbody>
         </table>
 
-        {/* السعر الإجمالي — بارز وكبير والسعر في المنتصف */}
+        {/* السعر الإجمالي — مستطيل بارز، السعر واضح والـ BD بجانبه */}
         <div className="flex justify-center mb-10">
-          <div className="w-full max-w-md rounded-2xl shadow-lg overflow-hidden" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
-            {/* عنوان Grand Total — منفصل بشريط علوي */}
-            <div className="text-center py-3 px-5" style={{ background: 'rgba(0,0,0,0.15)', letterSpacing: '0.15em' }}>
-              <span className="text-white font-bold text-base" style={{ letterSpacing: isAr ? 'normal' : '0.15em' }}>{L.grandTotal}</span>
+          <div className="w-full max-w-md rounded-xl shadow-md overflow-hidden flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
+            {/* عنوان Grand Total — يمين */}
+            <div className="py-4 px-5 h-full flex items-center" style={{ background: 'rgba(0,0,0,0.15)' }}>
+              <span className="text-white font-bold text-sm" style={{ letterSpacing: isAr ? 'normal' : '0.1em' }}>{L.grandTotal}</span>
             </div>
-            {/* السعر — كبير في المنتصف */}
-            <div className="text-center py-6 px-5">
-              <div className="text-white font-black leading-none" dir="ltr" style={{ fontSize: '44px' }}>
-                {fmt(quote.total)}
-              </div>
-              <div className="text-white font-medium mt-2 opacity-90 text-lg">{L.bd}</div>
+            {/* السعر + BD بجانبه */}
+            <div className="flex-1 text-center py-4 px-5">
+              <span className="text-white font-black" dir="ltr" style={{ fontSize: '34px' }}>{fmt(quote.total)}</span>
+              <span className="text-white font-medium opacity-90 text-base mr-2" dir="ltr"> {L.bd}</span>
             </div>
           </div>
         </div>
