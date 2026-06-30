@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
   ArrowRight, FileText,
   TrendingUp, TrendingDown,
-  DollarSign, Briefcase, Users, ShoppingCart, KeyRound
+  DollarSign, Briefcase, Users, ShoppingCart, KeyRound, ChevronDown
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import type {
@@ -48,7 +48,9 @@ export default function ProjectDetail() {
   const [purchaseDeferred, setPurchaseDeferred] = useState<number>(0); // شيكات آجلة لم تُصرف بعد (للعرض فقط)
   const [subcontractorPaidSum, setSubcontractorPaidSum] = useState<number>(0);
   const [rentalsPaidSum, setRentalsPaidSum] = useState<number>(0); // دفعات الإيجارات المرتبطة بالمشروع
-  const [workersLaborCost, setWorkersLaborCost] = useState<number>(0); // تكلفة العمالة للمعرفة فقط (لا تُخصم)
+  const [workersLaborCost, setWorkersLaborCost] = useState<number>(0); // تكلفة العمالة الفعلية (تُخصم)
+  const [overtimeCost, setOvertimeCost] = useState<number>(0); // مبلغ الأوفر تايم من التقارير اليومية
+  const [laborDetails, setLaborDetails] = useState<{ name: string; days: number; cost: number; type: string }[]>([]); // تفصيل تكلفة كل عامل
 
   const load = async () => {
     if (!id) return;
@@ -126,17 +128,66 @@ export default function ProjectDetail() {
       }
       setRentalsPaidSum(rentalsPaid);
 
-      // 5. تكلفة العمالة على هذا الموقع — للمعرفة فقط (لا تُخصم من الربح)
-      // (أيام الحضور الفعلي × متوسط الأجر اليومي المقدّر)
+      // 5. تكلفة العمالة الفعلية على هذا الموقع (تُخصم من الربح)
+      // المنطق: لكل عامل اشتغل في الموقع (من حضوره المرتبط بالمشروع):
+      //   - شهري: (الراتب الكامل ÷ 26 يوم عمل) × أيام حضوره  [الجمعة إجازة مدفوعة]
+      //   - يومي: الأجر اليومي × أيام حضوره
+      // الراتب الكامل = actual_salary، وإن كان صفراً نرجع لـ basic_salary + social_allowance
+      const MONTHLY_WORK_DAYS = 26;
       const { data: attendanceData } = await supabase
         .from('worker_attendance')
         .select('worker_id, status')
         .eq('project_id', id);
-      const presentDays = (attendanceData || []).filter(a =>
-        (a as { status?: string }).status === 'present' || !(a as { status?: string }).status
-      ).length;
-      // تقدير تكلفة العمالة بمتوسط أجر يومي (يُعرض فقط، لا يدخل حساب الربح)
-      setWorkersLaborCost(presentDays * 20);
+
+      // عدّ أيام حضور كل عامل في هذا الموقع
+      const daysByWorker = new Map<string, number>();
+      for (const a of (attendanceData || []) as Array<{ worker_id: string; status?: string }>) {
+        if (a.status && a.status !== 'present') continue; // نحسب الحضور فقط
+        daysByWorker.set(a.worker_id, (daysByWorker.get(a.worker_id) || 0) + 1);
+      }
+
+      let laborTotal = 0;
+      const details: { name: string; days: number; cost: number; type: string }[] = [];
+      if (daysByWorker.size > 0) {
+        const workerIds = Array.from(daysByWorker.keys());
+        const { data: workersData } = await supabase
+          .from('workers')
+          .select('id, name, name_en, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')
+          .in('id', workerIds);
+
+        for (const w of (workersData || []) as Array<{
+          id: string; name: string; name_en?: string; pay_type?: string;
+          daily_rate?: number; actual_salary?: number; basic_salary?: number; social_allowance?: number;
+        }>) {
+          const days = daysByWorker.get(w.id) || 0;
+          let dayCost = 0;
+          let type = '';
+          if (w.pay_type === 'daily') {
+            dayCost = Number(w.daily_rate || 0);
+            type = 'يومي';
+          } else {
+            // شهري: الراتب الكامل ÷ 26
+            const fullSalary = Number(w.actual_salary || 0) > 0
+              ? Number(w.actual_salary || 0)
+              : Number(w.basic_salary || 0) + Number(w.social_allowance || 0);
+            dayCost = fullSalary / MONTHLY_WORK_DAYS;
+            type = 'شهري';
+          }
+          const cost = dayCost * days;
+          laborTotal += cost;
+          details.push({ name: w.name_en || w.name, days, cost, type });
+        }
+        // ترتيب تنازلي حسب التكلفة
+        details.sort((a, b) => b.cost - a.cost);
+      }
+      setWorkersLaborCost(laborTotal);
+      setLaborDetails(details);
+
+      // 6. الأوفر تايم من التقارير اليومية لهذا المشروع
+      const overtimeSum = (lRes.data || []).reduce(
+        (sum, log) => sum + Number((log as DailyLog & { overtime_amount?: number }).overtime_amount || 0), 0
+      );
+      setOvertimeCost(overtimeSum);
 
     } catch (error) {
       toast.error('حدث خطأ أثناء تحميل البيانات المالية للمشروع');
@@ -219,8 +270,9 @@ export default function ProjectDetail() {
   const approvedVOs = vos.filter(v => v.status === 'approved' && v.billable).reduce((sum, v) => sum + Number(v.amount || 0), 0);
   const totalRevenue = contractValue + approvedVOs;
 
-  // المصاريف الفعلية المدفوعة فقط — تكلفة العمالة والشيكات الآجلة لا تدخل (حسب رؤية السيولة)
-  const totalExpenses = boxExpenses + purchasePaid + subcontractorPaidSum + rentalsPaidSum;
+  // المصاريف الفعلية: المدفوعة فعلاً + تكلفة العمالة الحقيقية + الأوفر تايم (الشيكات الآجلة لا تُخصم)
+  const laborTotal = workersLaborCost + overtimeCost;
+  const totalExpenses = boxExpenses + purchasePaid + subcontractorPaidSum + rentalsPaidSum + laborTotal;
   const netProfit = totalRevenue - totalExpenses;
   const isProfitable = netProfit >= 0;
 
@@ -246,7 +298,7 @@ export default function ProjectDetail() {
             {isProfitable ? <TrendingUp size={28} /> : <TrendingDown size={28} />}
             {formatCurrency(netProfit)}
           </div>
-          <p className="text-xs text-white/70">يُحسب بطرح المصاريف المدفوعة فعلاً (نثريات + مشتريات مصروفة + مقاولو باطن + إيجارات) من إجمالي الدخل. الشيكات الآجلة وتكلفة العمالة لا تُخصم.</p>
+          <p className="text-xs text-white/70">يُحسب بطرح كل المصاريف الفعلية (نثريات + مشتريات + مقاولو باطن + إيجارات + تكلفة العمالة والأوفر تايم) من إجمالي الدخل. الشيكات الآجلة لا تُخصم حتى تُصرف.</p>
         </div>
         <div className="grid grid-cols-2 gap-4 w-full md:w-auto text-slate-900">
           <div className="bg-white/90 p-3 rounded-xl min-w-[140px]">
@@ -282,11 +334,65 @@ export default function ProjectDetail() {
           <div className="text-[10px] text-slate-400">الإيجارات المرتبطة بالمشروع</div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
-          <div className="text-xs text-slate-400 flex items-center gap-1"><Briefcase size={14} /> تكلفة العمالة (للمعرفة فقط)</div>
-          <div className="text-lg font-bold text-purple-600">{formatCurrency(workersLaborCost)}</div>
-          <div className="text-[10px] text-slate-400">لا تُخصم من ربح المشروع</div>
+          <div className="text-xs text-slate-400 flex items-center gap-1"><Briefcase size={14} /> تكلفة العمالة</div>
+          <div className="text-lg font-bold text-purple-600">{formatCurrency(laborTotal)}</div>
+          <div className="text-[10px] text-slate-400">{laborDetails.length > 0 ? `${laborDetails.length} عامل` : 'لم تُسجّل رواتب'}{overtimeCost > 0 ? ` · أوفر تايم ${formatCurrency(overtimeCost)}` : ''}</div>
         </div>
       </div>
+
+      {/* تفصيل تكلفة العمالة */}
+      {laborDetails.length > 0 && (
+        <details className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden group">
+          <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors list-none">
+            <div className="flex items-center gap-2">
+              <Briefcase size={16} className="text-purple-600" />
+              <span className="font-bold text-slate-700 text-sm">تفصيل تكلفة العمالة</span>
+              <span className="text-xs text-slate-400">({laborDetails.length} عامل · {laborDetails.reduce((s, w) => s + w.days, 0)} يوم عمل)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-purple-600 text-sm">{formatCurrency(workersLaborCost)}</span>
+              <ChevronDown size={16} className="text-slate-400 group-open:rotate-180 transition-transform" />
+            </div>
+          </summary>
+          <div className="border-t border-slate-100 overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100 text-slate-500">
+                  <th className="p-3 font-semibold text-xs">العامل</th>
+                  <th className="p-3 font-semibold text-xs">النوع</th>
+                  <th className="p-3 font-semibold text-xs">أيام العمل بالموقع</th>
+                  <th className="p-3 font-semibold text-xs">التكلفة</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {laborDetails.map((w, i) => (
+                  <tr key={i} className="hover:bg-slate-50/50">
+                    <td className="p-3 font-medium text-slate-800">{w.name}</td>
+                    <td className="p-3"><Badge color={w.type === 'يومي' ? 'blue' : 'amber'}>{w.type}</Badge></td>
+                    <td className="p-3 text-slate-600">{w.days} يوم</td>
+                    <td className="p-3 font-bold text-purple-600">{formatCurrency(w.cost)}</td>
+                  </tr>
+                ))}
+                {overtimeCost > 0 && (
+                  <tr className="bg-amber-50/40">
+                    <td className="p-3 font-medium text-amber-800" colSpan={3}>إجمالي الأوفر تايم (من التقارير اليومية)</td>
+                    <td className="p-3 font-bold text-amber-700">{formatCurrency(overtimeCost)}</td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="bg-purple-50 border-t border-purple-100">
+                  <td className="p-3 font-bold text-slate-700" colSpan={3}>الإجمالي (يُخصم من ربح المشروع)</td>
+                  <td className="p-3 font-black text-purple-700">{formatCurrency(laborTotal)}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p className="text-[11px] text-slate-400 px-4 py-2 bg-slate-50/50">
+              العامل الشهري: الراتب الكامل ÷ 26 يوم عمل × أيام حضوره بالموقع (الجمعة إجازة مدفوعة). العامل اليومي: الأجر اليومي × أيام حضوره. أيام الحضور تُؤخذ من التقارير اليومية.
+            </p>
+          </div>
+        </details>
+      )}
 
       <div className="flex gap-2 p-1 bg-slate-100 rounded-xl w-fit">
         {(['milestones', 'vos', 'logs'] as const).map(t => (
