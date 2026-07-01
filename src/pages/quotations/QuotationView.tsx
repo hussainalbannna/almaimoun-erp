@@ -456,18 +456,21 @@ export default function QuotationView() {
           </div>
         </div>
 
-        {/* الصلاحية — شارة أنيقة */}
-        <div className="text-center mb-5">
-          <span className="inline-block text-sm font-bold py-2 px-5 rounded-full" style={{ background: '#faf6f1', color: '#7b4a2d', border: '1px solid #efe4d4' }}>{L.validity}</span>
-        </div>
+        {/* الصلاحية + التوقيع معاً (يبقيان في نفس الصفحة) */}
+        <div style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+          {/* الصلاحية — شارة أنيقة */}
+          <div className="text-center mb-5">
+            <span className="inline-block text-sm font-bold py-2 px-5 rounded-full" style={{ background: '#faf6f1', color: '#7b4a2d', border: '1px solid #efe4d4' }}>{L.validity}</span>
+          </div>
 
-        {/* خانة التوقيع */}
-        <div>
-          <div className="inline-block px-4 py-1.5 text-white text-sm font-bold mb-2" style={{ background: '#c4925a' }}>{L.acceptance}</div>
-          <div className="grid grid-cols-3 border rounded-lg overflow-hidden" style={{ borderColor: '#e2d5c5' }}>
-            <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.signature}</div>
-            <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.pname}</div>
-            <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50">{L.dateLabel}</div>
+          {/* خانة التوقيع */}
+          <div>
+            <div className="inline-block px-4 py-1.5 text-white text-sm font-bold mb-2" style={{ background: '#c4925a' }}>{L.acceptance}</div>
+            <div className="grid grid-cols-3 border rounded-lg overflow-hidden" style={{ borderColor: '#e2d5c5' }}>
+              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.signature}</div>
+              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.pname}</div>
+              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50">{L.dateLabel}</div>
+            </div>
           </div>
         </div>
         </div>{/* نهاية المحتوى فوق watermark */}
