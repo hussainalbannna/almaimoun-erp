@@ -7,7 +7,6 @@ import { readDocumentText, hasApiKey } from '../../lib/ai'
 // ════════════════════════════════════════════════════════════════
 //  صفحة عرض/طباعة عرض السعر — مؤسسة الميمون للمقاولات (CR 120637-2)
 //  التصميم البسيط الأصلي + الشروحات الكاملة + السعر الإجمالي فقط
-//  الطباعة مضبوطة على صفحتين مرتبتين (لا ينزل التوقيع لصفحة لحاله)
 //  بوست تنشن: تُرفق صفحات الخطوات (بنفس لغة التسعيرة)
 // ════════════════════════════════════════════════════════════════
 
@@ -329,7 +328,7 @@ export default function QuotationView() {
       {/* ═══ ورقة التسعيرة ═══ */}
       <div dir={dir} className="bg-white rounded-2xl shadow-sm border border-slate-200 print:border-0 print:shadow-none quote-page relative overflow-hidden">
         {/* شريط علوي ذهبي رفيع */}
-        <div className="q-top h-2 w-full print:h-2" style={{ background: 'linear-gradient(90deg, #c4925a 0%, #7b4a2d 50%, #c4925a 100%)' }} />
+        <div className="h-2 w-full print:h-2" style={{ background: 'linear-gradient(90deg, #c4925a 0%, #7b4a2d 50%, #c4925a 100%)' }} />
 
         {/* شعار خلفي مخفي (watermark) متدرّج — جمالية راقية */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none overflow-hidden" style={{ zIndex: 0 }}>
@@ -342,11 +341,11 @@ export default function QuotationView() {
         <div className="absolute pointer-events-none" style={{ top: '-60px', insetInlineEnd: '-60px', width: '200px', height: '200px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(196,146,90,0.06) 0%, transparent 70%)', zIndex: 0 }} />
 
         {/* المحتوى فوق الـ watermark */}
-        <div className="q-body relative p-8" style={{ zIndex: 1 }}>
+        <div className="relative p-8" style={{ zIndex: 1 }}>
         {/* رأس بهوية الميمون — تصميم راقٍ */}
-        <div className="q-header flex items-start justify-between pb-5 mb-6" style={{ borderBottom: '2px solid', borderImage: 'linear-gradient(90deg, #c4925a, #e5d9c8) 1' }}>
+        <div className="flex items-start justify-between pb-5 mb-6" style={{ borderBottom: '2px solid', borderImage: 'linear-gradient(90deg, #c4925a, #e5d9c8) 1' }}>
           <div>
-            <div className="q-coname text-xl font-bold" style={{ color: '#7b4a2d' }}>{L.name_co}</div>
+            <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{L.name_co}</div>
             <div className="text-[11px] text-slate-500 mt-1.5" dir="ltr" style={{ textAlign: isAr ? 'right' : 'left' }}>
               <div style={{ display: 'block' }}>C.R No: {FALLBACK.cr}</div>
               <div style={{ display: 'block' }}>{FALLBACK.phone}</div>
@@ -354,14 +353,14 @@ export default function QuotationView() {
             </div>
           </div>
           <div className={isAr ? 'text-left' : 'text-right'}>
-            <div className="q-title text-3xl font-black tracking-tight" style={{ color: '#c4925a' }}>{L.title}</div>
+            <div className="text-3xl font-black tracking-tight" style={{ color: '#c4925a' }}>{L.title}</div>
             <div className="inline-block mt-2 px-3 py-1 rounded-lg text-sm font-bold" style={{ background: '#faf6f1', color: '#7b4a2d' }} dir="ltr">{quote.quote_number}</div>
             <div className="text-xs text-slate-500 mt-1.5" dir="ltr">{quote.issue_date}</div>
           </div>
         </div>
 
         {/* بيانات العميل — كرت أنيق */}
-        <div className="q-client mb-5 rounded-xl p-4 text-sm" style={{ background: 'linear-gradient(135deg, #faf6f1 0%, #fdfbf8 100%)', border: '1px solid #efe4d4' }}>
+        <div className="mb-5 rounded-xl p-4 text-sm" style={{ background: 'linear-gradient(135deg, #faf6f1 0%, #fdfbf8 100%)', border: '1px solid #efe4d4' }}>
           <div className="text-xs font-bold mb-2 pb-2 flex items-center gap-2" style={{ color: '#c4925a', borderBottom: '1px solid #efe4d4' }}>
             <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#c4925a' }} />
             {L.clientInfo}
@@ -375,17 +374,17 @@ export default function QuotationView() {
         </div>
 
         {/* التحية */}
-        <p className={`q-greeting text-sm text-slate-600 leading-relaxed mb-4 ${alignClass}`}>{L.greeting}</p>
+        <p className={`text-sm text-slate-600 leading-relaxed mb-4 ${alignClass}`}>{L.greeting}</p>
 
         {/* الشروط */}
-        <div className="q-terms mb-4 text-sm rounded-lg p-3" style={{ background: '#fbfaf8', border: '1px solid #f0ebe3' }}>
+        <div className="mb-4 text-sm rounded-lg p-3" style={{ background: '#fbfaf8', border: '1px solid #f0ebe3' }}>
           <div className="font-bold mb-1" style={{ color: '#7b4a2d' }}>{L.termsTitle}:</div>
           {L.terms.map((term, i) => <div key={i} className="text-slate-600 flex gap-1.5"><span style={{ color: '#c4925a' }}>{i + 1}.</span>{term}</div>)}
         </div>
-        <p className={`q-estimate text-sm text-slate-600 leading-relaxed mb-4 ${alignClass}`}>{L.estimateLine}</p>
+        <p className={`text-sm text-slate-600 leading-relaxed mb-4 ${alignClass}`}>{L.estimateLine}</p>
 
         {/* جدول البنود بالشروحات — عنوان ملوّن + شرح أبيض للتمييز */}
-        <table className="q-table w-full text-sm mb-6 border-collapse" style={{ border: '1px solid #e5d9c8' }}>
+        <table className="w-full text-sm mb-6 border-collapse" style={{ border: '1px solid #e5d9c8' }}>
           <thead>
             <tr style={{ background: 'linear-gradient(90deg, #7b4a2d 0%, #9a6440 100%)' }}>
               <th className="text-center font-bold py-3 px-2 text-white w-10" style={{ border: '1px solid #6b3e26' }}>#</th>
@@ -394,29 +393,29 @@ export default function QuotationView() {
           </thead>
           <tbody>
             {FIXED_ITEMS.map((it, i) => (
-              <tr key={i} className="q-item">
+              <tr key={i}>
                 <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{i + 1}</td>
                 <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
                   {/* عنوان البند — بخلفية ملوّنة فاتحة */}
-                  <div className={`q-item-title font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
+                  <div className={`font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
                     {isAr ? it.ar : it.en}
                   </div>
                   {/* شرح البند — بخلفية بيضاء (تمييز) */}
-                  <div className={`q-item-desc text-xs text-slate-600 py-2 px-4 leading-relaxed ${alignClass}`} style={{ background: 'white' }}>
+                  <div className={`text-xs text-slate-600 py-2 px-4 leading-relaxed ${alignClass}`} style={{ background: 'white' }}>
                     {isAr ? it.detailAr : it.detailEn}
                   </div>
                 </td>
               </tr>
             ))}
             {optionalItems.map((it, i) => (
-              <tr key={`o-${i}`} className="q-item">
+              <tr key={`o-${i}`}>
                 <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{FIXED_ITEMS.length + i + 1}</td>
                 <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
-                  <div className={`q-item-title font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
+                  <div className={`font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
                     {isAr ? it.description : (it.description_en || it.description)}
                   </div>
                   {(isAr ? it.detail : it.detail_en) && (
-                    <div className={`q-item-desc text-xs text-slate-600 py-2 px-4 leading-relaxed ${alignClass}`} style={{ background: 'white' }}>
+                    <div className={`text-xs text-slate-600 py-2 px-4 leading-relaxed ${alignClass}`} style={{ background: 'white' }}>
                       {isAr ? it.detail : it.detail_en}
                     </div>
                   )}
@@ -426,30 +425,30 @@ export default function QuotationView() {
           </tbody>
         </table>
 
-        {/* السعر الإجمالي — مستطيل عمودي: شارة فوق والمبلغ كبير تحته (مثل النموذج) */}
+        {/* السعر الإجمالي — مستطيل بارز، السعر واضح والـ BD بجانبه */}
         <div className="flex justify-center mb-5">
-          <div className="q-grand w-full max-w-md rounded-xl shadow-md overflow-hidden" style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
-            {/* شارة العنوان — أعلى الصندوق */}
-            <div className="py-2 px-5 text-center" style={{ background: '#c4925a' }}>
-              <span className="text-white font-bold text-sm" style={{ letterSpacing: isAr ? 'normal' : '0.08em' }}>{L.grandTotal}</span>
+          <div className="w-full max-w-md rounded-xl shadow-md overflow-hidden flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
+            {/* عنوان Grand Total — يمين */}
+            <div className="py-4 px-5 h-full flex items-center" style={{ background: 'rgba(0,0,0,0.15)' }}>
+              <span className="text-white font-bold text-sm" style={{ letterSpacing: isAr ? 'normal' : '0.1em' }}>{L.grandTotal}</span>
             </div>
-            {/* المبلغ — كبير ووسط، والـ BD بجانبه */}
-            <div className="text-center py-5 px-4" style={{ background: 'linear-gradient(135deg, #8a5636 0%, #7b4a2d 55%, #5f3a22 100%)' }}>
-              <span className="q-grand-amt text-white font-black" dir="ltr" style={{ fontSize: '38px' }}>{fmt(quote.total)}</span>
-              <span className="text-white font-medium opacity-90" dir="ltr" style={{ fontSize: '17px', marginInlineStart: '8px' }}>{L.bd}</span>
+            {/* السعر + BD بجانبه */}
+            <div className="flex-1 text-center py-4 px-5">
+              <span className="text-white font-black" dir="ltr" style={{ fontSize: '34px' }}>{fmt(quote.total)}</span>
+              <span className="text-white font-medium opacity-90 text-base mr-2" dir="ltr"> {L.bd}</span>
             </div>
           </div>
         </div>
 
         {/* لا تشمل — كرت أنيق (مفصول عن مربع السعر) */}
-        <div className="q-excludes rounded-xl p-4 mb-6" style={{ background: '#fbfaf8', border: '1px solid #efe4d4', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+        <div className="rounded-xl p-4 mb-6" style={{ background: '#fbfaf8', border: '1px solid #efe4d4', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
           <div className="font-bold text-sm mb-2 flex items-center gap-2" style={{ color: '#7b4a2d' }}>
             <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#c4925a' }} />
             {L.excludes}
           </div>
-          <div className="q-excludes-grid text-xs text-slate-600 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+          <div className="text-xs text-slate-600 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
             {excluded.map((ex, i) => (
-              <div key={i} className="q-excludes-item flex gap-2">
+              <div key={i} className="flex gap-2">
                 <span className="shrink-0" style={{ color: '#c4925a' }}>{i + 1}.</span>
                 <span>{ex}</span>
               </div>
@@ -458,9 +457,9 @@ export default function QuotationView() {
         </div>
 
         {/* الصلاحية + التوقيع معاً (يبقيان في نفس الصفحة) */}
-        <div className="q-closing" style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+        <div style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
           {/* الصلاحية — شارة أنيقة */}
-          <div className="q-note text-center mb-5">
+          <div className="text-center mb-5">
             <span className="inline-block text-sm font-bold py-2 px-5 rounded-full" style={{ background: '#faf6f1', color: '#7b4a2d', border: '1px solid #efe4d4' }}>{L.validity}</span>
           </div>
 
@@ -468,9 +467,9 @@ export default function QuotationView() {
           <div>
             <div className="inline-block px-4 py-1.5 text-white text-sm font-bold mb-2" style={{ background: '#c4925a' }}>{L.acceptance}</div>
             <div className="grid grid-cols-3 border rounded-lg overflow-hidden" style={{ borderColor: '#e2d5c5' }}>
-              <div className="q-sign-cell px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.signature}</div>
-              <div className="q-sign-cell px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.pname}</div>
-              <div className="q-sign-cell px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50">{L.dateLabel}</div>
+              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.signature}</div>
+              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.pname}</div>
+              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50">{L.dateLabel}</div>
             </div>
           </div>
         </div>
@@ -520,42 +519,11 @@ export default function QuotationView() {
 
       <style>{`
         @media print {
-          @page { size: A4; margin: 10mm; }
-          html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff; }
+          @page { size: A4; margin: 12mm; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .no-print, .print\\:hidden { display: none !important; }
-
-          /* الورقة بدون إطار الكرت */
-          .quote-page { border: 0 !important; box-shadow: none !important; border-radius: 0 !important; }
-          .q-body { padding: 3mm 5mm !important; }
-          .q-top { display: none !important; }
-
-          /* كثافة مضغوطة لتثبيت التسعيرة على صفحتين */
-          .q-header { padding-bottom: 10px !important; margin-bottom: 12px !important; }
-          .q-coname { font-size: 19px !important; }
-          .q-title  { font-size: 28px !important; }
-          .q-client { padding: 9px 13px !important; margin-bottom: 10px !important; }
-          .q-greeting { margin-bottom: 8px !important; font-size: 10.5px !important; line-height: 1.5 !important; }
-          .q-terms  { padding: 8px 13px !important; margin-bottom: 8px !important; }
-          .q-estimate { margin-bottom: 8px !important; font-size: 10.5px !important; line-height: 1.5 !important; }
-          .q-table  { margin-bottom: 12px !important; }
-          .q-table th { padding-top: 6px !important; padding-bottom: 6px !important; }
-          .q-item-title { padding: 5px 14px !important; font-size: 10.5px !important; }
-          .q-item-desc  { padding: 5px 14px !important; font-size: 9px !important; line-height: 1.45 !important; }
-          .q-grand  { margin-bottom: 10px !important; }
-          .q-grand-amt { font-size: 34px !important; }
-          .q-excludes { padding: 11px 15px !important; margin-bottom: 12px !important; }
-          .q-excludes-grid { grid-template-columns: 1fr 1fr !important; column-gap: 26px !important; row-gap: 4px !important; }
-          .q-excludes-item { font-size: 9.5px !important; }
-          .q-note { margin-bottom: 12px !important; }
-          .q-sign-cell { padding-top: 22px !important; padding-bottom: 12px !important; }
-
-          /* المحافظة على تماسك الكتل */
-          .q-item { break-inside: avoid; page-break-inside: avoid; }
-          .q-grand, .q-excludes, .q-closing { break-inside: avoid; page-break-inside: avoid; }
-
-          /* صفحات الخطوات تبدأ كل واحدة في صفحة */
           .page-break { page-break-before: always; }
-          .quote-page.page-break { padding: 6mm !important; }
+          .quote-page { border: 0 !important; box-shadow: none !important; padding: 0 !important; }
         }
       `}</style>
     </div>
