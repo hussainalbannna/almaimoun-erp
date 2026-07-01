@@ -426,7 +426,7 @@ export default function QuotationView() {
         </table>
 
         {/* السعر الإجمالي — مستطيل بارز، السعر واضح والـ BD بجانبه */}
-        <div className="flex justify-center mb-10">
+        <div className="flex justify-center mb-5">
           <div className="w-full max-w-md rounded-xl shadow-md overflow-hidden flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
             {/* عنوان Grand Total — يمين */}
             <div className="py-4 px-5 h-full flex items-center" style={{ background: 'rgba(0,0,0,0.15)' }}>
@@ -441,12 +441,12 @@ export default function QuotationView() {
         </div>
 
         {/* لا تشمل — كرت أنيق (مفصول عن مربع السعر) */}
-        <div className="rounded-xl p-4 mb-6" style={{ background: '#fbfaf8', border: '1px solid #efe4d4' }}>
+        <div className="rounded-xl p-4 mb-6" style={{ background: '#fbfaf8', border: '1px solid #efe4d4', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
           <div className="font-bold text-sm mb-2 flex items-center gap-2" style={{ color: '#7b4a2d' }}>
             <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#c4925a' }} />
             {L.excludes}
           </div>
-          <div className="text-xs text-slate-600 grid grid-cols-1 gap-y-1">
+          <div className="text-xs text-slate-600 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
             {excluded.map((ex, i) => (
               <div key={i} className="flex gap-2">
                 <span className="shrink-0" style={{ color: '#c4925a' }}>{i + 1}.</span>
