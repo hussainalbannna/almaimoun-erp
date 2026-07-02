@@ -105,7 +105,7 @@ export default function QuotationForm() {
             const newOpt = { excavation: { enabled: false, price: 0 }, gypsum: { enabled: false, price: 0 }, painting: { enabled: false, price: 0 }, insulation: { enabled: false, price: 0 } }
             its.filter(it => it.category === 'optional').forEach(it => {
               const d = (it.description || '') + ' ' + (it.description_en || '').toLowerCase()
-              let k = 'excavation'
+              let k: keyof typeof newOpt = 'excavation'
               if (d.includes('جبس') || d.includes('gypsum')) k = 'gypsum'
               else if (d.includes('صباغة') || d.includes('دهان') || d.includes('painting')) k = 'painting'
               else if (d.includes('عزل') || d.includes('waterproof') || d.includes('insulation') || d.includes('thermal')) k = 'insulation'
