@@ -3,7 +3,7 @@ import {
   LayoutDashboard, FileText, ShoppingCart, Users, Building2,
   Settings, FileArchive, X, HardHat, Receipt, UserCog,
   ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
-  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound
+  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound, Banknote
 } from 'lucide-react'
 
 const navGroups = [
@@ -44,6 +44,7 @@ const navGroups = [
     label: 'المالية والمحاسبة',
     items: [
       { to: '/finance', label: 'اللوحة المالية', icon: PieChart },
+      { to: '/cheques', label: 'مركز الشيكات', icon: Banknote },
       { to: '/invoices', label: 'الفواتير', icon: FileText },
       { to: '/receipts', label: 'الإيصالات', icon: Receipt },
       { to: '/cashbook', label: 'دفتر الصندوق', icon: BookOpen },
