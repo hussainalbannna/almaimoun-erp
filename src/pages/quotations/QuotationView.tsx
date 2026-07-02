@@ -393,7 +393,7 @@ export default function QuotationView() {
           </thead>
           <tbody>
             {FIXED_ITEMS.map((it, i) => (
-              <tr key={i} className="q-row">
+              <tr key={i}>
                 <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{i + 1}</td>
                 <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
                   {/* عنوان البند — بخلفية ملوّنة فاتحة */}
@@ -408,7 +408,7 @@ export default function QuotationView() {
               </tr>
             ))}
             {optionalItems.map((it, i) => (
-              <tr key={`o-${i}`} className="q-row">
+              <tr key={`o-${i}`}>
                 <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{FIXED_ITEMS.length + i + 1}</td>
                 <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
                   <div className={`font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
@@ -448,7 +448,7 @@ export default function QuotationView() {
           </div>
           <div className="text-xs text-slate-600 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
             {excluded.map((ex, i) => (
-              <div key={i} className="flex gap-2 q-keep">
+              <div key={i} className="flex gap-2">
                 <span className="shrink-0" style={{ color: '#c4925a' }}>{i + 1}.</span>
                 <span>{ex}</span>
               </div>
@@ -456,21 +456,18 @@ export default function QuotationView() {
           </div>
         </div>
 
-        {/* الصلاحية + التوقيع معاً (يبقيان في نفس الصفحة) */}
-        <div className="q-keep">
-          {/* الصلاحية — شارة أنيقة */}
-          <div className="text-center mb-5">
-            <span className="inline-block text-sm font-bold py-2 px-5 rounded-full" style={{ background: '#faf6f1', color: '#7b4a2d', border: '1px solid #efe4d4' }}>{L.validity}</span>
-          </div>
+        {/* الصلاحية — شارة أنيقة (تتدفق طبيعياً) */}
+        <div className="text-center mb-5">
+          <span className="inline-block text-sm font-bold py-2 px-5 rounded-full" style={{ background: '#faf6f1', color: '#7b4a2d', border: '1px solid #efe4d4' }}>{L.validity}</span>
+        </div>
 
-          {/* خانة التوقيع */}
-          <div>
-            <div className="inline-block px-4 py-1.5 text-white text-sm font-bold mb-2" style={{ background: '#c4925a' }}>{L.acceptance}</div>
-            <div className="grid grid-cols-3 border rounded-lg overflow-hidden" style={{ borderColor: '#e2d5c5' }}>
-              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.signature}</div>
-              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.pname}</div>
-              <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50">{L.dateLabel}</div>
-            </div>
+        {/* خانة التوقيع (تبقى متماسكة فقط — صغيرة تلقى مكانها بسهولة) */}
+        <div className="q-keep">
+          <div className="inline-block px-4 py-1.5 text-white text-sm font-bold mb-2" style={{ background: '#c4925a' }}>{L.acceptance}</div>
+          <div className="grid grid-cols-3 border rounded-lg overflow-hidden" style={{ borderColor: '#e2d5c5' }}>
+            <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.signature}</div>
+            <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50 border-l" style={{ borderColor: '#e2d5c5' }}>{L.pname}</div>
+            <div className="px-3 py-4 text-center text-xs text-slate-500 bg-amber-50/50">{L.dateLabel}</div>
           </div>
         </div>
         </div>{/* نهاية المحتوى فوق watermark */}
@@ -525,19 +522,17 @@ export default function QuotationView() {
           .page-break { page-break-before: always; }
           .quote-page { border: 0 !important; box-shadow: none !important; padding: 0 !important; }
 
-          /* الجدول يتدفق طبيعياً بين الصفحات؛ كل صف يبقى متماسكاً */
-          table { page-break-inside: auto; }
+          /* الجدول وصفوفه تتدفق طبيعياً بين الصفحات دون ترك فراغ */
+          table, tr, tbody { page-break-inside: auto; }
           thead { display: table-header-group; }
-          .q-row { page-break-inside: avoid; }
 
-          /* عناصر تبقى متماسكة (لا تنقسم): السعر، التوقيع، كل سطر، كل خطوة */
+          /* فقط الوحدات الصغيرة تبقى متماسكة (السعر، جدول التوقيع، كل سطر مفرد) */
           .q-keep { page-break-inside: avoid; break-inside: avoid; }
 
-          /* عناصر تتدفق بحرية عبر الصفحات دون ترك فراغ كبير */
+          /* الحاويات الكبيرة تتدفق بحرية */
           .q-flow { page-break-inside: auto; break-inside: auto; }
 
-          /* منع الأسطر اليتيمة */
-          p, div { orphans: 3; widows: 3; }
+          p, div { orphans: 2; widows: 2; }
         }
       `}</style>
     </div>
