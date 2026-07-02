@@ -393,7 +393,7 @@ export default function QuotationView() {
           </thead>
           <tbody>
             {FIXED_ITEMS.map((it, i) => (
-              <tr key={i}>
+              <tr key={i} className="q-row">
                 <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{i + 1}</td>
                 <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
                   {/* عنوان البند — بخلفية ملوّنة فاتحة */}
@@ -408,7 +408,7 @@ export default function QuotationView() {
               </tr>
             ))}
             {optionalItems.map((it, i) => (
-              <tr key={`o-${i}`}>
+              <tr key={`o-${i}`} className="q-row">
                 <td className="text-center font-bold align-middle" style={{ border: '1px solid #e5d9c8', background: '#faf6f1', color: '#7b4a2d' }}>{FIXED_ITEMS.length + i + 1}</td>
                 <td className="p-0" style={{ border: '1px solid #e5d9c8' }}>
                   <div className={`font-bold py-2 px-4 ${alignClass}`} style={{ background: '#f3e9dc', color: '#5a3620' }}>
@@ -425,8 +425,8 @@ export default function QuotationView() {
           </tbody>
         </table>
 
-        {/* السعر الإجمالي — مستطيل بارز، السعر واضح والـ BD بجانبه */}
-        <div className="flex justify-center mb-5">
+        {/* السعر الإجمالي — مستطيل بارز، السعر واضح والـ BD بجانبه (يبقى متماسكاً) */}
+        <div className="flex justify-center mb-5 q-keep">
           <div className="w-full max-w-md rounded-xl shadow-md overflow-hidden flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
             {/* عنوان Grand Total — يمين */}
             <div className="py-4 px-5 h-full flex items-center" style={{ background: 'rgba(0,0,0,0.15)' }}>
@@ -440,15 +440,15 @@ export default function QuotationView() {
           </div>
         </div>
 
-        {/* لا تشمل — كرت أنيق (مفصول عن مربع السعر) */}
-        <div className="rounded-xl p-4 mb-6" style={{ background: '#fbfaf8', border: '1px solid #efe4d4', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+        {/* لا تشمل — كرت أنيق (يتدفق طبيعياً عبر الصفحات دون ترك فراغ) */}
+        <div className="rounded-xl p-4 mb-6 q-flow" style={{ background: '#fbfaf8', border: '1px solid #efe4d4' }}>
           <div className="font-bold text-sm mb-2 flex items-center gap-2" style={{ color: '#7b4a2d' }}>
             <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#c4925a' }} />
             {L.excludes}
           </div>
           <div className="text-xs text-slate-600 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
             {excluded.map((ex, i) => (
-              <div key={i} className="flex gap-2">
+              <div key={i} className="flex gap-2 q-keep">
                 <span className="shrink-0" style={{ color: '#c4925a' }}>{i + 1}.</span>
                 <span>{ex}</span>
               </div>
@@ -457,7 +457,7 @@ export default function QuotationView() {
         </div>
 
         {/* الصلاحية + التوقيع معاً (يبقيان في نفس الصفحة) */}
-        <div style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+        <div className="q-keep">
           {/* الصلاحية — شارة أنيقة */}
           <div className="text-center mb-5">
             <span className="inline-block text-sm font-bold py-2 px-5 rounded-full" style={{ background: '#faf6f1', color: '#7b4a2d', border: '1px solid #efe4d4' }}>{L.validity}</span>
@@ -482,7 +482,7 @@ export default function QuotationView() {
           <div dir={dir} className="bg-white rounded-xl border border-slate-200 p-8 mt-6 print:border-0 print:shadow-none quote-page page-break">
             <h2 className="text-xl font-bold text-center mb-5" style={{ color: '#7b4a2d' }}>{L.stepsTitle}</h2>
             {steps.slice(0, 6).map((step, i) => (
-              <div key={i} className="mb-4">
+              <div key={i} className="mb-4 q-keep">
                 <div className="font-bold text-sm mb-1" style={{ color: '#7b4a2d' }}>🔹 {L.step} {i + 1}: {step.t}</div>
                 <ul className={`text-xs space-y-0.5 text-slate-700 ${isAr ? 'pr-5' : 'pl-5'}`} style={{ listStyleType: 'disc' }}>
                   {step.items.map((item, j) => <li key={j} style={{ listStylePosition: 'outside', marginInlineStart: '1rem' }}>{item}</li>)}
@@ -493,7 +493,7 @@ export default function QuotationView() {
 
           <div dir={dir} className="bg-white rounded-xl border border-slate-200 p-8 mt-6 print:border-0 print:shadow-none quote-page page-break">
             {steps.slice(6).map((step, i) => (
-              <div key={i} className="mb-4">
+              <div key={i} className="mb-4 q-keep">
                 <div className="font-bold text-sm mb-1" style={{ color: '#7b4a2d' }}>🔹 {L.step} {i + 7}: {step.t}</div>
                 <ul className={`text-xs space-y-0.5 text-slate-700 ${isAr ? 'pr-5' : 'pl-5'}`} style={{ listStyleType: 'disc' }}>
                   {step.items.map((item, j) => <li key={j} style={{ listStylePosition: 'outside', marginInlineStart: '1rem' }}>{item}</li>)}
@@ -506,7 +506,7 @@ export default function QuotationView() {
             <h2 className="text-xl font-bold text-center mb-5" style={{ color: '#7b4a2d' }}>{L.notesTitle}</h2>
             <div className="space-y-2">
               {notes.map((note, i) => (
-                <div key={i} className="flex gap-2 text-xs text-slate-700">
+                <div key={i} className="flex gap-2 text-xs text-slate-700 q-keep">
                   <span style={{ color: '#16a34a' }} className="shrink-0">✓</span>
                   <span>{note}</span>
                 </div>
@@ -519,11 +519,25 @@ export default function QuotationView() {
 
       <style>{`
         @media print {
-          @page { size: A4; margin: 12mm; }
+          @page { size: A4; margin: 10mm; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .no-print, .print\\:hidden { display: none !important; }
           .page-break { page-break-before: always; }
           .quote-page { border: 0 !important; box-shadow: none !important; padding: 0 !important; }
+
+          /* الجدول يتدفق طبيعياً بين الصفحات؛ كل صف يبقى متماسكاً */
+          table { page-break-inside: auto; }
+          thead { display: table-header-group; }
+          .q-row { page-break-inside: avoid; }
+
+          /* عناصر تبقى متماسكة (لا تنقسم): السعر، التوقيع، كل سطر، كل خطوة */
+          .q-keep { page-break-inside: avoid; break-inside: avoid; }
+
+          /* عناصر تتدفق بحرية عبر الصفحات دون ترك فراغ كبير */
+          .q-flow { page-break-inside: auto; break-inside: auto; }
+
+          /* منع الأسطر اليتيمة */
+          p, div { orphans: 3; widows: 3; }
         }
       `}</style>
     </div>
