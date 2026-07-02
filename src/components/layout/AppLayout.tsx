@@ -24,6 +24,7 @@ const pageTitles: Record<string, string> = {
   '/receipts/new': 'إيصال جديد',
   // المالية
   '/finance': 'اللوحة المالية',
+  '/cheques': 'مركز الشيكات',
   '/cashbook': 'دفتر الصندوق',
   // أوامر الشراء والمشتريات
   '/lpos': 'أوامر الشراء',
