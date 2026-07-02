@@ -34,6 +34,7 @@ import WorkerProfile from './pages/workers/WorkerProfile'
 import PayrollDashboard from './pages/payroll/PayrollDashboard'
 import DailyLogList from './pages/daily-logs/DailyLogList'
 import CashBook from './pages/cashbook/CashBook'
+import ChequesCenter from './pages/cheques/ChequesCenter'
 import PurchaseInvoiceList from './pages/purchases/PurchaseInvoiceList'
 import PurchaseInvoiceForm from './pages/purchases/PurchaseInvoiceForm'
 // الأقسام المضافة
@@ -115,6 +116,7 @@ export default function App() {
               {/* اللوحة المالية ودفتر الصندوق */}
               <Route path="finance" element={<FinanceDashboard />} />
               <Route path="cashbook" element={<CashBook />} />
+              <Route path="cheques" element={<ChequesCenter />} />
 
               {/* أوامر الشراء */}
               <Route path="lpos" element={<LPOList />} />
