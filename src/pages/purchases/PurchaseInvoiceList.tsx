@@ -152,7 +152,7 @@ export default function PurchaseInvoiceList() {
     if (invoices.length === 0) { toast.error('لا توجد فواتير للتصدير'); return }
     try {
       const wb = XLSX.utils.book_new()
-      const t = today()
+      const t = today
 
       // تجهيز صفوف فاتورة لورقة
       const buildRows = (list: InvoiceRow[]) => {
