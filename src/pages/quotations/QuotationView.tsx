@@ -516,7 +516,7 @@ export default function QuotationView() {
 
       <style>{`
         @media print {
-          @page { size: A4; margin: 10mm; }
+          @page { size: A4; margin: 8mm; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .no-print, .print\\:hidden { display: none !important; }
           .page-break { page-break-before: always; }
@@ -526,13 +526,42 @@ export default function QuotationView() {
           table, tr, tbody { page-break-inside: auto; }
           thead { display: table-header-group; }
 
-          /* فقط الوحدات الصغيرة تبقى متماسكة (السعر، جدول التوقيع، كل سطر مفرد) */
+          /* فقط الوحدات الصغيرة تبقى متماسكة (السعر، جدول التوقيع) */
           .q-keep { page-break-inside: avoid; break-inside: avoid; }
-
-          /* الحاويات الكبيرة تتدفق بحرية */
           .q-flow { page-break-inside: auto; break-inside: auto; }
 
           p, div { orphans: 2; widows: 2; }
+
+          /* ═══ ضغط المحتوى ليترتّب على صفحتين (منع الصفحة الثالثة شبه الفارغة) ═══ */
+          /* تصغير الحشو الداخلي للصفحة */
+          .quote-page .relative.p-8 { padding: 0 !important; }
+
+          /* الجدول: تصغير الحشو والخط وإلغاء المسافة السفلية الكبيرة */
+          table.w-full { margin-bottom: 10px !important; font-size: 11px !important; }
+          table.w-full td > div { padding-top: 4px !important; padding-bottom: 4px !important; }
+          table.w-full thead th { padding-top: 6px !important; padding-bottom: 6px !important; }
+          table.w-full .text-xs { font-size: 10px !important; line-height: 1.4 !important; }
+
+          /* تصغير المسافات بين الأقسام */
+          .quote-page .mb-6 { margin-bottom: 10px !important; }
+          .quote-page .mb-5 { margin-bottom: 8px !important; }
+          .quote-page .mb-4 { margin-bottom: 8px !important; }
+          .quote-page .pb-5 { padding-bottom: 8px !important; }
+
+          /* رأس الصفحة أصغر */
+          .quote-page .text-3xl { font-size: 24px !important; }
+          .quote-page .text-xl { font-size: 16px !important; }
+
+          /* بطاقة العميل والشروط والتحية أنحف */
+          .quote-page .p-4 { padding: 8px 12px !important; }
+          .quote-page .p-3 { padding: 6px 10px !important; }
+          .quote-page .leading-relaxed { line-height: 1.4 !important; }
+
+          /* مربع السعر أصغر قليلاً */
+          .q-keep .py-4 { padding-top: 10px !important; padding-bottom: 10px !important; }
+
+          /* خانة التوقيع أنحف */
+          .q-keep .py-4.text-center { padding-top: 14px !important; padding-bottom: 14px !important; }
         }
       `}</style>
     </div>
