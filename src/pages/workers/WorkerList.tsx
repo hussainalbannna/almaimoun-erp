@@ -9,7 +9,7 @@ import Badge from '../../components/ui/Badge'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 
-const BRANCH_LABELS: Record<string, string> = { '2': 'الفرع 2', '3': 'الفرع 3', '5': 'الفرع 5' }
+const BRANCH_LABELS: Record<string, string> = { '2': 'الفرع 2', '4': 'الفرع 4', '5': 'الفرع 5' }
 
 export default function WorkerList() {
   const navigate = useNavigate()
