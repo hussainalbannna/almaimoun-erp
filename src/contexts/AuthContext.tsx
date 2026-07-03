@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 
@@ -9,42 +10,36 @@ interface AuthContextValue {
   signOut: () => Promise<void>
 }
 
-const AuthContext = createContext<AuthContextValue>({
-  session: null,
-  user: null,
-  loading: true,
-  signOut: async () => {},
-})
+const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let mounted = true
 
-    // Listen for auth state changes FIRST
+    // نستمع لتغيّرات الجلسة أولاً حتى لا نفوّت أي حدث بين الجلب والاشتراك
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      if (mounted) {
-        setSession(newSession)
-        setLoading(false)
-      }
+      if (!mounted) return
+      setSession(newSession)
+      setLoading(false)
     })
 
-    // Then check current session
-    supabase.auth.getSession().then(({ data }) => {
-      if (mounted) {
+    // ثم نجلب الجلسة الحالية
+    supabase.auth.getSession()
+      .then(({ data }) => {
+        if (!mounted) return
         setSession(data.session)
         setLoading(false)
-      }
-    }).catch(() => {
-      if (mounted) {
+      })
+      .catch(() => {
+        if (!mounted) return
         setSession(null)
         setLoading(false)
-      }
-    })
+      })
 
-    // Failsafe: never stay loading longer than 3 seconds
+    // أمان: لا نبقى في حالة تحميل أكثر من 3 ثوانٍ مهما حدث
     const timeout = setTimeout(() => {
       if (mounted) setLoading(false)
     }, 3000)
@@ -56,16 +51,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     setSession(null)
-  }
+  }, [])
 
-  return (
-    <AuthContext.Provider value={{ session, user: session?.user ?? null, loading, signOut }}>
-      {children}
-    </AuthContext.Provider>
+  // قيمة السياق مُخزّنة — لا تُنشأ من جديد إلا عند تغيّر الجلسة أو حالة التحميل،
+  // فلا تُعاد رسم جميع المكوّنات المستهلِكة بلا داعٍ
+  const value = useMemo<AuthContextValue>(
+    () => ({ session, user: session?.user ?? null, loading, signOut }),
+    [session, loading, signOut],
   )
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
-export const useAuth = () => useContext(AuthContext)
+export function useAuth(): AuthContextValue {
+  const context = useContext(AuthContext)
+  if (context === undefined) {
+    throw new Error('useAuth يجب أن يُستخدم داخل <AuthProvider>')
+  }
+  return context
+}
