@@ -1,6 +1,6 @@
 import type { ExtractedDocumentData } from '../types'
 
-const PDFJS_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+const PDFJS_WORKER_VERSION = '3.11.174' // إصدار احتياطي إن تعذّر قراءة إصدار pdfjs المحمّل
 
 let pdfjsReady: Promise<typeof import('pdfjs-dist')> | null = null
 
@@ -10,7 +10,9 @@ function getPdfjs(): Promise<typeof import('pdfjs-dist')> {
       const lib = pdfjs as typeof import('pdfjs-dist') & { default?: typeof import('pdfjs-dist') }
       const mod = lib.default ?? lib
       if (mod.GlobalWorkerOptions) {
-        mod.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN
+        // نشتقّ إصدار الـ worker من إصدار pdfjs المحمّل فعلاً حتى يتطابق مع الـ API دائماً
+        const version = (mod as { version?: string }).version || PDFJS_WORKER_VERSION
+        mod.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${version}/pdf.worker.min.js`
       }
       return mod
     })
@@ -22,63 +24,71 @@ async function extractPdfText(file: File): Promise<string> {
   const pdfjs = await getPdfjs()
   const arrayBuffer = await file.arrayBuffer()
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
-  let text = ''
-
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i)
-    const content = await page.getTextContent()
-    text += content.items.map((item) => ('str' in item ? item.str : '')).join(' ') + '\n'
+  try {
+    let text = ''
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const content = await page.getTextContent()
+      text += content.items.map((item) => ('str' in item ? item.str : '')).join(' ') + '\n'
+    }
+    return text
+  } finally {
+    await pdf.destroy() // تحرير ذاكرة المستند دائماً
   }
-
-  return text
 }
 
 async function renderPdfPagesToImages(file: File): Promise<string[]> {
   const pdfjs = await getPdfjs()
   const arrayBuffer = await file.arrayBuffer()
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
-  const images: string[] = []
-  const maxPages = Math.min(pdf.numPages, 8)
-
-  for (let i = 1; i <= maxPages; i++) {
-    const page = await pdf.getPage(i)
-    const viewport = page.getViewport({ scale: 2.5 })
-    const canvas = document.createElement('canvas')
-    canvas.width = viewport.width
-    canvas.height = viewport.height
-    const ctx = canvas.getContext('2d')!
-    await page.render({ canvasContext: ctx, viewport }).promise
-    images.push(canvas.toDataURL('image/png'))
-    canvas.remove()
+  try {
+    const images: string[] = []
+    const maxPages = Math.min(pdf.numPages, 8)
+    for (let i = 1; i <= maxPages; i++) {
+      const page = await pdf.getPage(i)
+      const viewport = page.getViewport({ scale: 2.5 })
+      const canvas = document.createElement('canvas')
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+      const ctx = canvas.getContext('2d')!
+      await page.render({ canvasContext: ctx, viewport }).promise
+      images.push(canvas.toDataURL('image/png'))
+      canvas.remove()
+    }
+    return images
+  } finally {
+    await pdf.destroy() // تحرير ذاكرة المستند دائماً
   }
-
-  return images
 }
 
 async function ocrImage(imageSource: string | File): Promise<string> {
   const { createWorker } = await import('tesseract.js')
   const worker = await createWorker('ara+eng')
-  const { data: { text } } = await worker.recognize(imageSource)
-  await worker.terminate()
-  return text
+  try {
+    const { data: { text } } = await worker.recognize(imageSource)
+    return text
+  } finally {
+    await worker.terminate() // إنهاء العامل دائماً حتى عند الفشل (منع تسرّب الذاكرة)
+  }
 }
 
 async function ocrMultipleImages(images: string[]): Promise<string> {
   const { createWorker, createScheduler } = await import('tesseract.js')
   const scheduler = createScheduler()
+  try {
+    const workerCount = Math.min(images.length, 3)
+    for (let i = 0; i < workerCount; i++) {
+      const worker = await createWorker('ara+eng')
+      scheduler.addWorker(worker)
+    }
 
-  const workerCount = Math.min(images.length, 3)
-  for (let i = 0; i < workerCount; i++) {
-    const worker = await createWorker('ara+eng')
-    scheduler.addWorker(worker)
+    const results = await Promise.all(
+      images.map(img => scheduler.addJob('recognize', img))
+    )
+    return results.map(r => r.data.text).join('\n')
+  } finally {
+    await scheduler.terminate() // إنهاء المجدول والعمّال دائماً
   }
-
-  const results = await Promise.all(
-    images.map(img => scheduler.addJob('recognize', img))
-  )
-
-  await scheduler.terminate()
-  return results.map(r => r.data.text).join('\n')
 }
 
 async function extractExcelData(file: File): Promise<{ text: string; rows: unknown[][] }> {
