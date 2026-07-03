@@ -37,24 +37,29 @@ export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKe
 })
 
 // ─── إعادة المحاولة الذكية عند فشل الشبكة ──────────────────────────
-// يحاول حتى 3 مرات مع تأخير متصاعد — يتجاوز انقطاعات الشبكة المؤقتة
+// يعيد المحاولة فقط للطلبات الآمنة (GET/HEAD). إعادة محاولة الكتابة
+// (POST/PATCH/DELETE) قد تُكرّر عملية نجحت أصلاً وضاعت استجابتها
+// (فاتورة/دفعة مكرّرة) — خطر على سلامة البيانات، فنتركها تفشل بوضوح.
 async function fetchWithRetry(
   input: RequestInfo | URL,
   init?: RequestInit,
   retries = 2,
   backoff = 400
 ): Promise<Response> {
+  const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
+  const idempotent = method === 'GET' || method === 'HEAD'
+
   try {
     const res = await fetch(input, init)
-    // أعد المحاولة فقط على أخطاء الخادم المؤقتة (5xx)
-    if (res.status >= 500 && res.status < 600 && retries > 0) {
+    // أعد المحاولة فقط على أخطاء الخادم المؤقتة (5xx) وللطلبات الآمنة
+    if (idempotent && res.status >= 500 && res.status < 600 && retries > 0) {
       await delay(backoff)
       return fetchWithRetry(input, init, retries - 1, backoff * 2)
     }
     return res
   } catch (err) {
-    // خطأ شبكة (انقطاع) — أعد المحاولة
-    if (retries > 0) {
+    // خطأ شبكة (انقطاع) — أعد المحاولة للطلبات الآمنة فقط
+    if (idempotent && retries > 0) {
       await delay(backoff)
       return fetchWithRetry(input, init, retries - 1, backoff * 2)
     }
