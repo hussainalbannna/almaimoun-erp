@@ -83,8 +83,8 @@ export interface PendingChequeSets {
   guaranteeTotal: number // إجمالي شيكات الضمان القائمة (التزام محتمل، ليس مصروفاً)
 }
 
-export async function fetchPendingChequeSets(): Promise<PendingChequeSets> {
-  const cheques = await fetchCheques()
+// دالة نقية — تحسب من شيكات مجلوبة مسبقاً (قابلة للاختبار وتتجنّب الجلب المكرّر)
+export function computePendingChequeSets(cheques: ChequeRow[]): PendingChequeSets {
   const purchaseIds = new Set<string>()
   const subPaymentIds = new Set<string>()
   let pendingTotal = 0
@@ -101,6 +101,11 @@ export async function fetchPendingChequeSets(): Promise<PendingChequeSets> {
     if (c.related_type === 'subcontractor_payment' && c.related_id) subPaymentIds.add(c.related_id)
   }
   return { purchaseIds, subPaymentIds, pendingTotal, guaranteeTotal }
+}
+
+// غلاف يجلب الشيكات ثم يحسب
+export async function fetchPendingChequeSets(): Promise<PendingChequeSets> {
+  return computePendingChequeSets(await fetchCheques())
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -217,18 +222,22 @@ export interface CashPosition {
   overduePending: number        // منها: استحقت ولم تُسوَّ (تحتاج تسوية فورية)
 }
 
-export async function fetchCashPosition(): Promise<CashPosition> {
-  const cheques = await fetchCheques()
-  const t = todayStr()
-  const in7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
+// دالة نقية — تحسب مركز السيولة من شيكات مجلوبة مسبقاً
+export function computeCashPosition(cheques: ChequeRow[], today: string = todayStr()): CashPosition {
+  const in7 = new Date(new Date(today).getTime() + 7 * 86400000).toISOString().slice(0, 10)
   let pendingChequesTotal = 0, guaranteeChequesTotal = 0, dueWithin7Days = 0, overduePending = 0
   for (const c of cheques) {
     if (c.direction !== 'outgoing' || c.status !== 'pending') continue
     const amt = Number(c.amount || 0)
     if (c.cheque_type === 'guarantee') { guaranteeChequesTotal += amt; continue }
     pendingChequesTotal += amt
-    if (c.due_date && c.due_date < t) overduePending += amt
+    if (c.due_date && c.due_date < today) overduePending += amt
     else if (c.due_date && c.due_date <= in7) dueWithin7Days += amt
   }
   return { pendingChequesTotal, guaranteeChequesTotal, dueWithin7Days, overduePending }
+}
+
+// غلاف يجلب الشيكات ثم يحسب
+export async function fetchCashPosition(): Promise<CashPosition> {
+  return computeCashPosition(await fetchCheques())
 }
