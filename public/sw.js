@@ -2,7 +2,7 @@
 //  مؤسسة الميمون — Service Worker
 //  استراتيجية ذكية: الشبكة أولاً للبيانات، الكاش أولاً للأصول الثابتة
 // ===================================================================
-const VERSION = 'almaimoun-v3'
+const VERSION = 'almaimoun-v4'
 const STATIC_CACHE = `${VERSION}-static`
 const RUNTIME_CACHE = `${VERSION}-runtime`
 
@@ -14,39 +14,49 @@ const PRECACHE_URLS = [
   '/Logo_Final-01.jpg',
 ]
 
+// كتابة نسخة في الكاش وإرجاع الوعد (يُمرَّر إلى waitUntil لضمان اكتمال الكتابة)
+function putInCache(cacheName, request, response) {
+  return caches.open(cacheName).then(cache => cache.put(request, response))
+}
+
+// هل هذا أصل ثابت؟ (سكربتات، أنماط، خطوط، صور)
+function isStaticAsset(pathname) {
+  return /\.(?:js|css|woff2?|ttf|otf|eot|png|jpe?g|svg|gif|webp|ico)$/i.test(pathname)
+}
+
 // ───────────────────────────────────────────
 // التثبيت — تخزين الأصول الأساسية
+// كل ملف على حدة حتى لا يُفشل خطأٌ واحد (404 مثلاً) عملية التثبيت بالكامل
 // ───────────────────────────────────────────
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE)
-      .then(cache => cache.addAll(PRECACHE_URLS))
+      .then(cache => Promise.allSettled(PRECACHE_URLS.map(u => cache.add(u))))
       .then(() => self.skipWaiting())
-      .catch(() => self.skipWaiting())
   )
 })
 
 // ───────────────────────────────────────────
-// التفعيل — حذف الإصدارات القديمة من الكاش
+// التفعيل — حذف الإصدارات القديمة + تفعيل Navigation Preload + السيطرة على الصفحات
 // ───────────────────────────────────────────
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys
-          .filter(k => !k.startsWith(VERSION))
-          .map(k => caches.delete(k))
-      ))
-      .then(() => self.clients.claim())
+    (async () => {
+      // حذف أي كاش لا يخص الإصدار الحالي
+      const keys = await caches.keys()
+      await Promise.all(
+        keys.filter(k => !k.startsWith(VERSION)).map(k => caches.delete(k))
+      )
+
+      // تسريع التنقّل: السماح للمتصفح ببدء طلب الصفحة أثناء إقلاع الـ Service Worker
+      if (self.registration.navigationPreload) {
+        await self.registration.navigationPreload.enable()
+      }
+
+      await self.clients.claim()
+    })()
   )
 })
-
-// ───────────────────────────────────────────
-// مساعد: هل هذا أصل ثابت؟ (صور، خطوط، أيقونات)
-// ───────────────────────────────────────────
-function isStaticAsset(url) {
-  return /\.(?:js|css|woff2?|ttf|otf|eot|png|jpe?g|svg|gif|webp|ico)$/i.test(url)
-}
 
 // ───────────────────────────────────────────
 // اعتراض الطلبات — استراتيجية مزدوجة ذكية
@@ -68,65 +78,82 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/storage/') ||
     url.pathname.startsWith('/functions/')
   ) {
-    return // المتصفح يتولاها مباشرة من الشبكة
+    return
   }
 
   // 3) تجاهل النطاقات الخارجية (لا نتحكم بها)
   if (url.origin !== self.location.origin) return
 
-  // 4) طلبات التنقّل (فتح صفحة) → الشبكة أولاً، وعند الانقطاع نعرض index.html
-  //    ضروري لتطبيق SPA حتى تعمل كل المسارات الداخلية أوفلاين
+  // 4) طلبات التنقّل (فتح صفحة) → الشبكة أولاً (مع Navigation Preload)،
+  //    وعند الانقطاع نعرض index.html — ضروري لتطبيق SPA ليعمل كل مسار أوفلاين
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
-        .then(response => {
-          const clone = response.clone()
-          caches.open(RUNTIME_CACHE).then(c => c.put('/index.html', clone))
+      (async () => {
+        try {
+          const preloaded = await event.preloadResponse
+          const response = preloaded || (await fetch(request))
+          if (response && response.ok) {
+            event.waitUntil(putInCache(RUNTIME_CACHE, '/index.html', response.clone()))
+          }
           return response
-        })
-        .catch(() =>
-          caches.match('/index.html').then(r => r || caches.match('/'))
-        )
+        } catch {
+          const shell = (await caches.match('/index.html')) || (await caches.match('/'))
+          return shell || Response.error()
+        }
+      })()
     )
     return
   }
 
-  // 5) الأصول الثابتة → الكاش أولاً (أسرع)، ثم تحديث في الخلفية
+  // 5) الأصول الثابتة → الكاش أولاً (أسرع)، مع تحديث في الخلفية (stale-while-revalidate)
   if (isStaticAsset(url.pathname)) {
     event.respondWith(
-      caches.match(request).then(cached => {
+      (async () => {
+        const cached = await caches.match(request)
         const networkFetch = fetch(request)
           .then(response => {
-            if (response.ok) {
-              const clone = response.clone()
-              caches.open(STATIC_CACHE).then(c => c.put(request, clone))
+            if (response && response.ok) {
+              return putInCache(STATIC_CACHE, request, response.clone()).then(() => response)
             }
             return response
           })
           .catch(() => cached)
+        // إبقاء الـ SW حياً حتى يكتمل التحديث في الخلفية (يتجنّب إنهاءه قبل الكتابة)
+        event.waitUntil(networkFetch.catch(() => {}))
         return cached || networkFetch
-      })
+      })()
     )
     return
   }
 
   // 6) كل ما تبقّى → الشبكة أولاً مع الرجوع للكاش عند الانقطاع
   event.respondWith(
-    fetch(request)
-      .then(response => {
-        if (response.ok) {
-          const clone = response.clone()
-          caches.open(RUNTIME_CACHE).then(c => c.put(request, clone))
+    (async () => {
+      try {
+        const response = await fetch(request)
+        if (response && response.ok) {
+          event.waitUntil(putInCache(RUNTIME_CACHE, request, response.clone()))
         }
         return response
-      })
-      .catch(() => caches.match(request))
+      } catch {
+        const cached = await caches.match(request)
+        return cached || new Response('غير متصل بالشبكة', {
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        })
+      }
+    })()
   )
 })
 
 // ───────────────────────────────────────────
 // استقبال أمر التحديث الفوري من التطبيق
+// (يدعم النص 'SKIP_WAITING' أو الكائن { type: 'SKIP_WAITING' })
 // ───────────────────────────────────────────
 self.addEventListener('message', (event) => {
-  if (event.data === 'SKIP_WAITING') self.skipWaiting()
+  const data = event.data
+  if (data === 'SKIP_WAITING' || (data && data.type === 'SKIP_WAITING')) {
+    self.skipWaiting()
+  }
 })
