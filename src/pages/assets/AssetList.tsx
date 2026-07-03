@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2, TrendingUp } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate } from '../../lib/utils'
 import Button from '../../components/ui/Button'
-import Badge from '../../components/ui/Badge'
+import Badge, { type BadgeColor } from '../../components/ui/Badge'
 import toast from 'react-hot-toast'
 
 interface Asset {
@@ -34,7 +35,7 @@ const ASSET_TYPE_LABELS: Record<string, string> = {
   equipment: 'معدة', vehicle: 'مركبة', tool: 'أداة',
   scaffolding: 'سقالات', generator: 'مولد', other: 'أخرى',
 }
-const STATUS_COLORS: Record<string, string> = { available: 'green', in_use: 'blue', maintenance: 'orange', retired: 'gray' }
+const STATUS_COLORS: Record<string, BadgeColor> = { available: 'green', in_use: 'blue', maintenance: 'orange', retired: 'gray' }
 const STATUS_LABELS: Record<string, string> = { available: 'متاح', in_use: 'قيد الاستخدام', maintenance: 'صيانة', retired: 'مستبعد' }
 
 const emptyForm = {
@@ -52,22 +53,23 @@ const daysUntil = (date: string | null) => {
   return Math.ceil(diff / 86400000)
 }
 
+// جلب الأصول (مصدر React Query)
+async function fetchAssets(): Promise<Asset[]> {
+  const { data } = await supabase.from('assets').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Asset[]
+}
+
 export default function AssetList() {
-  const [assets, setAssets] = useState<Asset[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('assets').select('*').order('created_at', { ascending: false })
-    setAssets((data ?? []) as Asset[])
-    setLoading(false)
-  }
-  useEffect(() => { load() }, [])
+  const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
+  // بعد أي تعديل: إبطال الكاش فيتحدّث كل مستهلِك لهذا المفتاح تلقائياً
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['assets'] })
 
   const openNew = () => { setEditId(null); setForm(emptyForm); setShowForm(true) }
   const openEdit = (a: Asset) => {
@@ -114,7 +116,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); load()
+      setShowForm(false); setForm(emptyForm); setEditId(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -130,25 +132,31 @@ export default function AssetList() {
     }).eq('id', a.id)
     if (error) { toast.error('حدث خطأ'); return }
     toast.success('تم تسجيل دفع القسط')
-    load()
+    reload()
   }
 
-  const filtered = assets.filter(a =>
-    a.name.includes(search) || (a.plate_number || '').includes(search) || (a.current_location || '').includes(search)
+  const filtered = useMemo(() =>
+    assets.filter(a =>
+      (a.name || '').includes(search) || (a.plate_number || '').includes(search) || (a.current_location || '').includes(search)
+    ),
+    [assets, search],
   )
 
-  // إحصائيات الأقساط
-  const installmentAssets = assets.filter(a => a.payment_method === 'installment')
-  const totalRemaining = installmentAssets.reduce((s, a) => {
-    const remaining = (a.total_installments - a.paid_installments) * a.monthly_installment
-    return s + (remaining > 0 ? remaining : 0)
-  }, 0)
-  const dueSoon = installmentAssets.filter(a => {
-    const d = daysUntil(a.next_installment_date)
-    return a.paid_installments < a.total_installments && d !== null && d <= 7
-  })
+  // إحصائيات الأقساط — تُحسب فقط عند تغيّر الأصول (لا عند كل رندر/كتابة في النموذج)
+  const { installmentAssets, totalRemaining, dueSoon } = useMemo(() => {
+    const installmentAssets = assets.filter(a => a.payment_method === 'installment')
+    const totalRemaining = installmentAssets.reduce((s, a) => {
+      const remaining = (a.total_installments - a.paid_installments) * a.monthly_installment
+      return s + (remaining > 0 ? remaining : 0)
+    }, 0)
+    const dueSoon = installmentAssets.filter(a => {
+      const d = daysUntil(a.next_installment_date)
+      return a.paid_installments < a.total_installments && d !== null && d <= 7
+    })
+    return { installmentAssets, totalRemaining, dueSoon }
+  }, [assets])
 
-  if (loading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
+  if (isLoading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
 
   const isInst = form.payment_method === 'installment'
 
@@ -299,7 +307,7 @@ export default function AssetList() {
                     </div>
                     <div className="text-xs text-slate-500">{ASSET_TYPE_LABELS[asset.asset_type] || asset.asset_type}</div>
                   </div>
-                  <Badge color={(STATUS_COLORS[asset.status] || 'gray') as 'green' | 'blue' | 'orange' | 'gray'}>{STATUS_LABELS[asset.status] || asset.status}</Badge>
+                  <Badge color={STATUS_COLORS[asset.status] || 'gray'}>{STATUS_LABELS[asset.status] || asset.status}</Badge>
                 </div>
                 {asset.plate_number && <div className="text-sm text-slate-600 mb-1" dir="ltr" style={{ textAlign: 'right' }}>اللوحة: {asset.plate_number}</div>}
                 {asset.current_location && (
