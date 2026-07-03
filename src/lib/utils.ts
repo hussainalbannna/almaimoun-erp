@@ -50,15 +50,7 @@ export function timeAgo(date: string | null | undefined): string {
 //  150.000 → "150 د.ب"   |   150.5 → "150.500 د.ب"
 // ═══════════════════════════════════════════
 export function formatCurrency(amount: number | null | undefined, suffix = 'د.ب'): string {
-  const num = Number(amount ?? 0)
-  if (isNaN(num)) return `0 ${suffix}`
-  const negative = num < 0
-  const abs = Math.abs(num)
-  const trimmed = abs.toFixed(3).replace(/\.?0+$/, '')
-  const [intPart, decPart] = trimmed.split('.')
-  const formattedInt = parseInt(intPart, 10).toLocaleString('en-US')
-  const result = decPart ? `${formattedInt}.${decPart}` : formattedInt
-  return `${negative ? '-' : ''}${result} ${suffix}`
+  return `${formatNumber(amount)} ${suffix}`
 }
 
 // نسخة إنجليزية (للتوافق مع الصفحات القديمة)
@@ -89,7 +81,7 @@ export function formatFileSize(bytes: number | null | undefined): string {
   const b = Number(bytes ?? 0)
   if (b <= 0) return '0 ب'
   const units = ['ب', 'ك.ب', 'م.ب', 'غ.ب']
-  const i = Math.floor(Math.log(b) / Math.log(1024))
+  const i = Math.min(Math.floor(Math.log(b) / Math.log(1024)), units.length - 1)
   const size = b / Math.pow(1024, i)
   return `${size.toFixed(size >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
 }
@@ -98,8 +90,10 @@ export function formatFileSize(bytes: number | null | undefined): string {
 //  تحويل الرقم إلى كلمات (تفقيط) بالدينار
 // ═══════════════════════════════════════════
 export function tafqit(amount: number): string {
-  const num = Math.floor(Math.abs(amount))
-  const fils = Math.round((Math.abs(amount) - num) * 1000)
+  let num = Math.floor(Math.abs(amount))
+  let fils = Math.round((Math.abs(amount) - num) * 1000)
+  // معالجة حمل الكسور: لو قرّب الفلس إلى 1000 يُرحَّل ديناراً (يمنع "undefined فلس")
+  if (fils >= 1000) { num += Math.floor(fils / 1000); fils %= 1000 }
   if (num === 0 && fils === 0) return 'صفر دينار'
 
   const ones = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة',
@@ -350,7 +344,8 @@ function normalizeBahrainPhone(phone: string): string {
 //  فتح واتساب برسالة جاهزة
 // ═══════════════════════════════════════════
 export function openWhatsApp(phone: string, message: string) {
-  const number = normalizeBahrainPhone(phone)
+  const number = normalizeBahrainPhone(phone || '')
+  if (!number) return
   window.open(`https://wa.me/${number}?text=${encodeURIComponent(message)}`, '_blank')
 }
 
