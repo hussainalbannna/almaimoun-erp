@@ -11,7 +11,17 @@ interface SendButtonsProps {
   onEmailSent?: () => void
 }
 
-export default function SendButtons({ email, phone, subject, emailBody, whatsappMessage, onEmailSent }: SendButtonsProps) {
+export default function SendButtons({
+  email,
+  phone,
+  subject,
+  emailBody,
+  whatsappMessage,
+  onEmailSent,
+}: SendButtonsProps) {
+  // لا نعرض شيئاً إن لم يتوفّر بريد ولا هاتف (بدل عنصر فارغ في الصفحة)
+  if (!email && !phone) return null
+
   const handleEmail = () => {
     if (!email) return
     openEmail(email, subject, emailBody)
@@ -27,22 +37,26 @@ export default function SendButtons({ email, phone, subject, emailBody, whatsapp
     <div className="flex gap-2 flex-wrap">
       {email && (
         <Button
+          type="button"
           variant="outline"
           size="sm"
           icon={<Mail size={15} />}
           onClick={handleEmail}
           title={`إرسال إلى ${email}`}
+          aria-label={`إرسال بريد إلى ${email}`}
         >
           إرسال بريد
         </Button>
       )}
       {phone && (
         <Button
+          type="button"
           variant="outline"
           size="sm"
           icon={<MessageCircle size={15} className="text-green-600" />}
           onClick={handleWhatsApp}
           title={`واتساب ${phone}`}
+          aria-label={`إرسال عبر واتساب إلى ${phone}`}
           className="border-green-300 text-green-700 hover:bg-green-50"
         >
           واتساب
