@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Calendar as CalIcon, ChevronRight, ChevronLeft, Banknote, ShieldCheck, UserCog, FileText, ListTodo, Briefcase, Calculator, Package, KeyRound } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { useQuery } from '@tanstack/react-query'
+import {
+  Calendar as CalIcon, ChevronRight, ChevronLeft, Banknote, ShieldCheck,
+  UserCog, FileText, ListTodo, Briefcase, Calculator, Package, KeyRound,
+} from 'lucide-react'
+import { safeSelect } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
 
 // ════════════════════════════════════════════════════════════════════
@@ -34,6 +38,70 @@ interface RentalRow {
   status: string
 }
 
+// ─── واجهات صفوف الاستعلامات: تحلّ محل unknown/الكاست وتلتقط أخطاء أسماء الحقول وقت البناء ───
+interface ChequeRow {
+  id: string
+  cheque_number: string | null
+  cheque_type: string | null
+  direction: string | null
+  party_name: string | null
+  amount: number | null
+  due_date: string | null
+  status: string | null
+}
+
+interface WorkerRow {
+  id: string
+  name: string
+  visa_expiry: string | null
+  cpr_expiry: string | null
+  passport_expiry: string | null
+  status: string | null
+}
+
+interface AssetRow {
+  id: string
+  name: string
+  insurance_expiry: string | null
+  registration_expiry: string | null
+}
+
+interface InvoiceRow {
+  id: string
+  invoice_number: string
+  customer_name: string
+  total: number | null
+  status: string
+  due_date: string | null
+}
+
+interface TaskRow {
+  id: string
+  title: string
+  due_date: string | null
+  status: string
+}
+
+interface ProjectRow {
+  id: string
+  project_name: string
+  start_date: string | null
+  end_date: string | null
+}
+
+interface QuoteRow {
+  id: string
+  quote_number: string
+  customer_name: string
+  valid_until: string | null
+  status: string
+}
+
+interface CalendarData {
+  events: CalEvent[]
+  rentals: RentalRow[]
+}
+
 const TYPE_META: Record<EventType, { label: string; color: string; icon: typeof CalIcon }> = {
   cheque: { label: 'شيك آجل', color: '#dc2626', icon: Banknote },
   guarantee: { label: 'شيك ضمان', color: '#2563eb', icon: ShieldCheck },
@@ -48,107 +116,152 @@ const TYPE_META: Record<EventType, { label: string; color: string; icon: typeof 
 
 const WEEKDAYS = ['أحد', 'إثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت']
 const MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
-
-const toKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const dateKey = (s: string | null) => (s ? s.slice(0, 10) : '')
 const CYCLE_LABELS: Record<string, string> = { monthly: 'شهري', weekly: 'أسبوعي', daily: 'يومي', one_time: 'مرة واحدة' }
 
+// مراجع فارغة ثابتة — تمنع إنشاء مصفوفات جديدة كل رندر وتحافظ على استقرار الـ useMemo
+const EMPTY_EVENTS: CalEvent[] = []
+const EMPTY_RENTALS: RentalRow[] = []
+
+const toKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const dateKey = (s: string | null | undefined) => (s ? s.slice(0, 10) : '')
+
+const arabicDateLabel = (key: string): string => {
+  const [y, m, d] = key.split('-')
+  return `${parseInt(d, 10)} ${MONTHS[parseInt(m, 10) - 1]} ${y}`
+}
+
+// حقول الوثائق (التسمية + اسم العمود) — مصدر واحد يمنع تكرار الحلقات
+const WORKER_DOC_FIELDS: ReadonlyArray<readonly [string, keyof WorkerRow]> = [
+  ['انتهاء إقامة', 'visa_expiry'],
+  ['انتهاء بطاقة', 'cpr_expiry'],
+  ['انتهاء جواز', 'passport_expiry'],
+]
+const ASSET_DOC_FIELDS: ReadonlyArray<readonly [string, keyof AssetRow]> = [
+  ['انتهاء تأمين', 'insurance_expiry'],
+  ['انتهاء استمارة', 'registration_expiry'],
+]
+
+// ════════════════════════════════════════════════════════════════════
+//  بناء الأحداث الثابتة — دالة نقية (تُبنى مرة واحدة داخل الاستعلام، وتُختبر بسهولة)
+// ════════════════════════════════════════════════════════════════════
+function buildFixedEvents(src: {
+  cheques: ChequeRow[]
+  rentals: RentalRow[]
+  workers: WorkerRow[]
+  assets: AssetRow[]
+  invoices: InvoiceRow[]
+  tasks: TaskRow[]
+  projects: ProjectRow[]
+  quotes: QuoteRow[]
+}): CalEvent[] {
+  const ev: CalEvent[] = []
+
+  // الشيكات: المعلّقة فقط (المصروف والمرتد لا يظهر كموعد قادم)
+  for (const c of src.cheques) {
+    if (c.status !== 'pending' || !c.due_date) continue
+    const isGuarantee = c.cheque_type === 'guarantee'
+    const dirLabel = c.direction === 'incoming' ? ' (وارد)' : ''
+    const who = c.party_name || (c.cheque_number ? `رقم ${c.cheque_number}` : '')
+    ev.push({
+      id: `chq-${c.id}`,
+      type: isGuarantee ? 'guarantee' : 'cheque',
+      date: dateKey(c.due_date),
+      title: `${isGuarantee ? 'ضمان' : 'شيك'}: ${who}${dirLabel}`,
+      amount: Number(c.amount) || 0,
+      link: '/cheques',
+    })
+  }
+
+  // انتهاء الإيجارات المؤقتة النشطة
+  for (const r of src.rentals) {
+    if (r.status === 'active' && r.rental_type === 'temporary' && r.end_date) {
+      ev.push({ id: `rent-end-${r.id}`, type: 'rental', date: dateKey(r.end_date), title: `انتهاء إيجار: ${r.name}`, link: '/rentals' })
+    }
+  }
+
+  // وثائق العمّال (إقامة/بطاقة/جواز) — النشطون فقط
+  for (const w of src.workers) {
+    if (w.status === 'inactive') continue
+    for (const [label, field] of WORKER_DOC_FIELDS) {
+      const value = w[field]
+      if (value) ev.push({ id: `w-${w.id}-${field}`, type: 'worker_doc', date: dateKey(value), title: `${label}: ${w.name}`, link: `/workers/${w.id}/edit` })
+    }
+  }
+
+  // وثائق الأصول والمعدات (تأمين/استمارة)
+  for (const a of src.assets) {
+    for (const [label, field] of ASSET_DOC_FIELDS) {
+      const value = a[field]
+      if (value) ev.push({ id: `a-${a.id}-${field}`, type: 'asset_doc', date: dateKey(value), title: `${label}: ${a.name}`, link: '/assets' })
+    }
+  }
+
+  // الفواتير غير المدفوعة (تاريخ الاستحقاق)
+  for (const inv of src.invoices) {
+    if (inv.status !== 'paid' && inv.due_date) {
+      ev.push({ id: `inv-${inv.id}`, type: 'invoice', date: dateKey(inv.due_date), title: `فاتورة ${inv.invoice_number}`, amount: Number(inv.total) || 0, link: `/invoices/${inv.id}/view` })
+    }
+  }
+
+  // المهام غير المنجزة
+  for (const t of src.tasks) {
+    if (t.status !== 'done' && t.due_date) {
+      ev.push({ id: `t-${t.id}`, type: 'task', date: dateKey(t.due_date), title: t.title, link: '/tasks' })
+    }
+  }
+
+  // بدايات وتسليمات المشاريع
+  for (const pr of src.projects) {
+    if (pr.start_date) ev.push({ id: `ps-${pr.id}`, type: 'project', date: dateKey(pr.start_date), title: `بداية: ${pr.project_name}`, link: `/projects/${pr.id}` })
+    if (pr.end_date) ev.push({ id: `pe-${pr.id}`, type: 'project', date: dateKey(pr.end_date), title: `تسليم: ${pr.project_name}`, link: `/projects/${pr.id}` })
+  }
+
+  // انتهاء صلاحية عروض الأسعار المُرسلة
+  for (const q of src.quotes) {
+    if (q.status === 'sent' && q.valid_until) {
+      ev.push({ id: `q-${q.id}`, type: 'quote', date: dateKey(q.valid_until), title: `انتهاء عرض ${q.quote_number}`, link: `/quotations/${q.id}` })
+    }
+  }
+
+  return ev
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  جلب كل مصادر التقويم دفعة واحدة عبر safeSelect المشترك
+//  كل استعلام يفشل بأمان ويعيد [] دون إسقاط بقية المصادر
+// ════════════════════════════════════════════════════════════════════
+async function fetchCalendarData(): Promise<CalendarData> {
+  const [cheques, rentals, workers, assets, invoices, tasks, projects, quotes] = await Promise.all([
+    safeSelect<ChequeRow>('cheques', 'id,cheque_number,cheque_type,direction,party_name,amount,due_date,status'),
+    safeSelect<RentalRow>('rentals', 'id,name,rental_type,billing_cycle,cost,due_day,start_date,end_date,status'),
+    safeSelect<WorkerRow>('workers', 'id,name,visa_expiry,cpr_expiry,passport_expiry,status'),
+    safeSelect<AssetRow>('assets', 'id,name,insurance_expiry,registration_expiry'),
+    safeSelect<InvoiceRow>('invoices', 'id,invoice_number,customer_name,total,status,due_date'),
+    safeSelect<TaskRow>('tasks', 'id,title,due_date,status'),
+    safeSelect<ProjectRow>('projects', 'id,project_name,start_date,end_date'),
+    safeSelect<QuoteRow>('quotations', 'id,quote_number,customer_name,valid_until,status'),
+  ])
+
+  const events = buildFixedEvents({ cheques, rentals, workers, assets, invoices, tasks, projects, quotes })
+  return { events, rentals }
+}
+
+// ════════════════════════════════════════════════════════════════════
 export default function CalendarView() {
   const navigate = useNavigate()
-  const [cursor, setCursor] = useState(new Date())
-  const [selected, setSelected] = useState(toKey(new Date()))
-  const [events, setEvents] = useState<CalEvent[]>([])
-  const [rentals, setRentals] = useState<RentalRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const [cursor, setCursor] = useState(() => new Date())
+  const [selected, setSelected] = useState(() => toKey(new Date()))
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> => {
-        try { const { data } = await p; return data ?? [] } catch { return [] }
-      }
-      const [cheques, rentalRows, workers, assets, invoices, tasks, projects, quotes] = await Promise.all([
-        safe(supabase.from('cheques').select('id,cheque_number,cheque_type,direction,party_name,amount,due_date,status')),
-        safe(supabase.from('rentals').select('id,name,rental_type,billing_cycle,cost,due_day,start_date,end_date,status')),
-        safe(supabase.from('workers').select('id,name,visa_expiry,cpr_expiry,passport_expiry,status')),
-        safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry')),
-        safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
-        safe(supabase.from('tasks').select('id,title,due_date,status')),
-        safe(supabase.from('projects').select('id,project_name,start_date,end_date')),
-        safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status')),
-      ])
+  // مصدر واحد للبيانات — يستفيد من التخزين المؤقت العام، ويمكن تحديثه بإبطال ['calendar-events']
+  const { data, isLoading } = useQuery<CalendarData>({
+    queryKey: ['calendar-events'],
+    queryFn: fetchCalendarData,
+  })
 
-      const ev: CalEvent[] = []
+  const events = data?.events ?? EMPTY_EVENTS
+  const rentals = data?.rentals ?? EMPTY_RENTALS
 
-      // ─── الشيكات من مركز الشيكات: المعلّقة فقط (المصروف والمرتد لا يظهر كموعد) ───
-      for (const c of cheques as Record<string, unknown>[]) {
-        if (c.status !== 'pending' || !c.due_date) continue
-        const isGuarantee = c.cheque_type === 'guarantee'
-        const dirLabel = c.direction === 'incoming' ? ' (وارد)' : ''
-        ev.push({
-          id: `chq-${c.id}`,
-          type: isGuarantee ? 'guarantee' : 'cheque',
-          date: dateKey(c.due_date as string),
-          title: `${isGuarantee ? 'ضمان' : 'شيك'}: ${(c.party_name as string) || (c.cheque_number ? `رقم ${c.cheque_number}` : '')}${dirLabel}`,
-          amount: Number(c.amount) || 0,
-          link: '/cheques',
-        })
-      }
-
-      // ─── انتهاء الإيجارات المؤقتة النشطة ───
-      for (const r of rentalRows as unknown as RentalRow[]) {
-        if (r.status === 'active' && r.rental_type === 'temporary' && r.end_date) {
-          ev.push({ id: `rent-end-${r.id}`, type: 'rental', date: dateKey(r.end_date), title: `انتهاء إيجار: ${r.name}`, link: '/rentals' })
-        }
-      }
-
-      // ─── وثائق العمال ───
-      for (const w of workers as Record<string, unknown>[]) {
-        if (w.status === 'inactive') continue
-        for (const [label, f] of [['انتهاء إقامة', 'visa_expiry'], ['انتهاء بطاقة', 'cpr_expiry'], ['انتهاء جواز', 'passport_expiry']] as const) {
-          if (w[f]) ev.push({ id: `w-${w.id}-${f}`, type: 'worker_doc', date: dateKey(w[f] as string), title: `${label}: ${w.name}`, link: `/workers/${w.id}/edit` })
-        }
-      }
-
-      // ─── وثائق الأصول والمعدات ───
-      for (const a of assets as Record<string, unknown>[]) {
-        for (const [label, f] of [['انتهاء تأمين', 'insurance_expiry'], ['انتهاء استمارة', 'registration_expiry']] as const) {
-          if (a[f]) ev.push({ id: `a-${a.id}-${f}`, type: 'asset_doc', date: dateKey(a[f] as string), title: `${label}: ${a.name}`, link: '/assets' })
-        }
-      }
-
-      // ─── الفواتير غير المدفوعة (تاريخ الاستحقاق) ───
-      for (const inv of invoices as Record<string, unknown>[]) {
-        if (inv.status !== 'paid' && inv.due_date)
-          ev.push({ id: `inv-${inv.id}`, type: 'invoice', date: dateKey(inv.due_date as string), title: `فاتورة ${inv.invoice_number}`, amount: Number(inv.total) || 0, link: `/invoices/${inv.id}/view` })
-      }
-
-      // ─── المهام غير المنجزة ───
-      for (const t of tasks as Record<string, unknown>[]) {
-        if (t.status !== 'done' && t.due_date)
-          ev.push({ id: `t-${t.id}`, type: 'task', date: dateKey(t.due_date as string), title: t.title as string, link: '/tasks' })
-      }
-
-      // ─── بدايات وتسليمات المشاريع ───
-      for (const pr of projects as Record<string, unknown>[]) {
-        if (pr.start_date) ev.push({ id: `ps-${pr.id}`, type: 'project', date: dateKey(pr.start_date as string), title: `بداية: ${pr.project_name}`, link: `/projects/${pr.id}` })
-        if (pr.end_date) ev.push({ id: `pe-${pr.id}`, type: 'project', date: dateKey(pr.end_date as string), title: `تسليم: ${pr.project_name}`, link: `/projects/${pr.id}` })
-      }
-
-      // ─── انتهاء صلاحية عروض الأسعار المُرسلة ───
-      for (const q of quotes as Record<string, unknown>[]) {
-        if (q.status === 'sent' && q.valid_until)
-          ev.push({ id: `q-${q.id}`, type: 'quote', date: dateKey(q.valid_until as string), title: `انتهاء عرض ${q.quote_number}`, link: `/quotations/${q.id}` })
-      }
-
-      setRentals(rentalRows as unknown as RentalRow[])
-      setEvents(ev)
-      setLoading(false)
-    }
-    load()
-  }, [])
-
-  // ─── استحقاقات الإيجارات الدورية — تُولَّد للشهر المعروض وما حوله ───
+  // استحقاقات الإيجارات الدورية — تُولَّد للشهر المعروض وما حوله
   const rentalDueEvents = useMemo(() => {
     const out: CalEvent[] = []
     const active = rentals.filter(r => r.status === 'active' && r.rental_type === 'recurring' && r.due_day)
@@ -199,11 +312,15 @@ export default function CalendarView() {
   }, [cursor])
 
   const todayKey = toKey(new Date())
-  const selectedEvents = eventsByDate[selected] ?? []
+  const selectedEvents = eventsByDate[selected] ?? EMPTY_EVENTS
+
   // إجمالي التزامات اليوم المختار (شيكات + إيجارات لها مبلغ)
-  const selectedMoneyTotal = selectedEvents
-    .filter(e => (e.type === 'cheque' || e.type === 'guarantee' || e.type === 'rental') && e.amount)
-    .reduce((s, e) => s + (e.amount || 0), 0)
+  const selectedMoneyTotal = useMemo(
+    () => selectedEvents
+      .filter(e => (e.type === 'cheque' || e.type === 'guarantee' || e.type === 'rental') && e.amount)
+      .reduce((s, e) => s + (e.amount || 0), 0),
+    [selectedEvents],
+  )
 
   const prevMonth = () => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))
   const nextMonth = () => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))
@@ -222,7 +339,7 @@ export default function CalendarView() {
             <p className="text-sm text-slate-500">كل المواعيد والاستحقاقات — شيكات، إيجارات، وثائق، مشاريع</p>
           </div>
         </div>
-        <button onClick={goToday} className="text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">اليوم</button>
+        <button type="button" onClick={goToday} className="text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">اليوم</button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -230,9 +347,9 @@ export default function CalendarView() {
         <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-4">
           {/* رأس الشهر */}
           <div className="flex items-center justify-between mb-4">
-            <button onClick={prevMonth} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100"><ChevronRight size={20} /></button>
+            <button type="button" onClick={prevMonth} aria-label="الشهر السابق" className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100"><ChevronRight size={20} /></button>
             <h2 className="font-bold text-slate-800">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</h2>
-            <button onClick={nextMonth} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100"><ChevronLeft size={20} /></button>
+            <button type="button" onClick={nextMonth} aria-label="الشهر التالي" className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100"><ChevronLeft size={20} /></button>
           </div>
 
           {/* أيام الأسبوع */}
@@ -241,21 +358,27 @@ export default function CalendarView() {
           </div>
 
           {/* الأيام */}
-          {loading ? (
+          {isLoading ? (
             <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
           ) : (
             <div className="grid grid-cols-7 gap-1">
               {grid.map((d, i) => {
                 if (!d) return <div key={i} />
                 const key = toKey(d)
-                const dayEvents = eventsByDate[key] ?? []
+                const dayEvents = eventsByDate[key] ?? EMPTY_EVENTS
                 const isToday = key === todayKey
                 const isSelected = key === selected
                 return (
-                  <button key={i} onClick={() => setSelected(key)}
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setSelected(key)}
+                    aria-pressed={isSelected}
+                    aria-label={`${arabicDateLabel(key)}${dayEvents.length ? ` — ${dayEvents.length} مواعيد` : ''}`}
                     className={`min-h-[64px] rounded-lg p-1.5 text-right border transition-colors ${
                       isSelected ? 'border-amber-400 bg-amber-50' : isToday ? 'border-slate-300 bg-slate-50' : 'border-transparent hover:bg-slate-50'
-                    }`}>
+                    }`}
+                  >
                     <div className={`text-sm font-medium ${isToday ? 'text-amber-700' : 'text-slate-700'}`}>{d.getDate()}</div>
                     <div className="flex flex-wrap gap-0.5 mt-1">
                       {dayEvents.slice(0, 4).map(e => (
@@ -282,9 +405,7 @@ export default function CalendarView() {
 
         {/* أحداث اليوم المختار */}
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <h2 className="font-semibold text-slate-700 mb-3">
-            {(() => { const [y, m, dd] = selected.split('-'); return `${parseInt(dd)} ${MONTHS[parseInt(m) - 1]} ${y}` })()}
-          </h2>
+          <h2 className="font-semibold text-slate-700 mb-3">{arabicDateLabel(selected)}</h2>
           {selectedMoneyTotal > 0 && (
             <div className="flex items-center justify-between bg-red-50 border border-red-100 rounded-lg px-3 py-2 mb-3">
               <span className="text-xs text-red-600 font-medium">التزامات هذا اليوم</span>
@@ -299,8 +420,12 @@ export default function CalendarView() {
                 const meta = TYPE_META[e.type]
                 const Icon = meta.icon
                 return (
-                  <button key={e.id} onClick={() => e.link && navigate(e.link)}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors text-right">
+                  <button
+                    key={e.id}
+                    type="button"
+                    onClick={() => e.link && navigate(e.link)}
+                    className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors text-right"
+                  >
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: meta.color + '22' }}>
                       <Icon size={15} style={{ color: meta.color }} />
                     </div>
