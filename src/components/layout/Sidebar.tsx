@@ -1,26 +1,39 @@
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, FileText, ShoppingCart, Users, Building2,
   Settings, FileArchive, X, HardHat, Receipt, UserCog,
   ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
-  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound, Banknote
+  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound, Banknote,
+  type LucideIcon,
 } from 'lucide-react'
 
-const navGroups = [
+interface NavItem {
+  to: string
+  label: string
+  icon: LucideIcon
+  end?: boolean // مطابقة تامّة للمسار (للوحة التحكم فقط حتى لا تبقى نشطة في كل الصفحات)
+}
+
+interface NavGroup {
+  label: string
+  items: NavItem[]
+}
+
+const navGroups: NavGroup[] = [
   {
     label: 'الرئيسية',
     items: [
-      { to: '/', label: 'لوحة التحكم', icon: LayoutDashboard, exact: true },
+      { to: '/', label: 'لوحة التحكم', icon: LayoutDashboard, end: true },
       { to: '/assistant', label: 'المساعد الذكي', icon: Bot },
       { to: '/calendar', label: 'التقويم', icon: Calendar },
       { to: '/notifications', label: 'مركز الإشعارات', icon: Bell },
-    ]
+    ],
   },
   {
     label: 'المبيعات والعروض',
     items: [
       { to: '/quotations', label: 'عروض الأسعار', icon: Calculator },
-    ]
+    ],
   },
   {
     label: 'إدارة المشاريع',
@@ -29,7 +42,7 @@ const navGroups = [
       { to: '/daily-logs', label: 'تقارير الموقع وأوامر التغيير', icon: ClipboardList },
       { to: '/assets', label: 'الأصول والمعدات', icon: Package },
       { to: '/rentals', label: 'الإيجارات والمصاريف', icon: KeyRound },
-    ]
+    ],
   },
   {
     label: 'الموارد البشرية',
@@ -38,7 +51,7 @@ const navGroups = [
       { to: '/payroll', label: 'كشف الرواتب', icon: UserCog },
       { to: '/subcontractors', label: 'مقاولو الباطن', icon: Wrench },
       { to: '/tasks', label: 'المهام والتذكيرات', icon: ListTodo },
-    ]
+    ],
   },
   {
     label: 'المالية والمحاسبة',
@@ -48,7 +61,7 @@ const navGroups = [
       { to: '/invoices', label: 'الفواتير', icon: FileText },
       { to: '/receipts', label: 'الإيصالات', icon: Receipt },
       { to: '/cashbook', label: 'دفتر الصندوق', icon: BookOpen },
-    ]
+    ],
   },
   {
     label: 'المشتريات',
@@ -56,14 +69,14 @@ const navGroups = [
       { to: '/purchases', label: 'الفواتير والمدفوعات', icon: CreditCard },
       { to: '/lpos', label: 'أوامر الشراء (LPO)', icon: ShoppingCart },
       { to: '/suppliers', label: 'الموردون', icon: Truck },
-    ]
+    ],
   },
   {
     label: 'الدليل',
     items: [
       { to: '/contacts', label: 'جهات الاتصال', icon: Phone },
       { to: '/customers', label: 'العملاء', icon: Building2 },
-    ]
+    ],
   },
   {
     label: '',
@@ -71,7 +84,7 @@ const navGroups = [
       { to: '/reports', label: 'التقارير والإحصائيات', icon: BarChart2 },
       { to: '/documents', label: 'المستندات', icon: FileArchive },
       { to: '/settings', label: 'الإعدادات', icon: Settings },
-    ]
+    ],
   },
 ]
 
@@ -81,12 +94,14 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
-  const location = useLocation()
-
   return (
     <>
       {open && (
-        <div className="fixed inset-0 bg-black/50 z-20 lg:hidden" onClick={onClose} />
+        <div
+          className="fixed inset-0 bg-black/50 z-20 lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
       )}
 
       <aside
@@ -111,13 +126,18 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               <div className="text-xs" style={{ color: '#c4925a' }}>ALMAIMOUN CONSTRUCTION</div>
             </div>
           </div>
-          <button className="lg:hidden text-white/50 hover:text-white" onClick={onClose}>
+          <button
+            type="button"
+            className="lg:hidden text-white/50 hover:text-white"
+            onClick={onClose}
+            aria-label="إغلاق القائمة"
+          >
             <X size={20} />
           </button>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 p-3 overflow-y-auto scrollbar-thin space-y-3">
+        <nav className="flex-1 p-3 overflow-y-auto scrollbar-thin space-y-3" aria-label="التنقّل الرئيسي">
           {navGroups.map((group, gi) => (
             <div key={gi}>
               {group.label && (
@@ -126,32 +146,31 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 </div>
               )}
               <div className="space-y-0.5">
-                {group.items.map((item) => {
-                  const { to, label, icon: Icon } = item
-                  const exact = 'exact' in item ? item.exact : false
-                  const isActive = exact
-                    ? location.pathname === to
-                    : location.pathname.startsWith(to)
-
-                  return (
-                    <NavLink
-                      key={to}
-                      to={to}
-                      onClick={onClose}
-                      className={`
-                        flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors
-                        ${isActive
+                {group.items.map(({ to, label, icon: Icon, end }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={end}
+                    onClick={onClose}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        isActive
                           ? 'text-white'
                           : 'text-white/50 hover:text-white hover:bg-white/5'
-                        }
-                      `}
-                      style={isActive ? { background: 'rgba(196,146,90,0.2)', color: '#d9a04e' } : {}}
-                    >
-                      <Icon size={16} style={isActive ? { color: '#c4925a' } : {}} />
-                      {label}
-                    </NavLink>
-                  )
-                })}
+                      }`
+                    }
+                    style={({ isActive }) =>
+                      isActive ? { background: 'rgba(196,146,90,0.2)', color: '#d9a04e' } : undefined
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <Icon size={16} style={isActive ? { color: '#c4925a' } : undefined} />
+                        {label}
+                      </>
+                    )}
+                  </NavLink>
+                ))}
               </div>
             </div>
           ))}
