@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Bot, Send, Loader2, Sparkles, User, Trash2, AlertCircle, RefreshCw } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { safeSelect } from '../../lib/supabase'
 import { askAI, hasApiKey, type ChatMessage } from '../../lib/ai'
 
 // عدد الأيام حتى تاريخ معيّن (سالب = منتهي)
@@ -42,46 +43,35 @@ interface BusinessData {
   vos: Record<string, unknown>[]
 }
 
+// جلب بيانات الشركة للسياق (مصدر React Query) — كل استعلام يفشل بأمان عبر safeSelect
+async function fetchBusinessData(): Promise<BusinessData> {
+  const [projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos] = await Promise.all([
+    safeSelect('projects', 'id,project_number,project_name,client_name,location,contract_value,status,start_date,end_date'),
+    safeSelect('workers', 'name,profession,nationality,worker_type,status,visa_expiry,cpr_expiry,passport_expiry,basic_salary,actual_salary,daily_rate'),
+    safeSelect('invoices', 'invoice_number,customer_name,issue_date,due_date,status,total,project_id'),
+    safeSelect('receipts', 'receipt_number,customer_name,amount,receipt_date,project_id'),
+    safeSelect('suppliers', 'name,company_name,phone'),
+    safeSelect('project_milestones', 'name,percentage,amount,status,project_id'),
+    safeSelect('purchase_invoices', 'supplier_name,project_id,project_name,amount,payment_method,check_due_date,vendor_invoice_number'),
+    safeSelect('subcontractor_payments', 'amount,payment_method,check_due_date,payment_date,project_id'),
+    safeSelect('accounts_payable', 'amount,category,expense_type,project_id,entry_date'),
+    safeSelect('quotations', 'quote_number,customer_name,project_name,total,status,valid_until'),
+    safeSelect('tasks', 'title,status,priority,due_date'),
+    safeSelect('variation_orders', 'project_id,description,amount,status'),
+  ])
+  return { projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos }
+}
+
 export default function AIAssistant() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [dataReady, setDataReady] = useState(false)
-  const bizData = useRef<BusinessData | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const keyOk = hasApiKey()
 
-  const loadData = async () => {
-    setDataReady(false)
-    const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> => {
-      try { const { data } = await p; return data ?? [] } catch { return [] }
-    }
-    try {
-      const [projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos] = await Promise.all([
-        safe(supabase.from('projects').select('id,project_number,project_name,client_name,location,contract_value,status,start_date,end_date')),
-        safe(supabase.from('workers').select('name,profession,nationality,worker_type,status,visa_expiry,cpr_expiry,passport_expiry,basic_salary,actual_salary,daily_rate')),
-        safe(supabase.from('invoices').select('invoice_number,customer_name,issue_date,due_date,status,total,project_id')),
-        safe(supabase.from('receipts').select('receipt_number,customer_name,amount,receipt_date,project_id')),
-        safe(supabase.from('suppliers').select('name,company_name,phone')),
-        safe(supabase.from('project_milestones').select('name,percentage,amount,status,project_id')),
-        safe(supabase.from('purchase_invoices').select('supplier_name,project_id,project_name,amount,payment_method,check_due_date,vendor_invoice_number')),
-        safe(supabase.from('subcontractor_payments').select('amount,payment_method,check_due_date,payment_date,project_id')),
-        safe(supabase.from('accounts_payable').select('amount,category,expense_type,project_id,entry_date')),
-        safe(supabase.from('quotations').select('quote_number,customer_name,project_name,total,status,valid_until')),
-        safe(supabase.from('tasks').select('title,status,priority,due_date')),
-        safe(supabase.from('variation_orders').select('project_id,description,amount,status')),
-      ])
-      bizData.current = {
-        projects, workers, invoices, receipts, suppliers, milestones,
-        purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos,
-      }
-      setDataReady(true)
-    } catch {
-      setDataReady(true)
-    }
-  }
-
-  useEffect(() => { loadData() }, [])
+  // بيانات الشركة عبر React Query — تُخزَّن مؤقتاً فلا تُعاد الاستعلامات الـ12 عند كل دخول للصفحة
+  const { data: bizData, isFetching, refetch } = useQuery({ queryKey: ['ai-business-data'], queryFn: fetchBusinessData })
+  const dataReady = !isFetching && !!bizData
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -89,7 +79,7 @@ export default function AIAssistant() {
 
   // بناء ملخّص نصّي ذكي للبيانات — مع حساب ربحية كل مشروع
   const buildContext = (): string => {
-    const d = bizData.current
+    const d = bizData
     if (!d) return 'لا توجد بيانات محمّلة.'
 
     const today = new Date().toISOString().slice(0, 10)
@@ -246,7 +236,7 @@ export default function AIAssistant() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={loadData} title="تحديث البيانات" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-amber-700 px-3 py-1.5 rounded-lg hover:bg-amber-50">
+          <button onClick={() => refetch()} title="تحديث البيانات" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-amber-700 px-3 py-1.5 rounded-lg hover:bg-amber-50">
             <RefreshCw size={15} className={!dataReady ? 'animate-spin' : ''} /> تحديث
           </button>
           {messages.length > 0 && (
