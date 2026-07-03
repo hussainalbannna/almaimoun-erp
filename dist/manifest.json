@@ -1,15 +1,18 @@
 {
+  "id": "/",
   "name": "مؤسسة الميمون للمقاولات",
   "short_name": "الميمون",
   "description": "نظام إدارة مشاريع المقاولات والحسابات — Almaimoun Construction ERP",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait-primary",
   "background_color": "#1c0f09",
   "theme_color": "#c4925a",
   "lang": "ar",
   "dir": "rtl",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/Logo_Final-01.jpg",
