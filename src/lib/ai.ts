@@ -2,6 +2,9 @@
 //  مساعد الذكاء الاصطناعي — قراءة وفهم المستندات والصور
 //  يدعم: PDF، صور، مستندات ممسوحة ضوئياً (OCR)، خط اليد
 //  المفتاح يُحفظ في السحابة (قاعدة البيانات) ويعمل على كل الأجهزة
+//  ملاحظة أمنية: النداء يتم حالياً من المتصفح مباشرةً، وكل النداءات تمرّ
+//  عبر callAnthropic — فتحويلها لدالة Supabase طرفية لإخفاء المفتاح يصبح
+//  تعديلاً موضعياً في مكان واحد.
 // ════════════════════════════════════════════════════════════════════
 
 import { supabase } from './supabase'
@@ -162,22 +165,31 @@ function makeError(message: string, code?: string): AIError {
   return e
 }
 
-// ─── قراءة مستند/صورة وإرجاع النص ──────────────────────────────────────
-export async function readDocumentText(file: File, instruction: string): Promise<string> {
+// ─── مساعدات مشتركة للاتصال بالخدمة ────────────────────────────────────
+
+// استخراج النص من كتل رد الخدمة
+function extractText(data: unknown): string {
+  const blocks = ((data as { content?: ResponseBlock[] } | null)?.content ?? [])
+  return blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim()
+}
+
+// تحويل خطأ HTTP إلى رسالة عربية واضحة
+async function toFriendlyError(response: Response): Promise<AIError> {
+  let msg = `خطأ في الخدمة (${response.status})`
+  if (response.status === 401) msg = 'مفتاح الذكاء الاصطناعي غير صحيح. تحقق منه في الإعدادات.'
+  else if (response.status === 429) msg = 'تم تجاوز حد الاستخدام. حاول بعد قليل.'
+  else if (response.status === 400) msg = 'الطلب غير مدعوم أو الحجم كبير جداً.'
+  try {
+    const err = await response.json()
+    if (err?.error?.message) msg = err.error.message
+  } catch { /* ignore */ }
+  return makeError(msg, String(response.status))
+}
+
+// نقطة الاتصال الوحيدة بالخدمة — تتكفّل بالمفتاح والشبكة والأخطاء واستخراج النص
+async function callAnthropic(body: Record<string, unknown>): Promise<string> {
   const key = await ensureApiKey()
   if (!key) throw makeError('لم يتم ضبط مفتاح الذكاء الاصطناعي. أضفه من صفحة الإعدادات.', 'NO_KEY')
-
-  const base64 = await fileToBase64(file)
-  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-  const mediaType = file.type || (isPdf ? 'application/pdf' : 'image/jpeg')
-
-  const content: ContentBlock[] = []
-  if (isPdf) {
-    content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } })
-  } else {
-    content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } })
-  }
-  content.push({ type: 'text', text: instruction })
 
   let response: Response
   try {
@@ -189,75 +201,42 @@ export async function readDocumentText(file: File, instruction: string): Promise
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true',
       },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        max_tokens: 1500,
-        messages: [{ role: 'user', content }],
-      }),
+      body: JSON.stringify({ model: AI_MODEL, ...body }),
     })
   } catch {
     throw makeError('تعذّر الاتصال بخدمة الذكاء الاصطناعي. تحقق من الإنترنت.', 'NETWORK')
   }
 
-  if (!response.ok) {
-    let msg = `خطأ في الخدمة (${response.status})`
-    if (response.status === 401) msg = 'مفتاح الذكاء الاصطناعي غير صحيح. تحقق منه في الإعدادات.'
-    else if (response.status === 429) msg = 'تم تجاوز حد الاستخدام. حاول بعد قليل.'
-    else if (response.status === 400) msg = 'الملف غير مدعوم أو حجمه كبير جداً.'
-    try {
-      const err = await response.json()
-      if (err?.error?.message) msg = err.error.message
-    } catch { /* ignore */ }
-    throw makeError(msg, String(response.status))
-  }
+  if (!response.ok) throw await toFriendlyError(response)
 
-  const data = await response.json()
-  const blocks = (data.content ?? []) as ResponseBlock[]
-  return blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim()
+  return extractText(await response.json())
+}
+
+// ─── قراءة مستند/صورة وإرجاع النص ──────────────────────────────────────
+export async function readDocumentText(file: File, instruction: string): Promise<string> {
+  const base64 = await fileToBase64(file)
+  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+  const mediaType = file.type || (isPdf ? 'application/pdf' : 'image/jpeg')
+
+  const content: ContentBlock[] = [
+    isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+    { type: 'text', text: instruction },
+  ]
+
+  return callAnthropic({ max_tokens: 1500, messages: [{ role: 'user', content }] })
 }
 
 // ─── محادثة نصية (للمساعد الذكي) ───────────────────────────────────────
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
 export async function askAI(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
-  const key = await ensureApiKey()
-  if (!key) throw makeError('لم يتم ضبط مفتاح الذكاء الاصطناعي. أضفه من صفحة الإعدادات.', 'NO_KEY')
-
-  let response: Response
-  try {
-    response = await fetch(API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        max_tokens: 2000,
-        ...(systemPrompt ? { system: systemPrompt } : {}),
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
-      }),
-    })
-  } catch {
-    throw makeError('تعذّر الاتصال بخدمة الذكاء الاصطناعي. تحقق من الإنترنت.', 'NETWORK')
-  }
-
-  if (!response.ok) {
-    let msg = `خطأ في الخدمة (${response.status})`
-    if (response.status === 401) msg = 'مفتاح الذكاء الاصطناعي غير صحيح. تحقق منه في الإعدادات.'
-    else if (response.status === 429) msg = 'تم تجاوز حد الاستخدام. حاول بعد قليل.'
-    try {
-      const err = await response.json()
-      if (err?.error?.message) msg = err.error.message
-    } catch { /* ignore */ }
-    throw makeError(msg, String(response.status))
-  }
-
-  const data = await response.json()
-  const blocks = (data.content ?? []) as ResponseBlock[]
-  return blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim()
+  return callAnthropic({
+    max_tokens: 2000,
+    ...(systemPrompt ? { system: systemPrompt } : {}),
+    messages: messages.map(m => ({ role: m.role, content: m.content })),
+  })
 }
 
 // ─── استخراج JSON من نص الرد ───────────────────────────────────────────
