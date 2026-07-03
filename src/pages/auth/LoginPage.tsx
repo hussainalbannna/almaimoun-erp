@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
@@ -9,6 +9,7 @@ const LAST_EMAIL_KEY = 'almaimoun_last_email'
 
 export default function LoginPage() {
   const { session, loading: authLoading } = useAuth()
+  const location = useLocation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -23,21 +24,23 @@ export default function LoginPage() {
     } catch { /* ignore */ }
   }, [])
 
-  // إذا كان مسجلاً، حوّله للوحة
+  // إذا كان مسجلاً، حوّله للوجهة الأصلية التي جاء منها (أو اللوحة افتراضياً)
   if (session) {
-    return <Navigate to="/" replace />
+    const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/'
+    return <Navigate to={from} replace />
   }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!email || !password) {
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail || !password) {
       toast.error('يرجى إدخال البريد الإلكتروني وكلمة المرور')
       return
     }
     setLoading(true)
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+      const { data, error } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password })
 
       if (error) {
         if (error.message.includes('Invalid login credentials')) {
@@ -52,7 +55,7 @@ export default function LoginPage() {
       }
 
       if (data?.session) {
-        try { localStorage.setItem(LAST_EMAIL_KEY, email) } catch { /* ignore */ }
+        try { localStorage.setItem(LAST_EMAIL_KEY, trimmedEmail) } catch { /* ignore */ }
         // AuthContext يلتقط الجلسة ويحوّل تلقائياً
       } else {
         toast.error('لم يتم الحصول على جلسة — تأكد من صحة البيانات')
@@ -67,13 +70,14 @@ export default function LoginPage() {
   // إرسال رابط استعادة كلمة المرور
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!email) {
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail) {
       toast.error('أدخل بريدك الإلكتروني أولاً')
       return
     }
     setLoading(true)
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
         redirectTo: window.location.origin + '/login',
       })
       if (error) {
@@ -127,8 +131,9 @@ export default function LoginPage() {
 
             <form onSubmit={resetMode ? handleReset : handleLogin} className="space-y-4">
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">البريد الإلكتروني</label>
+                <label htmlFor="login-email" className="block text-sm font-semibold text-slate-700 mb-1.5">البريد الإلكتروني</label>
                 <input
+                  id="login-email"
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
@@ -141,9 +146,10 @@ export default function LoginPage() {
 
               {!resetMode && (
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">كلمة المرور</label>
+                  <label htmlFor="login-password" className="block text-sm font-semibold text-slate-700 mb-1.5">كلمة المرور</label>
                   <div className="relative">
                     <input
+                      id="login-password"
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={e => setPassword(e.target.value)}
