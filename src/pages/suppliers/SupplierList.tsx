@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Pencil, Trash2, Phone, Mail, MessageCircle, Building2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { openWhatsApp } from '../../lib/utils'
@@ -8,24 +9,28 @@ import Button from '../../components/ui/Button'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 
+// جلب الموردين (مصدر React Query — نفس مفتاح إبطال SupplierForm)
+async function fetchSuppliers(): Promise<Supplier[]> {
+  const { data } = await supabase.from('suppliers').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Supplier[]
+}
+
 export default function SupplierList() {
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('suppliers').select('*').order('created_at', { ascending: false })
-    setSuppliers((data ?? []) as Supplier[])
-    setLoading(false)
-  }
+  const { data: suppliers = [], isLoading } = useQuery({ queryKey: ['suppliers-list'], queryFn: fetchSuppliers })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['suppliers-list'] })
 
-  useEffect(() => { load() }, [])
-
-  const filtered = suppliers.filter(s =>
-    s.name.includes(search) || s.company_name?.includes(search) || s.email?.includes(search)
-  )
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return suppliers.filter(s =>
+      (s.name || '').toLowerCase().includes(q) ||
+      s.company_name?.toLowerCase().includes(q) ||
+      s.email?.toLowerCase().includes(q)
+    )
+  }, [suppliers, search])
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -33,7 +38,7 @@ export default function SupplierList() {
     if (error) { toast.error('حدث خطأ أثناء الحذف'); return }
     toast.success('تم حذف المورد')
     setDeleteId(null)
-    load()
+    reload()
   }
 
   return (
@@ -54,7 +59,7 @@ export default function SupplierList() {
         </Link>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="flex justify-center py-16">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
