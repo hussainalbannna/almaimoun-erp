@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight, FileText,
   TrendingUp, TrendingDown,
@@ -32,173 +33,145 @@ const MILESTONE_STATUS_COLORS: Record<string, string> = {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+interface ProjectDetailData {
+  project: Project | null;
+  milestones: ProjectMilestone[];
+  vos: VariationOrder[];
+  logs: DailyLog[];
+  boxExpenses: number;
+  purchasePaid: number;
+  purchaseDeferred: number;
+  subcontractorPaidSum: number;
+  rentalsPaidSum: number;
+  workersLaborCost: number;
+  overtimeCost: number;
+  laborDetails: { name: string; days: number; cost: number; type: string }[];
+}
+
+const EMPTY_DETAIL: ProjectDetailData = {
+  project: null, milestones: [], vos: [], logs: [],
+  boxExpenses: 0, purchasePaid: 0, purchaseDeferred: 0,
+  subcontractorPaidSum: 0, rentalsPaidSum: 0, workersLaborCost: 0,
+  overtimeCost: 0, laborDetails: [],
+};
+
+// جلب المشروع + حساباته المالية الفعلية (تدفق نقدي حقيقي) — مصدر React Query
+// (كل الحسابات منقولة حرفياً؛ الشيكات الآجلة لا تُخصم حتى تُصرف)
+async function fetchProjectDetail(id: string): Promise<ProjectDetailData> {
+  const [pRes, mRes, vRes, lRes] = await Promise.all([
+    supabase.from('projects').select('*').eq('id', id).maybeSingle(),
+    supabase.from('project_milestones').select('*').eq('project_id', id).order('sort_order', { ascending: true }),
+    supabase.from('variation_orders').select('*').eq('project_id', id).order('created_at', { ascending: false }),
+    supabase.from('daily_logs').select('*').eq('project_id', id).order('log_date', { ascending: false }),
+  ]);
+
+  const project = (pRes.data as Project) ?? null;
+  const milestones = (mRes.data ?? []) as ProjectMilestone[];
+  const vos = (vRes.data ?? []) as VariationOrder[];
+  const logs = (lRes.data ?? []) as DailyLog[];
+
+  // 1. نثريات الصندوق (كلها مدفوعة فعلاً)
+  const { data: expensesData } = await supabase.from('accounts_payable').select('amount').eq('project_id', id);
+  const boxExpenses = (expensesData || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  // 2. فواتير الموردين — نفصل المدفوع فعلاً عن الشيكات الآجلة
+  const { data: piData } = await supabase.from('purchase_invoices').select('amount, payment_method, check_due_date').eq('project_id', id);
+  let purchasePaid = 0, purchaseDeferred = 0;
+  const t = today();
+  for (const pi of (piData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
+    const amt = Number(pi.amount || 0);
+    if (pi.payment_method === 'deferred_cheque' && pi.check_due_date && pi.check_due_date > t) {
+      purchaseDeferred += amt;
+    } else {
+      purchasePaid += amt;
+    }
+  }
+
+  // 3. مقاولو الباطن — المدفوع فعلاً فقط (باستثناء الشيكات الآجلة)
+  const { data: subPayData } = await supabase.from('subcontractor_payments').select('amount, payment_method, check_due_date').eq('project_id', id);
+  let subcontractorPaidSum = 0;
+  for (const sp of (subPayData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
+    const amt = Number(sp.amount || 0);
+    if (sp.payment_method === 'cheque' && sp.check_due_date && sp.check_due_date > t) continue;
+    subcontractorPaidSum += amt;
+  }
+
+  // 4. الإيجارات المرتبطة بالمشروع — الدفعات الفعلية المدفوعة
+  const { data: projectRentals } = await supabase.from('rentals').select('id').eq('project_id', id);
+  let rentalsPaidSum = 0;
+  const rentalIds = (projectRentals || []).map(r => (r as { id: string }).id);
+  if (rentalIds.length > 0) {
+    const { data: rentalPayData } = await supabase.from('rental_payments').select('amount').in('rental_id', rentalIds);
+    rentalsPaidSum = (rentalPayData || []).reduce((sum, p) => sum + Number((p as { amount: number }).amount || 0), 0);
+  }
+
+  // 5. تكلفة العمالة الفعلية على هذا الموقع (شهري: الراتب÷26×الأيام | يومي: الأجر×الأيام)
+  const MONTHLY_WORK_DAYS = 26;
+  const { data: attendanceData } = await supabase.from('worker_attendance').select('worker_id, status').eq('project_id', id);
+  const daysByWorker = new Map<string, number>();
+  for (const a of (attendanceData || []) as Array<{ worker_id: string; status?: string }>) {
+    if (a.status && a.status !== 'present') continue;
+    daysByWorker.set(a.worker_id, (daysByWorker.get(a.worker_id) || 0) + 1);
+  }
+  let workersLaborCost = 0;
+  const laborDetails: { name: string; days: number; cost: number; type: string }[] = [];
+  if (daysByWorker.size > 0) {
+    const workerIds = Array.from(daysByWorker.keys());
+    const { data: workersData } = await supabase
+      .from('workers')
+      .select('id, name, name_en, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')
+      .in('id', workerIds);
+    for (const w of (workersData || []) as Array<{
+      id: string; name: string; name_en?: string; pay_type?: string;
+      daily_rate?: number; actual_salary?: number; basic_salary?: number; social_allowance?: number;
+    }>) {
+      const days = daysByWorker.get(w.id) || 0;
+      let dayCost = 0;
+      let type = '';
+      if (w.pay_type === 'daily') {
+        dayCost = Number(w.daily_rate || 0);
+        type = 'يومي';
+      } else {
+        const fullSalary = Number(w.actual_salary || 0) > 0
+          ? Number(w.actual_salary || 0)
+          : Number(w.basic_salary || 0) + Number(w.social_allowance || 0);
+        dayCost = fullSalary / MONTHLY_WORK_DAYS;
+        type = 'شهري';
+      }
+      const cost = dayCost * days;
+      workersLaborCost += cost;
+      laborDetails.push({ name: w.name_en || w.name, days, cost, type });
+    }
+    laborDetails.sort((a, b) => b.cost - a.cost);
+  }
+
+  // 6. الأوفر تايم من التقارير اليومية لهذا المشروع
+  const overtimeCost = logs.reduce(
+    (sum, log) => sum + Number((log as DailyLog & { overtime_amount?: number }).overtime_amount || 0), 0
+  );
+
+  return {
+    project, milestones, vos, logs, boxExpenses, purchasePaid, purchaseDeferred,
+    subcontractorPaidSum, rentalsPaidSum, workersLaborCost, overtimeCost, laborDetails,
+  };
+}
+
 export default function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [project, setProject] = useState<Project | null>(null);
-  const [milestones, setMilestones] = useState<ProjectMilestone[]>([]);
-  const [vos, setVos] = useState<VariationOrder[]>([]);
-  const [logs, setLogs] = useState<DailyLog[]>([]);
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<'milestones' | 'vos' | 'logs'>('milestones');
-  const [loading, setLoading] = useState(true);
 
-  // المصاريف الفعلية المدفوعة فقط (التدفق النقدي الحقيقي)
-  const [boxExpenses, setBoxExpenses] = useState<number>(0);
-  const [purchasePaid, setPurchasePaid] = useState<number>(0);       // مشتريات مدفوعة فعلاً
-  const [purchaseDeferred, setPurchaseDeferred] = useState<number>(0); // شيكات آجلة لم تُصرف بعد (للعرض فقط)
-  const [subcontractorPaidSum, setSubcontractorPaidSum] = useState<number>(0);
-  const [rentalsPaidSum, setRentalsPaidSum] = useState<number>(0); // دفعات الإيجارات المرتبطة بالمشروع
-  const [workersLaborCost, setWorkersLaborCost] = useState<number>(0); // تكلفة العمالة الفعلية (تُخصم)
-  const [overtimeCost, setOvertimeCost] = useState<number>(0); // مبلغ الأوفر تايم من التقارير اليومية
-  const [laborDetails, setLaborDetails] = useState<{ name: string; days: number; cost: number; type: string }[]>([]); // تفصيل تكلفة كل عامل
-
-  const load = async () => {
-    if (!id) return;
-    setLoading(true);
-    try {
-      const [pRes, mRes, vRes, lRes] = await Promise.all([
-        supabase.from('projects').select('*').eq('id', id).single(),
-        supabase.from('project_milestones').select('*').eq('project_id', id).order('sort_order', { ascending: true }),
-        supabase.from('variation_orders').select('*').eq('project_id', id).order('created_at', { ascending: false }),
-        supabase.from('daily_logs').select('*').eq('project_id', id).order('log_date', { ascending: false })
-      ]);
-
-      if (pRes.data) setProject(pRes.data as Project);
-      if (mRes.data) setMilestones(mRes.data as ProjectMilestone[]);
-      if (vRes.data) setVos(vRes.data as VariationOrder[]);
-      if (lRes.data) setLogs(lRes.data as DailyLog[]);
-
-      // 1. نثريات الصندوق (كلها مدفوعة فعلاً)
-      const { data: expensesData } = await supabase
-        .from('accounts_payable')
-        .select('amount')
-        .eq('project_id', id);
-      const totalBox = (expensesData || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      setBoxExpenses(totalBox);
-
-      // 2. فواتير الموردين — نفصل المدفوع فعلاً عن الشيكات الآجلة
-      const { data: piData } = await supabase
-        .from('purchase_invoices')
-        .select('amount, payment_method, check_due_date')
-        .eq('project_id', id);
-      let paid = 0, deferred = 0;
-      const t = today();
-      for (const pi of (piData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
-        const amt = Number(pi.amount || 0);
-        // شيك آجل لم يحل موعده بعد = لم يُصرف فعلياً → لا يُحسب مصروفاً
-        if (pi.payment_method === 'deferred_cheque' && pi.check_due_date && pi.check_due_date > t) {
-          deferred += amt;
-        } else {
-          paid += amt;
-        }
-      }
-      setPurchasePaid(paid);
-      setPurchaseDeferred(deferred);
-
-      // 3. مقاولو الباطن — المدفوع فعلاً فقط (من جدول المدفوعات، باستثناء الشيكات الآجلة)
-      const { data: subPayData } = await supabase
-        .from('subcontractor_payments')
-        .select('amount, payment_method, check_due_date')
-        .eq('project_id', id);
-      let subPaid = 0;
-      for (const sp of (subPayData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
-        const amt = Number(sp.amount || 0);
-        if (sp.payment_method === 'cheque' && sp.check_due_date && sp.check_due_date > t) {
-          // شيك مقاول باطن آجل لم يُصرف → لا يُحسب
-          continue;
-        }
-        subPaid += amt;
-      }
-      setSubcontractorPaidSum(subPaid);
-
-      // 4. الإيجارات والمصاريف الثابتة المرتبطة بهذا المشروع — الدفعات الفعلية المدفوعة
-      // نجلب إيجارات المشروع ثم دفعاتها (المدفوع فعلاً يُحسب مصروفاً، حسب رؤية السيولة)
-      const { data: projectRentals } = await supabase
-        .from('rentals')
-        .select('id')
-        .eq('project_id', id);
-      let rentalsPaid = 0;
-      const rentalIds = (projectRentals || []).map(r => (r as { id: string }).id);
-      if (rentalIds.length > 0) {
-        const { data: rentalPayData } = await supabase
-          .from('rental_payments')
-          .select('amount')
-          .in('rental_id', rentalIds);
-        rentalsPaid = (rentalPayData || []).reduce((sum, p) => sum + Number((p as { amount: number }).amount || 0), 0);
-      }
-      setRentalsPaidSum(rentalsPaid);
-
-      // 5. تكلفة العمالة الفعلية على هذا الموقع (تُخصم من الربح)
-      // المنطق: لكل عامل اشتغل في الموقع (من حضوره المرتبط بالمشروع):
-      //   - شهري: (الراتب الكامل ÷ 26 يوم عمل) × أيام حضوره  [الجمعة إجازة مدفوعة]
-      //   - يومي: الأجر اليومي × أيام حضوره
-      // الراتب الكامل = actual_salary، وإن كان صفراً نرجع لـ basic_salary + social_allowance
-      const MONTHLY_WORK_DAYS = 26;
-      const { data: attendanceData } = await supabase
-        .from('worker_attendance')
-        .select('worker_id, status')
-        .eq('project_id', id);
-
-      // عدّ أيام حضور كل عامل في هذا الموقع
-      const daysByWorker = new Map<string, number>();
-      for (const a of (attendanceData || []) as Array<{ worker_id: string; status?: string }>) {
-        if (a.status && a.status !== 'present') continue; // نحسب الحضور فقط
-        daysByWorker.set(a.worker_id, (daysByWorker.get(a.worker_id) || 0) + 1);
-      }
-
-      let laborTotal = 0;
-      const details: { name: string; days: number; cost: number; type: string }[] = [];
-      if (daysByWorker.size > 0) {
-        const workerIds = Array.from(daysByWorker.keys());
-        const { data: workersData } = await supabase
-          .from('workers')
-          .select('id, name, name_en, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')
-          .in('id', workerIds);
-
-        for (const w of (workersData || []) as Array<{
-          id: string; name: string; name_en?: string; pay_type?: string;
-          daily_rate?: number; actual_salary?: number; basic_salary?: number; social_allowance?: number;
-        }>) {
-          const days = daysByWorker.get(w.id) || 0;
-          let dayCost = 0;
-          let type = '';
-          if (w.pay_type === 'daily') {
-            dayCost = Number(w.daily_rate || 0);
-            type = 'يومي';
-          } else {
-            // شهري: الراتب الكامل ÷ 26
-            const fullSalary = Number(w.actual_salary || 0) > 0
-              ? Number(w.actual_salary || 0)
-              : Number(w.basic_salary || 0) + Number(w.social_allowance || 0);
-            dayCost = fullSalary / MONTHLY_WORK_DAYS;
-            type = 'شهري';
-          }
-          const cost = dayCost * days;
-          laborTotal += cost;
-          details.push({ name: w.name_en || w.name, days, cost, type });
-        }
-        // ترتيب تنازلي حسب التكلفة
-        details.sort((a, b) => b.cost - a.cost);
-      }
-      setWorkersLaborCost(laborTotal);
-      setLaborDetails(details);
-
-      // 6. الأوفر تايم من التقارير اليومية لهذا المشروع
-      const overtimeSum = (lRes.data || []).reduce(
-        (sum, log) => sum + Number((log as DailyLog & { overtime_amount?: number }).overtime_amount || 0), 0
-      );
-      setOvertimeCost(overtimeSum);
-
-    } catch (error) {
-      toast.error('حدث خطأ أثناء تحميل البيانات المالية للمشروع');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, [id]);
+  const { data = EMPTY_DETAIL, isLoading } = useQuery({
+    queryKey: ['project-detail', id],
+    queryFn: () => fetchProjectDetail(id!),
+    enabled: !!id,
+  });
+  const {
+    project, milestones, vos, logs, boxExpenses, purchasePaid, purchaseDeferred,
+    subcontractorPaidSum, rentalsPaidSum, workersLaborCost, overtimeCost, laborDetails,
+  } = data;
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['project-detail', id] });
 
   const generateInvoice = async (milestone: ProjectMilestone) => {
     if (!project) return;
@@ -247,7 +220,8 @@ export default function ProjectDetail() {
         .eq('id', milestone.id);
 
       toast.success('تم إنشاء الفاتورة بنجاح كمسودة (معفاة من الضريبة)');
-      load();
+      reload();
+      queryClient.invalidateQueries({ queryKey: ['invoices-list'] });
     } catch (e) {
       toast.error('حدث خطأ أثناء إصدار الفاتورة');
     }
@@ -257,13 +231,13 @@ export default function ProjectDetail() {
     try {
       await supabase.from('project_milestones').update({ status }).eq('id', mId);
       toast.success('تم تحديث حالة المرحلة بنجاح');
-      load();
+      reload();
     } catch {
       toast.error('خطأ في التحديث');
     }
   };
 
-  if (loading) return <div className="p-12 text-center text-slate-400">جاري تحميل الحسابات المالية...</div>;
+  if (isLoading) return <div className="p-12 text-center text-slate-400">جاري تحميل الحسابات المالية...</div>;
   if (!project) return <div className="p-12 text-center text-slate-400">المشروع غير موجود</div>;
 
   const contractValue = Number(project.contract_value || 0);
