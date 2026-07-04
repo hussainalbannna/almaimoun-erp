@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Plus, Search, Phone, Wrench, ChevronLeft, CheckCircle } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, subcontractorSpecialtyLabel, subcontractorSpecialtyColor } from '../../lib/utils'
@@ -33,45 +34,47 @@ const SPECIALTY_OPTIONS = [
   { value: 'other', label: 'أخرى' },
 ]
 
+// جلب المقاولين مع إحصائياتهم المحسوبة (مصدر React Query)
+async function fetchSubcontractorsWithStats(): Promise<SubWithStats[]> {
+  const [subRes, assignRes, payRes] = await Promise.all([
+    supabase.from('subcontractors').select('*').order('name'),
+    supabase.from('subcontractor_assignments').select('subcontractor_id, agreed_amount, status'),
+    supabase.from('subcontractor_payments').select('subcontractor_id, amount'),
+  ])
+  const subList = (subRes.data ?? []) as Subcontractor[]
+  const assigns = (assignRes.data ?? []) as { subcontractor_id: string; agreed_amount: number; status: string }[]
+  const payments = (payRes.data ?? []) as { subcontractor_id: string; amount: number }[]
+
+  return subList.map(s => ({
+    ...s,
+    totalAgreed: assigns.filter(a => a.subcontractor_id === s.id).reduce((sum, a) => sum + Number(a.agreed_amount), 0),
+    totalPaid: payments.filter(p => p.subcontractor_id === s.id).reduce((sum, p) => sum + Number(p.amount), 0),
+    activeProjects: assigns.filter(a => a.subcontractor_id === s.id && a.status === 'active').length,
+  }))
+}
+
 export default function SubcontractorList() {
   const navigate = useNavigate()
-  const [subs, setSubs] = useState<SubWithStats[]>([])
-  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [specialtyFilter, setSpecialtyFilter] = useState('all')
 
-  const load = async () => {
-    setLoading(true)
-    const [subRes, assignRes, payRes] = await Promise.all([
-      supabase.from('subcontractors').select('*').order('name'),
-      supabase.from('subcontractor_assignments').select('subcontractor_id, agreed_amount, status'),
-      supabase.from('subcontractor_payments').select('subcontractor_id, amount'),
-    ])
-    const subList = (subRes.data ?? []) as Subcontractor[]
-    const assigns = (assignRes.data ?? []) as { subcontractor_id: string; agreed_amount: number; status: string }[]
-    const payments = (payRes.data ?? []) as { subcontractor_id: string; amount: number }[]
+  const { data: subs = [], isLoading } = useQuery({ queryKey: ['subcontractors-list'], queryFn: fetchSubcontractorsWithStats })
 
-    const withStats: SubWithStats[] = subList.map(s => ({
-      ...s,
-      totalAgreed: assigns.filter(a => a.subcontractor_id === s.id).reduce((sum, a) => sum + Number(a.agreed_amount), 0),
-      totalPaid: payments.filter(p => p.subcontractor_id === s.id).reduce((sum, p) => sum + Number(p.amount), 0),
-      activeProjects: assigns.filter(a => a.subcontractor_id === s.id && a.status === 'active').length,
-    }))
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return subs.filter(s => {
+      const matchSearch = !search || (s.name || '').toLowerCase().includes(q) || (s.phone || '').includes(search)
+      const matchSpec = specialtyFilter === 'all' || s.specialty === specialtyFilter
+      return matchSearch && matchSpec
+    })
+  }, [subs, search, specialtyFilter])
 
-    setSubs(withStats)
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
-
-  const filtered = subs.filter(s => {
-    const matchSearch = !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.phone.includes(search)
-    const matchSpec = specialtyFilter === 'all' || s.specialty === specialtyFilter
-    return matchSearch && matchSpec
-  })
-
-  const totalRemaining = subs.reduce((sum, s) => sum + (s.totalAgreed - s.totalPaid), 0)
-  const totalActive = subs.filter(s => s.activeProjects > 0).length
+  const { totalRemaining, totalActive, totalAgreedSum, totalPaidSum } = useMemo(() => ({
+    totalRemaining: subs.reduce((sum, s) => sum + (s.totalAgreed - s.totalPaid), 0),
+    totalActive: subs.filter(s => s.activeProjects > 0).length,
+    totalAgreedSum: subs.reduce((s, x) => s + x.totalAgreed, 0),
+    totalPaidSum: subs.reduce((s, x) => s + x.totalPaid, 0),
+  }), [subs])
 
   return (
     <div className="p-6" dir="rtl">
@@ -94,13 +97,13 @@ export default function SubcontractorList() {
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <div className="text-xs text-slate-500 mb-1">إجمالي المتفق عليه</div>
           <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>
-            {formatCurrency(subs.reduce((s, x) => s + x.totalAgreed, 0))}
+            {formatCurrency(totalAgreedSum)}
           </div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <div className="text-xs text-slate-500 mb-1">إجمالي المدفوع</div>
           <div className="text-xl font-bold text-green-700">
-            {formatCurrency(subs.reduce((s, x) => s + x.totalPaid, 0))}
+            {formatCurrency(totalPaidSum)}
           </div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -129,7 +132,7 @@ export default function SubcontractorList() {
         </select>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="text-center py-16 text-slate-400">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
