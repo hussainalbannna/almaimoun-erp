@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { TrendingUp, TrendingDown, PieChart, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { safeSelect } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
 
 interface Row { amount: number; date: string; category?: string; label?: string }
@@ -26,79 +27,64 @@ function periodRange(key: string): { from: Date | null; to: Date | null } {
   return { from: null, to: null }
 }
 
+// أنواع صفوف الاستعلامات
+interface ReceiptRow { amount: number | null; receipt_date: string | null }
+interface CashbookRow { amount: number | null; entry_date: string | null; category: string | null }
+interface PurchaseRow { amount: number | null; created_at: string | null }
+interface SubPayRow { amount: number | null; payment_date: string | null }
+
+interface FinanceData { income: Row[]; expenses: Row[] }
+const EMPTY_DATA: FinanceData = { income: [], expenses: [] }
+
+// جلب وبناء الإيرادات (المقبوضات) والمصروفات (الصندوق + المشتريات + الباطن) — مصدر React Query
+async function fetchFinanceData(): Promise<FinanceData> {
+  const [receipts, cashbook, purchases, subPay] = await Promise.all([
+    safeSelect<ReceiptRow>('receipts', 'amount,receipt_date'),
+    safeSelect<CashbookRow>('accounts_payable', 'amount,entry_date,category'),
+    safeSelect<PurchaseRow>('purchase_invoices', 'amount,created_at'),
+    safeSelect<SubPayRow>('subcontractor_payments', 'amount,payment_date'),
+  ])
+  const income: Row[] = receipts.map(r => ({ amount: Number(r.amount) || 0, date: r.receipt_date || '', label: 'مقبوضات' }))
+  const expenses: Row[] = [
+    ...cashbook.map(c => ({ amount: Number(c.amount) || 0, date: c.entry_date || '', category: c.category || 'general' })),
+    ...purchases.map(p => ({ amount: Number(p.amount) || 0, date: p.created_at || '', category: 'supplier' })),
+    ...subPay.map(s => ({ amount: Number(s.amount) || 0, date: s.payment_date || '', category: 'subcontractor' })),
+  ]
+  return { income, expenses }
+}
+
 export default function FinanceDashboard() {
-  const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState('this_month')
 
-  const [income, setIncome] = useState<Row[]>([])
-  const [expenses, setExpenses] = useState<Row[]>([])
+  const { data = EMPTY_DATA, isLoading } = useQuery({ queryKey: ['finance-dashboard'], queryFn: fetchFinanceData })
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> => {
-        try { const { data } = await p; return data ?? [] } catch { return [] }
-      }
-
-      const [receipts, cashbook, purchases, subPay] = await Promise.all([
-        safe(supabase.from('receipts').select('amount,receipt_date')),
-        safe(supabase.from('accounts_payable').select('amount,entry_date,category')),
-        safe(supabase.from('purchase_invoices').select('amount,created_at')),
-        safe(supabase.from('subcontractor_payments').select('amount,payment_date')),
-      ])
-
-      // الإيرادات = المقبوضات (إيصالات)
-      setIncome((receipts as Record<string, unknown>[]).map(r => ({
-        amount: Number(r.amount) || 0,
-        date: (r.receipt_date as string) || '',
-        label: 'مقبوضات',
-      })))
-
-      // المصروفات = الصندوق + فواتير الشراء + مدفوعات المقاولين
-      const exp: Row[] = []
-      for (const c of cashbook as Record<string, unknown>[]) {
-        exp.push({ amount: Number(c.amount) || 0, date: (c.entry_date as string) || '', category: (c.category as string) || 'general' })
-      }
-      for (const p of purchases as Record<string, unknown>[]) {
-        exp.push({ amount: Number(p.amount) || 0, date: (p.created_at as string) || '', category: 'supplier' })
-      }
-      for (const s of subPay as Record<string, unknown>[]) {
-        exp.push({ amount: Number(s.amount) || 0, date: (s.payment_date as string) || '', category: 'subcontractor' })
-      }
-      setExpenses(exp)
-      setLoading(false)
+  // كل الأرقام المشتقّة تُحسب معاً عند تغيّر البيانات أو الفترة (فلترة + إجماليات + هامش + تحليل الفئات)
+  const { fIncome, fExpenses, totalIncome, totalExpense, net, margin, byCategory, maxCat } = useMemo(() => {
+    const { from, to } = periodRange(period)
+    const inRange = (d: string) => {
+      if (!from || !to) return true
+      if (!d) return false
+      const t = new Date(d).getTime()
+      return t >= from.getTime() && t <= to.getTime()
     }
-    load()
-  }, [])
 
-  // تصفية حسب الفترة
-  const { from, to } = periodRange(period)
-  const inRange = (d: string) => {
-    if (!from || !to) return true
-    if (!d) return false
-    const t = new Date(d).getTime()
-    return t >= from.getTime() && t <= to.getTime()
-  }
+    const fIncome = data.income.filter(r => inRange(r.date))
+    const fExpenses = data.expenses.filter(r => inRange(r.date))
+    const totalIncome = fIncome.reduce((s, r) => s + r.amount, 0)
+    const totalExpense = fExpenses.reduce((s, r) => s + r.amount, 0)
+    const net = totalIncome - totalExpense
+    const margin = totalIncome > 0 ? (net / totalIncome) * 100 : 0
 
-  const fIncome = useMemo(() => income.filter(r => inRange(r.date)), [income, period])
-  const fExpenses = useMemo(() => expenses.filter(r => inRange(r.date)), [expenses, period])
-
-  const totalIncome = fIncome.reduce((s, r) => s + r.amount, 0)
-  const totalExpense = fExpenses.reduce((s, r) => s + r.amount, 0)
-  const net = totalIncome - totalExpense
-  const margin = totalIncome > 0 ? (net / totalIncome) * 100 : 0
-
-  // تحليل المصروفات بالفئات
-  const byCategory = useMemo(() => {
-    const map: Record<string, number> = {}
+    const catMap: Record<string, number> = {}
     for (const e of fExpenses) {
       const k = e.category || 'other'
-      map[k] = (map[k] || 0) + e.amount
+      catMap[k] = (catMap[k] || 0) + e.amount
     }
-    return Object.entries(map).sort((a, b) => b[1] - a[1])
-  }, [fExpenses])
+    const byCategory = Object.entries(catMap).sort((a, b) => b[1] - a[1])
+    const maxCat = byCategory.length ? byCategory[0][1] : 1
 
-  const maxCat = byCategory.length ? byCategory[0][1] : 1
+    return { fIncome, fExpenses, totalIncome, totalExpense, net, margin, byCategory, maxCat }
+  }, [data, period])
 
   return (
     <div className="p-6 max-w-5xl mx-auto" dir="rtl">
@@ -126,7 +112,7 @@ export default function FinanceDashboard() {
         </div>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري حساب البيانات المالية...</div>
       ) : (
         <>
