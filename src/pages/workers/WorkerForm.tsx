@@ -1,5 +1,6 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Sparkles, Loader2, Award, CalendarDays } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Worker, WorkerAdvance } from '../../types'
@@ -34,6 +35,7 @@ const ID_PROMPT = `أنت مساعد متخصص في قراءة بطاقات ا�
 export default function WorkerForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
   const [saving, setSaving] = useState(false)
   const [advances, setAdvances] = useState<WorkerAdvance[]>([])
@@ -109,6 +111,10 @@ export default function WorkerForm() {
         const { error } = await supabase.from('workers').insert({ ...form })
         if (error) throw error
       }
+      // العامل يؤثّر على قائمة العمال وكشف الرواتب وتكلفة عمالة المشاريع
+      queryClient.invalidateQueries({ queryKey: ['workers-list'] })
+      queryClient.invalidateQueries({ queryKey: ['payroll-workers'] })
+      if (isEdit) queryClient.invalidateQueries({ queryKey: ['worker', id] })
       toast.success(isEdit ? 'تم تحديث بيانات العامل' : 'تم إضافة العامل')
       navigate('/workers')
     } catch (e: unknown) {
@@ -134,11 +140,11 @@ export default function WorkerForm() {
     setAdvances(prev => prev.map(a => a.id === adv.id ? { ...a, deducted: !a.deducted } : a))
   }
 
-  const totalAdvances = advances.filter(a => !a.deducted).reduce((s, a) => s + Number(a.amount), 0)
+  const totalAdvances = useMemo(() => advances.filter(a => !a.deducted).reduce((s, a) => s + Number(a.amount), 0), [advances])
 
   // حسابات ذكية
-  const eos = calcEndOfService(Number(form.basic_salary) || 0, form.join_date ?? '')
-  const accruedLeave = calcAccruedLeave(Number(form.annual_leave_days) || 30, form.join_date ?? '')
+  const eos = useMemo(() => calcEndOfService(Number(form.basic_salary) || 0, form.join_date ?? ''), [form.basic_salary, form.join_date])
+  const accruedLeave = useMemo(() => calcAccruedLeave(Number(form.annual_leave_days) || 30, form.join_date ?? ''), [form.annual_leave_days, form.join_date])
   const remainingLeave = accruedLeave - (Number(form.used_leave_days) || 0)
 
   return (
