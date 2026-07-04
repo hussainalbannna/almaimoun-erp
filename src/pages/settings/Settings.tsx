@@ -1,249 +1,277 @@
-import { useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, Printer, MessageCircle, Mail } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency, formatDate, openWhatsApp, openEmail } from '../../lib/utils'
+import type { CompanySettings } from '../../types'
 import Button from '../../components/ui/Button'
+import Input from '../../components/ui/Input'
+import Textarea from '../../components/ui/Textarea'
 import toast from 'react-hot-toast'
+import { Building2, Mail, Phone, CreditCard, Settings2, Hash, Sparkles, Loader2, CheckCircle, ExternalLink } from 'lucide-react'
+import { loadApiKey, saveApiKey, readDocumentText } from '../../lib/ai'
 
-interface Customer { id: string; name: string; phone: string; whatsapp: string; email: string; address: string }
-interface Invoice { id: string; invoice_number: string; issue_date: string; due_date: string | null; total: number; status: string; project_id: string | null }
-interface Receipt { id: string; receipt_number: string; receipt_date: string; amount: number; invoice_id: string | null; payment_method: string }
-interface Project { id: string; project_name: string }
+type Tab = 'company' | 'banking' | 'numbering' | 'ai'
 
-interface StatementLine {
-  date: string
-  type: 'invoice' | 'receipt'
-  ref: string
-  description: string
-  debit: number
-  credit: number
-  balance: number
-  id: string
-  status?: string
+const GOLD = '#c4925a'
+
+// جلب إعدادات الشركة (مصدر React Query)
+async function fetchCompanySettings(): Promise<CompanySettings | null> {
+  const { data } = await supabase.from('company_settings').select('*').maybeSingle()
+  return (data as CompanySettings) ?? null
 }
 
-interface StatementData { customer: Customer | null; invoices: Invoice[]; receipts: Receipt[]; projects: Project[] }
-const EMPTY_STATEMENT_DATA: StatementData = { customer: null, invoices: [], receipts: [], projects: [] }
-
-// جلب بيانات كشف حساب العميل (مصدر React Query)
-async function fetchClientStatement(customerId: string): Promise<StatementData> {
-  const [custRes, invRes, recRes, projRes] = await Promise.all([
-    supabase.from('customers').select('*').eq('id', customerId).maybeSingle(),
-    supabase.from('invoices').select('*').eq('customer_id', customerId).neq('status', 'cancelled').order('issue_date'),
-    supabase.from('receipts').select('*').eq('customer_id', customerId).order('receipt_date'),
-    supabase.from('projects').select('id, project_name').eq('client_id', customerId),
-  ])
-  return {
-    customer: (custRes.data as Customer) ?? null,
-    invoices: (invRes.data ?? []) as Invoice[],
-    receipts: (recRes.data ?? []) as Receipt[],
-    projects: (projRes.data ?? []) as Project[],
-  }
-}
-
-export default function ClientStatement() {
-  const { customerId } = useParams<{ customerId: string }>()
-  const navigate = useNavigate()
-
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10))
-
-  const { data = EMPTY_STATEMENT_DATA, isLoading } = useQuery({
-    queryKey: ['client-statement', customerId],
-    queryFn: () => fetchClientStatement(customerId!),
-    enabled: !!customerId,
+export default function Settings() {
+  const [tab, setTab] = useState<Tab>('company')
+  const [form, setForm] = useState<Partial<CompanySettings>>({
+    name: 'مؤسسة الميمون للمقاولات',
+    name_en: 'AlMaimoun Construction',
+    address: 'Building 1165, T Road 2933, Jerdab 729, Kingdom of Bahrain',
+    phone: '0097337055576',
+    email: 'Info@almaimoun-construction.com',
+    whatsapp: '',
+    tax_number: '220023171000002',
+    commercial_reg: '120637-2',
+    bank_name: '',
+    bank_account: '',
+    bank_iban: '',
+    currency: 'د.ب',
+    invoice_prefix: 'INV',
+    lpo_prefix: 'LPO',
+    smtp_from: 'info@almaimoun-construction.com',
   })
-  const { customer, invoices, receipts, projects } = data
+  const [settingsId, setSettingsId] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
-  // بناء كشف الحساب (يُعاد فقط عند تغيّر البيانات أو الفترة)
-  const statement = useMemo<StatementLine[]>(() => {
-    const lines: StatementLine[] = []
-    invoices.forEach(inv => {
-      if (dateFrom && inv.issue_date < dateFrom) return
-      if (dateTo && inv.issue_date > dateTo) return
-      const proj = projects.find(p => p.id === inv.project_id)
-      lines.push({
-        date: inv.issue_date, type: 'invoice', ref: inv.invoice_number,
-        description: proj ? `فاتورة — ${proj.project_name}` : 'فاتورة',
-        debit: Number(inv.total), credit: 0, balance: 0, id: inv.id, status: inv.status,
-      })
-    })
-    receipts.forEach(rec => {
-      if (dateFrom && rec.receipt_date < dateFrom) return
-      if (dateTo && rec.receipt_date > dateTo) return
-      lines.push({
-        date: rec.receipt_date, type: 'receipt', ref: rec.receipt_number,
-        description: `إيصال استلام${rec.payment_method === 'cash' ? ' (نقداً)' : rec.payment_method === 'bank_transfer' ? ' (تحويل)' : ' (شيك)'}`,
-        debit: 0, credit: Number(rec.amount), balance: 0, id: rec.id,
-      })
-    })
-    lines.sort((a, b) => a.date.localeCompare(b.date))
-    let running = 0
-    lines.forEach(l => { running += l.debit - l.credit; l.balance = running })
-    return lines
-  }, [invoices, receipts, projects, dateFrom, dateTo])
+  // الذكاء الاصطناعي
+  const [aiKey, setAiKey] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [keyValid, setKeyValid] = useState<boolean | null>(null)
+  const [savingKey, setSavingKey] = useState(false)
 
-  const totalDebit = statement.reduce((s, l) => s + l.debit, 0)
-  const totalCredit = statement.reduce((s, l) => s + l.credit, 0)
-  const balance = totalDebit - totalCredit
+  useEffect(() => {
+    loadApiKey().then(k => setAiKey(k)).catch(() => {})
+  }, [])
 
-  const overdueInvoices = useMemo(() => invoices.filter(inv =>
-    inv.status === 'overdue' || (inv.status === 'sent' && inv.due_date && inv.due_date < new Date().toISOString().slice(0, 10))
-  ), [invoices])
+  const queryClient = useQueryClient()
+  const { data: settingsData } = useQuery({ queryKey: ['company-settings'], queryFn: fetchCompanySettings })
+  // تعبئة النموذج عند وصول الإعدادات — مع استبعاد مفتاح الذكاء الاصطناعي حتى لا يُكتب فوقه أبداً.
+  // المفتاح يُدار حصرياً من تبويب الذكاء الاصطناعي عبر حقل aiKey.
+  useEffect(() => {
+    if (!settingsData) return
+    const { anthropic_api_key: _omit, ...rest } = settingsData as CompanySettings & { anthropic_api_key?: string }
+    void _omit
+    setForm(rest as Partial<CompanySettings>)
+    setSettingsId(settingsData.id)
+  }, [settingsData])
 
-  const sendWhatsApp = () => {
-    if (!customer) return
-    const phone = customer.whatsapp || customer.phone
-    if (!phone) { toast.error('لا يوجد رقم واتساب للعميل'); return }
-    const lines = [
-      `السلام عليكم ${customer.name}،`, ``,
-      `إليكم كشف حسابكم لدى مؤسسة الميمون للمقاولات:`, ``,
-      `• إجمالي الفواتير: ${formatCurrency(totalDebit)}`,
-      `• إجمالي المدفوع: ${formatCurrency(totalCredit)}`,
-      `• الرصيد المستحق: ${formatCurrency(balance)}`, ``,
-      balance > 0 ? `نرجو سداد المبلغ المستحق في أقرب وقت. شكراً لثقتكم.` : `تم سداد جميع المستحقات. شكراً لكم.`,
-    ]
-    openWhatsApp(phone, lines.join('\n'))
+  const set = (field: keyof CompanySettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm(prev => ({ ...prev, [field]: e.target.value }))
+
+  const handleSave = async () => {
+    setLoading(true)
+    // مهم: لا نلمس مفتاح الذكاء الاصطناعي هنا أبداً — يُحفظ فقط من تبويب الذكاء الاصطناعي.
+    // نحذفه من الحمولة حتى لا نكتب فوقه بقيمة قديمة بالخطأ.
+    const cleanForm = { ...form } as Partial<CompanySettings> & { anthropic_api_key?: string }
+    delete cleanForm.anthropic_api_key
+    const payload = { ...cleanForm, updated_at: new Date().toISOString() }
+    const { error } = settingsId
+      ? await supabase.from('company_settings').update(payload).eq('id', settingsId)
+      : await supabase.from('company_settings').insert(payload)
+    setLoading(false)
+    if (error) { toast.error('حدث خطأ أثناء الحفظ'); return }
+    queryClient.invalidateQueries({ queryKey: ['company-settings'] })
+    toast.success('تم حفظ الإعدادات')
   }
 
-  const sendEmail = () => {
-    if (!customer?.email) { toast.error('لا يوجد إيميل للعميل'); return }
-    const body = [
-      `السلام عليكم ${customer.name}،`, ``,
-      `كشف حسابكم لدى مؤسسة الميمون للمقاولات:`,
-      `إجمالي الفواتير: ${formatCurrency(totalDebit)}`,
-      `إجمالي المدفوع: ${formatCurrency(totalCredit)}`,
-      `الرصيد المستحق: ${formatCurrency(balance)}`,
-    ].join('\n')
-    openEmail(customer.email, 'كشف حساب — مؤسسة الميمون للمقاولات', body)
+  // ─── حفظ واختبار مفتاح الذكاء الاصطناعي (في السحابة) ─────────────────
+  const handleSaveKey = async () => {
+    setSavingKey(true)
+    const ok = await saveApiKey(aiKey)
+    setSavingKey(false)
+    setKeyValid(null)
+    if (!ok) { toast.error('تعذّر حفظ المفتاح في قاعدة البيانات'); return }
+    toast.success(aiKey.trim() ? 'تم حفظ المفتاح — يعمل الآن على كل أجهزتك' : 'تم مسح المفتاح')
   }
 
-  if (isLoading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
-  if (!customer) return <div className="p-12 text-center text-slate-400">العميل غير موجود</div>
+  const handleTestKey = async () => {
+    if (!aiKey.trim()) { toast.error('أدخل المفتاح أولاً'); return }
+    setTesting(true)
+    setKeyValid(null)
+    toast.loading('جاري حفظ واختبار المفتاح...', { id: 'test' })
+    try {
+      await saveApiKey(aiKey) // حفظ في السحابة قبل الاختبار
+      // صورة صغيرة لاختبار الاتصال
+      const canvas = document.createElement('canvas')
+      canvas.width = 60; canvas.height = 20
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 60, 20)
+      ctx.fillStyle = '#000'; ctx.font = '14px sans-serif'; ctx.fillText('123', 5, 15)
+      const blob = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/jpeg'))
+      const file = new File([blob], 'test.jpg', { type: 'image/jpeg' })
+      await readDocumentText(file, 'ما الرقم المكتوب في الصورة؟ أجب برقم واحد فقط.')
+      setKeyValid(true)
+      toast.success('المفتاح يعمل بنجاح ✓', { id: 'test' })
+    } catch (e) {
+      setKeyValid(false)
+      toast.error((e as Error)?.message ?? 'فشل الاختبار', { id: 'test' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
+    { key: 'company', label: 'معلومات الشركة', icon: Building2 },
+    { key: 'banking', label: 'البنك والدفع', icon: CreditCard },
+    { key: 'numbering', label: 'الترقيم والعملة', icon: Hash },
+    { key: 'ai', label: 'الذكاء الاصطناعي', icon: Sparkles },
+  ]
 
   return (
-    <div className="p-6 print:p-2" dir="rtl">
-      <div className="flex items-center justify-between mb-6 print:hidden">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/customers')} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">
-            <ChevronLeft size={20} />
-          </button>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-800">كشف حساب</h1>
-            <p className="text-slate-500 text-sm">{customer.name}</p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" icon={<MessageCircle size={16} />} onClick={sendWhatsApp}>واتساب</Button>
-          <Button variant="secondary" icon={<Mail size={16} />} onClick={sendEmail}>إيميل</Button>
-          <Button variant="secondary" icon={<Printer size={16} />} onClick={() => window.print()}>طباعة</Button>
-        </div>
+    <div className="max-w-2xl mx-auto space-y-5 p-6" dir="rtl">
+      {/* التبويبات */}
+      <div className="flex gap-1 bg-white rounded-xl border border-slate-200 p-1">
+        {tabs.map(t => {
+          const active = tab === t.key
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className="flex-1 flex items-center justify-center gap-2 h-9 rounded-lg text-sm font-medium transition-colors"
+              style={active ? { background: GOLD, color: '#fff' } : { color: '#475569' }}
+            >
+              <t.icon size={16} />
+              <span className="hidden sm:inline">{t.label}</span>
+            </button>
+          )
+        })}
       </div>
 
-      <div className="hidden print:block mb-6 text-center">
-        <h1 className="text-2xl font-bold">مؤسسة الميمون للمقاولات</h1>
-        <h2 className="text-lg mt-1">كشف حساب</h2>
-        <p className="text-slate-600">العميل: {customer.name}</p>
-        <p className="text-slate-500 text-sm">تاريخ الإصدار: {formatDate(new Date().toISOString().slice(0, 10))}</p>
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        {tab === 'company' && (
+          <>
+            <h3 className="font-semibold text-slate-800 flex items-center gap-2"><Building2 size={18} style={{ color: GOLD }} /> معلومات الشركة</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="اسم الشركة (عربي)" value={form.name ?? ''} onChange={set('name')} />
+              <Input label="اسم الشركة (إنجليزي)" value={form.name_en ?? ''} onChange={set('name_en')} dir="ltr" />
+              <Input label="رقم الضريبة (VAT)" value={form.tax_number ?? ''} onChange={set('tax_number')} dir="ltr" />
+              <Input label="السجل التجاري (CR)" value={form.commercial_reg ?? ''} onChange={set('commercial_reg')} dir="ltr" />
+            </div>
+            <Textarea label="العنوان" value={form.address ?? ''} onChange={set('address')} rows={2} />
+            <h4 className="font-medium text-slate-700 mt-4 flex items-center gap-2"><Phone size={16} style={{ color: GOLD }} /> معلومات التواصل</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="الهاتف" value={form.phone ?? ''} onChange={set('phone')} placeholder="0097337055576" dir="ltr" />
+              <Input label="البريد الإلكتروني" type="email" value={form.email ?? ''} onChange={set('email')} dir="ltr" />
+              <Input label="واتساب الشركة" value={form.whatsapp ?? ''} onChange={set('whatsapp')} placeholder="973XXXXXXXX" dir="ltr" />
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4">
+              <h4 className="font-medium text-blue-800 text-sm mb-2 flex items-center gap-2"><Mail size={15} /> إعدادات البريد الإلكتروني (SMTP)</h4>
+              <p className="text-xs text-blue-600 mb-3">
+                البريد يُرسَل عبر خادم الشركة الرسمي (info@almaimoun-construction.com). كلمة المرور محفوظة بأمان كسرّ في الخادم (Supabase Secret) ولا تظهر هنا. تأكد من ضبط أسرار الخادم: SMTP_HOST و SMTP_PORT و SMTP_USER و SMTP_PASSWORD.
+              </p>
+              <Input label="البريد المُرسِل" value={form.smtp_from ?? ''} onChange={set('smtp_from')} placeholder="info@almaimoun-construction.com" dir="ltr" />
+            </div>
+          </>
+        )}
+
+        {tab === 'banking' && (
+          <>
+            <h3 className="font-semibold text-slate-800 flex items-center gap-2"><CreditCard size={18} style={{ color: GOLD }} /> معلومات البنك والدفع</h3>
+            <p className="text-sm text-slate-500">تظهر هذه المعلومات في أسفل الفواتير</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="اسم البنك" value={form.bank_name ?? ''} onChange={set('bank_name')} placeholder="بنك البحرين الوطني (NBB)" />
+              <Input label="رقم الحساب" value={form.bank_account ?? ''} onChange={set('bank_account')} dir="ltr" />
+              <div className="sm:col-span-2">
+                <Input label="رقم IBAN" value={form.bank_iban ?? ''} onChange={set('bank_iban')} placeholder="BH00 NBOB 0000 0000 0000 00" dir="ltr" />
+              </div>
+            </div>
+          </>
+        )}
+
+        {tab === 'numbering' && (
+          <>
+            <h3 className="font-semibold text-slate-800 flex items-center gap-2"><Settings2 size={18} style={{ color: GOLD }} /> الترقيم والعملة</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="بادئة أرقام الفواتير" value={form.invoice_prefix ?? 'INV'} onChange={set('invoice_prefix')} hint="مثال: INV-2026-0001" />
+              <Input label="بادئة أوامر الشراء" value={form.lpo_prefix ?? 'LPO'} onChange={set('lpo_prefix')} hint="مثال: LPO-2026-0001" />
+              <Input label="العملة" value={form.currency ?? 'د.ب'} onChange={set('currency')} hint="مثال: د.ب" />
+            </div>
+            <div className="bg-slate-50 rounded-lg p-4 mt-2">
+              <p className="text-sm text-slate-600">
+                مثال على ترقيم الفاتورة: <span className="font-mono font-medium" style={{ color: GOLD }}>{form.invoice_prefix ?? 'INV'}-2026-0001</span>
+              </p>
+              <p className="text-sm text-slate-600 mt-1">
+                مثال على ترقيم أمر الشراء: <span className="font-mono font-medium" style={{ color: GOLD }}>{form.lpo_prefix ?? 'LPO'}-2026-0001</span>
+              </p>
+            </div>
+          </>
+        )}
+
+        {tab === 'ai' && (
+          <>
+            <h3 className="font-semibold text-slate-800 flex items-center gap-2"><Sparkles size={18} style={{ color: GOLD }} /> الذكاء الاصطناعي</h3>
+            <p className="text-sm text-slate-500">
+              يُستخدم لقراءة العقود والهويات والمستندات تلقائياً (حتى الممسوحة ضوئياً) وملء الحقول. المفتاح يُحفظ في قاعدة البيانات بشكل آمن ويعمل تلقائياً على جميع أجهزتك (كمبيوتر وجوال).
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">مفتاح Anthropic API</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={aiKey}
+                    onChange={e => { setAiKey(e.target.value); setKeyValid(null) }}
+                    placeholder="sk-ant-..."
+                    className="flex-1 h-10 px-3 rounded-lg border border-slate-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                    dir="ltr"
+                  />
+                  {keyValid === true && <CheckCircle size={20} className="text-green-600 shrink-0" />}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={handleSaveKey} loading={savingKey}>حفظ المفتاح</Button>
+                <Button variant="outline" onClick={handleTestKey} disabled={testing}
+                  icon={testing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}>
+                  {testing ? 'جاري الاختبار...' : 'اختبار المفتاح'}
+                </Button>
+              </div>
+
+              {keyValid === true && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800 flex items-center gap-2">
+                  <CheckCircle size={16} /> المفتاح يعمل بنجاح. كل ميزات الذكاء الاصطناعي مفعّلة الآن.
+                </div>
+              )}
+              {keyValid === false && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+                  المفتاح لم يعمل. تأكد من نسخه كاملاً ومن وجود رصيد في حسابك.
+                </div>
+              )}
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-2 space-y-2">
+              <h4 className="font-medium text-amber-900 text-sm">كيف تحصل على المفتاح؟</h4>
+              <ol className="text-xs text-amber-800 space-y-1.5 list-decimal pr-4">
+                <li>ادخل على <span className="font-mono">console.anthropic.com</span> وسجّل حساب</li>
+                <li>اشحن رصيد بسيط (يبدأ من 5 دولار) من Billing</li>
+                <li>من API Keys اضغط Create Key وانسخ المفتاح (يبدأ بـ sk-ant)</li>
+                <li>الصقه هنا واضغط حفظ ثم اختبار</li>
+              </ol>
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 hover:text-amber-900 mt-1">
+                فتح صفحة المفاتيح <ExternalLink size={12} />
+              </a>
+            </div>
+
+            <div className="bg-slate-50 rounded-lg p-3 text-xs text-slate-500">
+              التكلفة تقريبية جداً: قراءة عقد أو هوية واحدة تكلف أقل من 1 سنت. الرصيد يكفي لمئات المستندات.
+            </div>
+          </>
+        )}
+
+        <div className="pt-2">
+          {tab !== 'ai' && <Button onClick={handleSave} loading={loading}>حفظ الإعدادات</Button>}
+        </div>
       </div>
-
-      {overdueInvoices.length > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-sm text-red-800">
-          ⚠️ يوجد {overdueInvoices.length} فاتورة متأخرة — إجمالي: {formatCurrency(overdueInvoices.reduce((s, i) => s + Number(i.total), 0))}
-        </div>
-      )}
-
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="text-xs text-slate-500 mb-1">إجمالي الفواتير</div>
-          <div className="text-xl font-bold" style={{ color: '#7b4a2d' }}>{formatCurrency(totalDebit)}</div>
-          <div className="text-xs text-slate-400 mt-0.5">{invoices.length} فاتورة</div>
-        </div>
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="text-xs text-slate-500 mb-1">إجمالي المدفوع</div>
-          <div className="text-xl font-bold text-green-600">{formatCurrency(totalCredit)}</div>
-          <div className="text-xs text-slate-400 mt-0.5">{receipts.length} إيصال</div>
-        </div>
-        <div className={`rounded-xl border p-4 ${balance > 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
-          <div className="text-xs text-slate-500 mb-1">{balance > 0 ? 'الرصيد المستحق' : 'رصيد صافي'}</div>
-          <div className={`text-xl font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(Math.abs(balance))}</div>
-          {balance === 0 && <div className="text-xs text-green-700 mt-0.5">✓ الحساب صافي</div>}
-        </div>
-      </div>
-
-      <div className="flex gap-3 mb-4 print:hidden">
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-slate-600">من:</label>
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-            className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-slate-600">إلى:</label>
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-            className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 border-b border-slate-100">
-            <tr>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">التاريخ</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">المرجع</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">البيان</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">مديونية</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">دائنية</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">الرصيد</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-50">
-            {statement.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">لا توجد حركات</td></tr>
-            ) : (
-              statement.map((line, i) => (
-                <tr key={i} className={`hover:bg-slate-50/50 ${line.type === 'receipt' ? 'bg-green-50/30' : ''}`}>
-                  <td className="px-4 py-3 text-slate-600">{formatDate(line.date)}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-500">{line.ref}</td>
-                  <td className="px-4 py-3 text-slate-800">{line.description}
-                    {line.status === 'overdue' && <span className="mr-2 text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded">متأخرة</span>}
-                  </td>
-                  <td className="px-4 py-3 font-medium text-red-600">{line.debit > 0 ? formatCurrency(line.debit) : '—'}</td>
-                  <td className="px-4 py-3 font-medium text-green-600">{line.credit > 0 ? formatCurrency(line.credit) : '—'}</td>
-                  <td className={`px-4 py-3 font-bold ${line.balance > 0 ? 'text-red-600' : line.balance < 0 ? 'text-green-600' : 'text-slate-400'}`}>
-                    {formatCurrency(Math.abs(line.balance))}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-          <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-            <tr>
-              <td colSpan={3} className="px-4 py-3 font-bold text-slate-800">الإجمالي</td>
-              <td className="px-4 py-3 font-bold text-red-600">{formatCurrency(totalDebit)}</td>
-              <td className="px-4 py-3 font-bold text-green-600">{formatCurrency(totalCredit)}</td>
-              <td className={`px-4 py-3 font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {formatCurrency(Math.abs(balance))} {balance > 0 ? '(مستحق)' : '(صافي)'}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      {projects.length > 0 && (
-        <div className="mt-4 bg-white rounded-xl border border-slate-200 p-4">
-          <div className="text-sm font-semibold text-slate-600 mb-3">المشاريع</div>
-          <div className="flex flex-wrap gap-2">
-            {projects.map(p => (
-              <button key={p.id} onClick={() => navigate(`/projects/${p.id}`)}
-                className="text-xs bg-amber-50 text-amber-800 hover:bg-amber-100 px-3 py-1.5 rounded-lg border border-amber-200 transition-colors">
-                {p.project_name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
