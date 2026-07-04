@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, Printer, MessageCircle, Mail } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, openWhatsApp, openEmail } from '../../lib/utils'
@@ -23,36 +24,41 @@ interface StatementLine {
   status?: string
 }
 
+interface StatementData { customer: Customer | null; invoices: Invoice[]; receipts: Receipt[]; projects: Project[] }
+const EMPTY_STATEMENT_DATA: StatementData = { customer: null, invoices: [], receipts: [], projects: [] }
+
+// جلب بيانات كشف حساب العميل (مصدر React Query)
+async function fetchClientStatement(customerId: string): Promise<StatementData> {
+  const [custRes, invRes, recRes, projRes] = await Promise.all([
+    supabase.from('customers').select('*').eq('id', customerId).maybeSingle(),
+    supabase.from('invoices').select('*').eq('customer_id', customerId).neq('status', 'cancelled').order('issue_date'),
+    supabase.from('receipts').select('*').eq('customer_id', customerId).order('receipt_date'),
+    supabase.from('projects').select('id, project_name').eq('client_id', customerId),
+  ])
+  return {
+    customer: (custRes.data as Customer) ?? null,
+    invoices: (invRes.data ?? []) as Invoice[],
+    receipts: (recRes.data ?? []) as Receipt[],
+    projects: (projRes.data ?? []) as Project[],
+  }
+}
+
 export default function ClientStatement() {
   const { customerId } = useParams<{ customerId: string }>()
   const navigate = useNavigate()
 
-  const [customer, setCustomer] = useState<Customer | null>(null)
-  const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [receipts, setReceipts] = useState<Receipt[]>([])
-  const [projects, setProjects] = useState<Project[]>([])
-  const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10))
 
-  const load = async () => {
-    setLoading(true)
-    const [custRes, invRes, recRes, projRes] = await Promise.all([
-      supabase.from('customers').select('*').eq('id', customerId).single(),
-      supabase.from('invoices').select('*').eq('customer_id', customerId).neq('status', 'cancelled').order('issue_date'),
-      supabase.from('receipts').select('*').eq('customer_id', customerId).order('receipt_date'),
-      supabase.from('projects').select('id, project_name').eq('client_id', customerId),
-    ])
-    setCustomer(custRes.data as Customer)
-    setInvoices((invRes.data ?? []) as Invoice[])
-    setReceipts((recRes.data ?? []) as Receipt[])
-    setProjects((projRes.data ?? []) as Project[])
-    setLoading(false)
-  }
+  const { data = EMPTY_STATEMENT_DATA, isLoading } = useQuery({
+    queryKey: ['client-statement', customerId],
+    queryFn: () => fetchClientStatement(customerId!),
+    enabled: !!customerId,
+  })
+  const { customer, invoices, receipts, projects } = data
 
-  useEffect(() => { load() }, [customerId])
-
-  const buildStatement = (): StatementLine[] => {
+  // بناء كشف الحساب (يُعاد فقط عند تغيّر البيانات أو الفترة)
+  const statement = useMemo<StatementLine[]>(() => {
     const lines: StatementLine[] = []
     invoices.forEach(inv => {
       if (dateFrom && inv.issue_date < dateFrom) return
@@ -77,16 +83,15 @@ export default function ClientStatement() {
     let running = 0
     lines.forEach(l => { running += l.debit - l.credit; l.balance = running })
     return lines
-  }
+  }, [invoices, receipts, projects, dateFrom, dateTo])
 
-  const statement = buildStatement()
   const totalDebit = statement.reduce((s, l) => s + l.debit, 0)
   const totalCredit = statement.reduce((s, l) => s + l.credit, 0)
   const balance = totalDebit - totalCredit
 
-  const overdueInvoices = invoices.filter(inv =>
+  const overdueInvoices = useMemo(() => invoices.filter(inv =>
     inv.status === 'overdue' || (inv.status === 'sent' && inv.due_date && inv.due_date < new Date().toISOString().slice(0, 10))
-  )
+  ), [invoices])
 
   const sendWhatsApp = () => {
     if (!customer) return
@@ -115,7 +120,7 @@ export default function ClientStatement() {
     openEmail(customer.email, 'كشف حساب — مؤسسة الميمون للمقاولات', body)
   }
 
-  if (loading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
+  if (isLoading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
   if (!customer) return <div className="p-12 text-center text-slate-400">العميل غير موجود</div>
 
   return (
