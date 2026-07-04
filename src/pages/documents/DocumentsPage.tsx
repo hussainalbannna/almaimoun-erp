@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from 'react'
+import { useState, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileText, Trash2, FileArchive, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { parseDocument } from '../../lib/document-parser'
@@ -8,21 +9,37 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { formatDate } from '../../lib/utils'
 
+// جلب المستندات (مصدر React Query)
+async function fetchDocuments(): Promise<Document[]> {
+  const { data } = await supabase.from('documents').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Document[]
+}
+
+// أيقونة حسب نوع الملف
+function fileIcon(type: string): string {
+  if (type === 'pdf') return '📄'
+  if (['xlsx', 'xls', 'csv'].includes(type)) return '📊'
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(type)) return '🖼️'
+  return '📁'
+}
+
+// تسميات حقول البيانات المستخرجة (ثابتة — لا تُعاد إنشاؤها في كل رندر)
+const FIELD_LABELS: Record<string, string> = {
+  name: 'الاسم', company_name: 'الشركة', email: 'البريد', phone: 'الهاتف',
+  address: 'العنوان', tax_number: 'رقم الضريبة', invoice_number: 'رقم الفاتورة',
+  lpo_number: 'رقم أمر الشراء', date: 'التاريخ', amount: 'المبلغ',
+  bank_iban: 'IBAN', payment_terms: 'شروط الدفع',
+}
+
 export default function DocumentsPage() {
-  const [documents, setDocuments] = useState<Document[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [parsing, setParsing] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [extracted, setExtracted] = useState<{ data: ExtractedDocumentData; text: string; name: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const load = async () => {
-    const { data } = await supabase.from('documents').select('*').order('created_at', { ascending: false })
-    setDocuments((data ?? []) as Document[])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const { data: documents = [], isLoading } = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['documents'] })
 
   const handleFile = async (file: File) => {
     setParsing(true)
@@ -37,11 +54,12 @@ export default function DocumentsPage() {
         extracted_data: data,
       })
       toast.success('تم قراءة الملف وحفظ البيانات المستخرجة')
-      load()
+      reload()
     } catch {
       toast.error('حدث خطأ أثناء قراءة الملف')
+    } finally {
+      setParsing(false)
     }
-    setParsing(false)
   }
 
   const handleDelete = async () => {
@@ -49,14 +67,7 @@ export default function DocumentsPage() {
     await supabase.from('documents').delete().eq('id', deleteId)
     toast.success('تم حذف المستند')
     setDeleteId(null)
-    load()
-  }
-
-  const fileIcon = (type: string) => {
-    if (type === 'pdf') return '📄'
-    if (['xlsx', 'xls', 'csv'].includes(type)) return '📊'
-    if (['png', 'jpg', 'jpeg', 'webp'].includes(type)) return '🖼️'
-    return '📁'
+    reload()
   }
 
   return (
@@ -97,15 +108,9 @@ export default function DocumentsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
             {Object.entries(extracted.data).map(([key, val]) => {
               if (!val || key === 'items') return null
-              const labels: Record<string, string> = {
-                name: 'الاسم', company_name: 'الشركة', email: 'البريد', phone: 'الهاتف',
-                address: 'العنوان', tax_number: 'رقم الضريبة', invoice_number: 'رقم الفاتورة',
-                lpo_number: 'رقم أمر الشراء', date: 'التاريخ', amount: 'المبلغ',
-                bank_iban: 'IBAN', payment_terms: 'شروط الدفع',
-              }
               return (
                 <div key={key} className="bg-white rounded-lg p-2 border border-green-100">
-                  <p className="text-xs text-slate-500">{labels[key] ?? key}</p>
+                  <p className="text-xs text-slate-500">{FIELD_LABELS[key] ?? key}</p>
                   <p className="font-medium text-slate-800 truncate">{String(val)}</p>
                 </div>
               )
@@ -126,7 +131,7 @@ export default function DocumentsPage() {
       )}
 
       {/* Documents list */}
-      {loading ? (
+      {isLoading ? (
         <div className="flex justify-center py-10">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
