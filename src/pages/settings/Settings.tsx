@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabase'
 import type { CompanySettings } from '../../types'
 import Button from '../../components/ui/Button'
@@ -11,6 +12,12 @@ import { loadApiKey, saveApiKey, readDocumentText } from '../../lib/ai'
 type Tab = 'company' | 'banking' | 'numbering' | 'ai'
 
 const GOLD = '#c4925a'
+
+// جلب إعدادات الشركة (مصدر React Query)
+async function fetchCompanySettings(): Promise<CompanySettings | null> {
+  const { data } = await supabase.from('company_settings').select('*').maybeSingle()
+  return (data as CompanySettings) ?? null
+}
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>('company')
@@ -44,18 +51,17 @@ export default function Settings() {
     loadApiKey().then(k => setAiKey(k)).catch(() => {})
   }, [])
 
+  const queryClient = useQueryClient()
+  const { data: settingsData } = useQuery({ queryKey: ['company-settings'], queryFn: fetchCompanySettings })
+  // تعبئة النموذج عند وصول الإعدادات — مع استبعاد مفتاح الذكاء الاصطناعي حتى لا يُكتب فوقه أبداً.
+  // المفتاح يُدار حصرياً من تبويب الذكاء الاصطناعي عبر حقل aiKey.
   useEffect(() => {
-    supabase.from('company_settings').select('*').single().then(({ data }) => {
-      if (data) {
-        // نستبعد مفتاح الذكاء الاصطناعي من نموذج الإعدادات العامة حتى لا يُكتب فوقه أبداً.
-        // المفتاح يُدار حصرياً من تبويب الذكاء الاصطناعي عبر حقل aiKey.
-        const { anthropic_api_key: _omit, ...rest } = data as CompanySettings & { anthropic_api_key?: string }
-        void _omit
-        setForm(rest as Partial<CompanySettings>)
-        setSettingsId((data as CompanySettings).id)
-      }
-    })
-  }, [])
+    if (!settingsData) return
+    const { anthropic_api_key: _omit, ...rest } = settingsData as CompanySettings & { anthropic_api_key?: string }
+    void _omit
+    setForm(rest as Partial<CompanySettings>)
+    setSettingsId(settingsData.id)
+  }, [settingsData])
 
   const set = (field: keyof CompanySettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }))
@@ -72,6 +78,7 @@ export default function Settings() {
       : await supabase.from('company_settings').insert(payload)
     setLoading(false)
     if (error) { toast.error('حدث خطأ أثناء الحفظ'); return }
+    queryClient.invalidateQueries({ queryKey: ['company-settings'] })
     toast.success('تم حفظ الإعدادات')
   }
 
