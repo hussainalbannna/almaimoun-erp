@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Printer, MessageCircle, Send } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Receipt, CompanySettings } from '../../types'
@@ -19,21 +20,21 @@ const PAYMENT_LABELS: Record<string, string> = {
 export default function ReceiptView() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [receipt, setReceipt] = useState<Receipt | null>(null)
-  const [company, setCompany] = useState<CompanySettings | null>(null)
-  const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
 
-  useEffect(() => {
-    Promise.all([
-      supabase.from('receipts').select('*').eq('id', id).single(),
-      supabase.from('company_settings').select('*').single(),
-    ]).then(([rRes, cRes]) => {
-      setReceipt(rRes.data as Receipt)
-      setCompany(cRes.data as CompanySettings)
-      setLoading(false)
-    })
-  }, [id])
+  const { data, isLoading } = useQuery({
+    queryKey: ['receipt-view', id],
+    queryFn: async () => {
+      const [rRes, cRes] = await Promise.all([
+        supabase.from('receipts').select('*').eq('id', id).maybeSingle(),
+        supabase.from('company_settings').select('*').maybeSingle(),
+      ])
+      return { receipt: (rRes.data as Receipt) ?? null, company: (cRes.data as CompanySettings) ?? null }
+    },
+    enabled: !!id,
+  })
+  const receipt = data?.receipt ?? null
+  const company = data?.company ?? null
 
   const resolveClientPhone = async (): Promise<string> => {
     if (!receipt) return ''
@@ -146,7 +147,7 @@ export default function ReceiptView() {
     setSending(false)
   }
 
-  if (loading) return <div className="flex justify-center py-16"><div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" /></div>
+  if (isLoading) return <div className="flex justify-center py-16"><div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" /></div>
   if (!receipt) return <div className="p-12 text-center text-slate-400">Receipt not found</div>
 
   return (
