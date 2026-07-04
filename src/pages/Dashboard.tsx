@@ -39,7 +39,6 @@ const LEVEL_STYLE: Record<AlertLevel, { dot: string; border: string; bg: string;
 }
 const LEVEL_LABEL: Record<AlertLevel, string> = { overdue: 'متأخر', danger: 'عاجل', warning: 'تحذير', info: 'تنبيه' }
 
-export default function Dashboard() {
 const EMPTY_STATS: Stats = {
   activeProjects: 0, totalWorkers: 0, currentMonthExpenses: 0, supplierPayables: 0, subcontractorDue: 0,
   upcomingMilestones: [], projectFin: [], recentLogs: [],
