@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Pencil, Printer, Mail, MessageCircle, CheckCircle, Receipt, Send } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrencyEn, formatDate, invoiceStatusLabel, invoiceStatusColor, openWhatsApp } from '../../lib/utils'
@@ -7,37 +8,53 @@ import type { Invoice, InvoiceItem, CompanySettings } from '../../types'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
+interface InvoiceViewData {
+  invoice: Invoice | null
+  items: InvoiceItem[]
+  company: CompanySettings | null
+}
+const EMPTY_ITEMS: InvoiceItem[] = []
+
+// جلب الفاتورة وبنودها وإعدادات الشركة (مصدر React Query)
+async function fetchInvoiceView(id: string): Promise<InvoiceViewData> {
+  const [{ data: inv }, { data: invItems }, { data: comp }] = await Promise.all([
+    supabase.from('invoices').select('*').eq('id', id).maybeSingle(),
+    supabase.from('invoice_items').select('*').eq('invoice_id', id).order('sort_order'),
+    supabase.from('company_settings').select('*').maybeSingle(),
+  ])
+  return {
+    invoice: (inv as Invoice) ?? null,
+    items: (invItems ?? []) as InvoiceItem[],
+    company: (comp as CompanySettings) ?? null,
+  }
+}
+
 export default function InvoiceView() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [invoice, setInvoice] = useState<Invoice | null>(null)
-  const [items, setItems] = useState<InvoiceItem[]>([])
-  const [company, setCompany] = useState<CompanySettings | null>(null)
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [sending, setSending] = useState(false)
 
-  useEffect(() => {
-    Promise.all([
-      supabase.from('invoices').select('*').eq('id', id).single(),
-      supabase.from('invoice_items').select('*').eq('invoice_id', id).order('sort_order'),
-      supabase.from('company_settings').select('*').single(),
-    ]).then(([{ data: inv }, { data: invItems }, { data: comp }]) => {
-      setInvoice(inv as Invoice)
-      setItems((invItems ?? []) as InvoiceItem[])
-      setCompany(comp as CompanySettings)
-      setLoading(false)
-    })
-  }, [id])
+  const { data, isLoading } = useQuery({ queryKey: ['invoice-view', id], queryFn: () => fetchInvoiceView(id!), enabled: !!id })
+  const invoice = data?.invoice ?? null
+  const items = data?.items ?? EMPTY_ITEMS
+  const company = data?.company ?? null
+
+  // بعد تغيير الحالة: تحديث كاش هذه الفاتورة والقائمة معاً
+  const invalidateInvoice = () => {
+    queryClient.invalidateQueries({ queryKey: ['invoice-view', id] })
+    queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
+  }
 
   const markAsPaid = async () => {
     await supabase.from('invoices').update({ status: 'paid', updated_at: new Date().toISOString() }).eq('id', id)
-    setInvoice(prev => prev ? { ...prev, status: 'paid' } : prev)
+    invalidateInvoice()
     toast.success('تم تحديث الحالة إلى مدفوعة')
   }
 
   const markAsSent = async () => {
     await supabase.from('invoices').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('id', id)
-    setInvoice(prev => prev ? { ...prev, status: 'sent' } : prev)
+    invalidateInvoice()
   }
 
   const resolveClientPhone = async (): Promise<string> => {
@@ -136,7 +153,7 @@ export default function InvoiceView() {
     setSending(false)
   }
 
-  if (loading) return <div className="flex justify-center py-16"><div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" /></div>
+  if (isLoading) return <div className="flex justify-center py-16"><div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" /></div>
   if (!invoice) return <div className="text-center py-16 text-slate-500">Invoice not found</div>
 
   const statusColor = invoiceStatusColor[invoice.status] ?? 'bg-slate-100 text-slate-700'
