@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, X, Upload, FileText, Wrench, Package, Truck, Building2, Home, Zap,
   Calendar, Wallet, Receipt, Repeat, Clock
@@ -27,6 +28,7 @@ const isPdfData = (data: string) => !!data && data.startsWith('data:application/
 export default function RentalForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [saving, setSaving] = useState(false)
@@ -127,6 +129,9 @@ export default function RentalForm() {
 
     toast.success(isEdit ? 'تم تحديث الإيجار' : 'تم تسجيل الإيجار')
     setSaving(false)
+    // الإيجار قد يكون مرتبطاً بمشروع (يؤثّر على ربحيته)
+    queryClient.invalidateQueries({ queryKey: ['rentals-list'] })
+    queryClient.invalidateQueries({ queryKey: ['project-detail'] })
     navigate('/rentals')
   }
 
