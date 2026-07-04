@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, Plus, Trash2, X, Sparkles, Loader2, Upload, FileText,
   Building2, User, Calendar, Hash, Wallet, CreditCard, Paperclip, Truck, Receipt
@@ -76,6 +77,7 @@ function UploadField({ label, accept, onFile, children }: {
 export default function PurchaseInvoiceForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [saving, setSaving] = useState(false)
@@ -259,10 +261,13 @@ export default function PurchaseInvoiceForm() {
   const removeDelivery = (idx: number) => setDeliveries(prev => prev.filter((_, i) => i !== idx))
 
   // ── حساب الضريبة الحي (المُدخل = المبلغ قبل الضريبة) ──
-  const subtotalNum = Number(form.amount) || 0
-  const taxRateNum = Number(form.tax_rate) || 0
-  const taxAmount = subtotalNum * (taxRateNum / 100)
-  const totalWithTax = subtotalNum + taxAmount
+  const { subtotalNum, taxRateNum, taxAmount, totalWithTax } = useMemo(() => {
+    const subtotalNum = Number(form.amount) || 0
+    const taxRateNum = Number(form.tax_rate) || 0
+    const taxAmount = subtotalNum * (taxRateNum / 100)
+    const totalWithTax = subtotalNum + taxAmount
+    return { subtotalNum, taxRateNum, taxAmount, totalWithTax }
+  }, [form.amount, form.tax_rate])
 
   const handleSave = async () => {
     if (!form.supplier_id) { toast.error('يرجى اختيار المورد'); return }
@@ -318,6 +323,9 @@ export default function PurchaseInvoiceForm() {
 
     toast.success(isEdit ? 'تم تحديث الفاتورة بنجاح' : 'تم تسجيل فاتورة الشراء بنجاح')
     setSaving(false)
+    // تحديث القائمة والتنبيهات (الشيكات الآجلة تظهر في التنبيهات والتقويم)
+    queryClient.invalidateQueries({ queryKey: ['purchase-invoices-list'] })
+    queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
     navigate('/purchases')
   }
 
