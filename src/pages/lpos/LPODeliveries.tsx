@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Truck, CheckCircle } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { LPO, LPOItem, LPODelivery, LPODeliveryItem } from '../../types'
@@ -9,52 +10,66 @@ import Input from '../../components/ui/Input'
 import Textarea from '../../components/ui/Textarea'
 import toast from 'react-hot-toast'
 
+interface LPODeliveriesData {
+  lpo: LPO | null
+  items: LPOItem[]
+  deliveries: (LPODelivery & { items: LPODeliveryItem[] })[]
+}
+const EMPTY_ITEMS: LPOItem[] = []
+const EMPTY_DELIVERIES: LPODeliveriesData['deliveries'] = []
+
+// جلب أمر الشراء وبنوده وسجل تسليماته (مع بنود كل تسليم) — مصدر React Query
+async function fetchLPODeliveries(id: string): Promise<LPODeliveriesData> {
+  const [lpoRes, itemsRes, delRes] = await Promise.all([
+    supabase.from('lpos').select('*').eq('id', id).maybeSingle(),
+    supabase.from('lpo_items').select('*').eq('lpo_id', id).order('sort_order'),
+    supabase.from('lpo_deliveries').select('*').eq('lpo_id', id).order('delivery_number'),
+  ])
+  const dels = (delRes.data ?? []) as LPODelivery[]
+  const deliveries = await Promise.all(dels.map(async d => {
+    const { data: diData } = await supabase.from('lpo_delivery_items').select('*').eq('delivery_id', d.id)
+    return { ...d, items: (diData ?? []) as LPODeliveryItem[] }
+  }))
+  return {
+    lpo: (lpoRes.data as LPO) ?? null,
+    items: (itemsRes.data ?? []) as LPOItem[],
+    deliveries,
+  }
+}
+
 export default function LPODeliveries() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [lpo, setLpo] = useState<LPO | null>(null)
-  const [items, setItems] = useState<LPOItem[]>([])
-  const [deliveries, setDeliveries] = useState<(LPODelivery & { items: LPODeliveryItem[] })[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ delivery_date: new Date().toISOString().slice(0, 10), notes: '' })
   const [quantities, setQuantities] = useState<Record<string, number>>({})
 
-  const load = async () => {
-    setLoading(true)
-    const [lpoRes, itemsRes, delRes] = await Promise.all([
-      supabase.from('lpos').select('*').eq('id', id).single(),
-      supabase.from('lpo_items').select('*').eq('lpo_id', id).order('sort_order'),
-      supabase.from('lpo_deliveries').select('*').eq('lpo_id', id).order('delivery_number'),
-    ])
-    const lpoData = lpoRes.data as LPO
-    const itemsData = (itemsRes.data ?? []) as LPOItem[]
-    setLpo(lpoData)
-    setItems(itemsData)
+  const { data, isLoading } = useQuery({ queryKey: ['lpo-deliveries', id], queryFn: () => fetchLPODeliveries(id!), enabled: !!id })
+  const lpo = data?.lpo ?? null
+  const items = data?.items ?? EMPTY_ITEMS
+  const deliveries = data?.deliveries ?? EMPTY_DELIVERIES
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['lpo-deliveries', id] })
 
-    const dels = (delRes.data ?? []) as LPODelivery[]
-    const delsWithItems = await Promise.all(dels.map(async d => {
-      const { data: diData } = await supabase.from('lpo_delivery_items').select('*').eq('delivery_id', d.id)
-      return { ...d, items: (diData ?? []) as LPODeliveryItem[] }
-    }))
-    setDeliveries(delsWithItems)
-    setLoading(false)
-  }
+  // إجمالي المُسلَّم لكل بند — يُبنى مرة واحدة (بدل إعادة مسح كل التسليمات في كل استدعاء)
+  const deliveredByItem = useMemo(() => {
+    const map: Record<string, number> = {}
+    for (const d of deliveries) {
+      for (const di of d.items) {
+        map[di.lpo_item_id] = (map[di.lpo_item_id] ?? 0) + Number(di.quantity_delivered)
+      }
+    }
+    return map
+  }, [deliveries])
+  const getDeliveredQty = (itemId: string) => deliveredByItem[itemId] ?? 0
 
-  useEffect(() => { load() }, [id])
-
-  const getDeliveredQty = (itemId: string) =>
-    deliveries.flatMap(d => d.items).filter(di => di.lpo_item_id === itemId).reduce((s, di) => s + Number(di.quantity_delivered), 0)
-
-  const getProgress = () => {
+  const progress = useMemo(() => {
     if (items.length === 0) return 0
     const totalOrdered = items.reduce((s, i) => s + Number(i.quantity), 0)
-    const totalDelivered = items.reduce((s, i) => s + getDeliveredQty(i.id!), 0)
+    const totalDelivered = items.reduce((s, i) => s + (deliveredByItem[i.id!] ?? 0), 0)
     return totalOrdered > 0 ? Math.min(100, (totalDelivered / totalOrdered) * 100) : 0
-  }
-
-  const progress = getProgress()
+  }, [items, deliveredByItem])
   const isComplete = progress >= 100
 
   const handleAddDelivery = async () => {
@@ -80,15 +95,18 @@ export default function LPODeliveries() {
           })
         }
       }
-      // Check if all delivered
-      const newProgress = getProgress()
+      // فحص الاكتمال بحساب النسبة الجديدة (شاملةً كميات هذا التسليم) — لا من الحالة القديمة
+      const totalOrdered = items.reduce((s, i) => s + Number(i.quantity), 0)
+      const alreadyDelivered = items.reduce((s, i) => s + getDeliveredQty(i.id!), 0)
+      const newlyDelivered = Object.values(quantities).reduce((s, q) => s + (q > 0 ? q : 0), 0)
+      const newProgress = totalOrdered > 0 ? ((alreadyDelivered + newlyDelivered) / totalOrdered) * 100 : 0
       if (newProgress >= 99) {
         await supabase.from('lpos').update({ status: 'received' }).eq('id', id)
       }
       toast.success(`تم تسجيل التسليم رقم ${delNum}`)
       setShowForm(false)
       setQuantities({})
-      load()
+      reload()
     } catch (e: unknown) {
       toast.error('حدث خطأ')
     } finally {
@@ -96,7 +114,7 @@ export default function LPODeliveries() {
     }
   }
 
-  if (loading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
+  if (isLoading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
   if (!lpo) return <div className="p-12 text-center text-slate-400">أمر الشراء غير موجود</div>
 
   return (
