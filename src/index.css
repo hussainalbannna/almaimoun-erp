@@ -7,13 +7,24 @@
     font-family: 'Noto Sans Arabic', 'Cairo', sans-serif;
   }
 
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     direction: rtl;
+    min-height: 100vh;
     @apply bg-slate-50 text-slate-900;
   }
 
   input, textarea, select {
     direction: rtl;
+  }
+
+  /* إبراز واضح لعنصر التركيز عند التنقّل بلوحة المفاتيح (إتاحة) */
+  :focus-visible {
+    outline: 2px solid #c4925a;
+    outline-offset: 2px;
   }
 }
 
@@ -38,13 +49,13 @@
   .no-print { display: none !important; }
   .print-only { display: block !important; }
   body { background: white !important; margin: 0 !important; padding: 0 !important; }
-  /* Hide the entire app shell: sidebar, header, navigation */
+  /* إخفاء هيكل التطبيق بالكامل: الشريط الجانبي والترويسة والتنقّل */
   aside, nav, header,
   [class*="Sidebar"], [class*="Header"],
   button[aria-label], [role="navigation"] {
     display: none !important;
   }
-  /* Reset main layout to full width */
+  /* إعادة ضبط التخطيط الرئيسي ليملأ عرض الصفحة */
   main, [class*="AppLayout"], .flex {
     display: block !important;
     width: 100% !important;
@@ -52,7 +63,7 @@
     padding: 0 !important;
     margin: 0 !important;
   }
-  /* The invoice/document container should fill the page */
+  /* حاوية الفاتورة/المستند تملأ الصفحة بلا ظلال أو حدود */
   .bg-white { box-shadow: none !important; border: none !important; border-radius: 0 !important; }
 }
 
