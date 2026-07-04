@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Plus, Search, Eye, Pencil, Trash2, FileText, Receipt } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
@@ -22,39 +23,45 @@ interface InvoiceWithBalance extends Invoice {
   total_receipts: number
 }
 
+// جلب الفواتير مع حساب المتبقي (الإجمالي − مجموع الإيصالات) — مصدر React Query
+async function fetchInvoicesWithBalance(): Promise<InvoiceWithBalance[]> {
+  const [invRes, recRes] = await Promise.all([
+    supabase.from('invoices').select('*').order('created_at', { ascending: false }),
+    supabase.from('receipts').select('invoice_id, amount'),
+  ])
+  const receiptsByInvoice: Record<string, number> = {}
+  for (const r of (recRes.data ?? []) as { invoice_id: string | null; amount: number }[]) {
+    if (r.invoice_id) receiptsByInvoice[r.invoice_id] = (receiptsByInvoice[r.invoice_id] ?? 0) + Number(r.amount)
+  }
+  return ((invRes.data ?? []) as Invoice[]).map(inv => ({
+    ...inv,
+    total_receipts: receiptsByInvoice[inv.id] ?? 0,
+    remaining_balance: Number(inv.total) - (receiptsByInvoice[inv.id] ?? 0),
+  }))
+}
+
 export default function InvoiceList() {
-  const [invoices, setInvoices] = useState<InvoiceWithBalance[]>([])
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [loading, setLoading] = useState(true)
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const [invRes, recRes] = await Promise.all([
-      supabase.from('invoices').select('*').order('created_at', { ascending: false }),
-      supabase.from('receipts').select('invoice_id, amount'),
-    ])
-    const receiptsByInvoice: Record<string, number> = {}
-    ;(recRes.data ?? []).forEach((r: { invoice_id: string | null; amount: number }) => {
-      if (r.invoice_id) receiptsByInvoice[r.invoice_id] = (receiptsByInvoice[r.invoice_id] ?? 0) + Number(r.amount)
+  const { data: invoices = [], isLoading } = useQuery({ queryKey: ['invoices-list'], queryFn: fetchInvoicesWithBalance })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
+
+  const { filtered, totalAmount, paidAmount } = useMemo(() => {
+    const q = search.toLowerCase()
+    const filtered = invoices.filter(inv => {
+      const matchSearch = !q
+        || inv.invoice_number.toLowerCase().includes(q)
+        || (inv.customer_name || '').toLowerCase().includes(q)
+      const matchStatus = statusFilter === 'all' || inv.status === statusFilter
+      return matchSearch && matchStatus
     })
-    const data = ((invRes.data ?? []) as Invoice[]).map(inv => ({
-      ...inv,
-      total_receipts: receiptsByInvoice[inv.id] ?? 0,
-      remaining_balance: Number(inv.total) - (receiptsByInvoice[inv.id] ?? 0),
-    }))
-    setInvoices(data)
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
-
-  const filtered = invoices.filter(inv => {
-    const matchSearch = inv.invoice_number.includes(search) || inv.customer_name.includes(search)
-    const matchStatus = statusFilter === 'all' || inv.status === statusFilter
-    return matchSearch && matchStatus
-  })
+    const totalAmount = filtered.reduce((s, i) => s + Number(i.total), 0)
+    const paidAmount = filtered.reduce((s, i) => s + i.total_receipts, 0)
+    return { filtered, totalAmount, paidAmount }
+  }, [invoices, search, statusFilter])
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -63,11 +70,8 @@ export default function InvoiceList() {
     if (error) { toast.error('حدث خطأ أثناء الحذف'); return }
     toast.success('تم حذف الفاتورة')
     setDeleteId(null)
-    load()
+    reload()
   }
-
-  const totalAmount = filtered.reduce((s, i) => s + Number(i.total), 0)
-  const paidAmount = filtered.reduce((s, i) => s + i.total_receipts, 0)
 
   return (
     <div className="space-y-4">
@@ -116,7 +120,7 @@ export default function InvoiceList() {
       )}
 
       {/* Table */}
-      {loading ? (
+      {isLoading ? (
         <div className="flex justify-center py-16">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
