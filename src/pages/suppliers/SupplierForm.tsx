@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Supplier, ExtractedDocumentData } from '../../types'
@@ -11,24 +12,30 @@ import toast from 'react-hot-toast'
 
 const EMPTY: Omit<Supplier, 'id' | 'created_at' | 'updated_at'> = {
   name: '', company_name: '', email: '', phone: '', whatsapp: '',
-  address: '', city: '', country: 'الإمارات', tax_number: '',
+  address: '', city: '', country: 'البحرين', tax_number: '',
   commercial_reg: '', payment_terms: 'صافي 30 يوم', notes: '',
+}
+
+// جلب المورد للتعديل (مصدر React Query)
+async function fetchSupplier(id: string): Promise<Supplier | null> {
+  const { data } = await supabase.from('suppliers').select('*').eq('id', id).maybeSingle()
+  return (data as Supplier) ?? null
 }
 
 export default function SupplierForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
 
+  const { data: supplierData } = useQuery({ queryKey: ['supplier', id], queryFn: () => fetchSupplier(id!), enabled: isEdit })
+  // تعبئة حقول النموذج عند وصول بيانات المورد
   useEffect(() => {
-    if (!isEdit) return
-    supabase.from('suppliers').select('*').eq('id', id).single().then(({ data }) => {
-      if (data) setForm(data as Supplier)
-    })
-  }, [id, isEdit])
+    if (supplierData) setForm(supplierData)
+  }, [supplierData])
 
   const set = (field: keyof typeof EMPTY) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }))
@@ -60,6 +67,8 @@ export default function SupplierForm() {
       : await supabase.from('suppliers').insert(payload)
     setLoading(false)
     if (error) { toast.error('حدث خطأ أثناء الحفظ'); return }
+    queryClient.invalidateQueries({ queryKey: ['suppliers-list'] })
+    if (isEdit) queryClient.invalidateQueries({ queryKey: ['supplier', id] })
     toast.success(isEdit ? 'تم تحديث المورد' : 'تم إضافة المورد')
     navigate('/suppliers')
   }
