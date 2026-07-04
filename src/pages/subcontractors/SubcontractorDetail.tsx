@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Plus, DollarSign, MessageCircle, Paperclip, Eye, X, FileText, Image as ImageIcon, Upload, Loader2, Edit, Trash2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, subcontractorSpecialtyLabel, openWhatsApp } from '../../lib/utils'
@@ -167,6 +168,12 @@ function WorkImagesField({ images, onChange, onPreview }: {
 export default function SubcontractorDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  // إبطال كاش الصفحات المرتبطة: قائمة المقاولين (إحصائياتها) وربحية المشاريع (مدفوعات الباطن تُخصم منها)
+  const invalidateRelated = () => {
+    queryClient.invalidateQueries({ queryKey: ['subcontractors-list'] })
+    queryClient.invalidateQueries({ queryKey: ['project-detail'] })
+  }
   // محصّن: "جديد" إذا لم يكن id معرّفاً حقيقياً
   const isNew = !id || id === 'new' || id === 'undefined'
 
@@ -203,7 +210,7 @@ export default function SubcontractorDetail() {
 
     if (!isNew && id) {
       const [subRes, assignRes, payRes] = await Promise.all([
-        supabase.from('subcontractors').select('*').eq('id', id).single(),
+        supabase.from('subcontractors').select('*').eq('id', id).maybeSingle(),
         supabase.from('subcontractor_assignments').select('*').eq('subcontractor_id', id).order('created_at', { ascending: false }),
         supabase.from('subcontractor_payments').select('*').eq('subcontractor_id', id).order('payment_date', { ascending: false }),
       ])
@@ -237,6 +244,7 @@ export default function SubcontractorDetail() {
         const { error } = await supabase.from('subcontractors').update({ ...form, updated_at: new Date().toISOString() }).eq('id', id)
         if (error) throw error
         toast.success('تم الحفظ')
+        invalidateRelated()
       }
     } catch (e) {
       const msg = (e as { message?: string })?.message
@@ -299,7 +307,7 @@ export default function SubcontractorDetail() {
       }
       setShowAssignForm(false)
       setEditAssignId(null)
-      load()
+      load(); invalidateRelated()
     } catch (e) {
       const m = (e as { message?: string })?.message
       toast.error(m ? `خطأ: ${m}` : 'حدث خطأ')
@@ -312,7 +320,7 @@ export default function SubcontractorDetail() {
       await supabase.from('subcontractor_assignments').delete().eq('id', deleteAssignId)
       toast.success('تم حذف التكليف')
       setDeleteAssignId(null)
-      load()
+      load(); invalidateRelated()
     } catch { toast.error('حدث خطأ في الحذف') }
   }
 
@@ -374,7 +382,7 @@ export default function SubcontractorDetail() {
       }
       setShowPayForm(false)
       setEditPayId(null)
-      load()
+      load(); invalidateRelated()
     } catch (e) {
       const m = (e as { message?: string })?.message
       toast.error(m ? `خطأ: ${m}` : 'حدث خطأ')
@@ -394,7 +402,7 @@ export default function SubcontractorDetail() {
       }
       toast.success('تم حذف الدفعة')
       setDeletePayId(null)
-      load()
+      load(); invalidateRelated()
     } catch { toast.error('حدث خطأ في الحذف') }
   }
 
