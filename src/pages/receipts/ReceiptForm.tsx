@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Receipt, Customer, Invoice } from '../../types'
@@ -25,6 +26,7 @@ interface InvoiceWithBalance extends Invoice {
 
 export default function ReceiptForm() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   const prefillInvoiceId = searchParams.get('invoice')
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -171,21 +173,24 @@ export default function ReceiptForm() {
     }
 
     toast.success('تم إنشاء الإيصال بنجاح')
+    // الإيصال يغيّر متبقّي/حالة الفاتورة → تحديث القائمتين
+    queryClient.invalidateQueries({ queryKey: ['receipts-list'] })
+    queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
     navigate('/receipts')
   }
 
-  const customerOptions = [
+  const customerOptions = useMemo(() => [
     { value: '', label: 'اختر العميل' },
     ...customers.map(c => ({ value: c.id, label: c.name + (c.company_name ? ` — ${c.company_name}` : '') }))
-  ]
+  ], [customers])
 
-  const invoiceOptions = [
+  const invoiceOptions = useMemo(() => [
     { value: '', label: 'ربط بفاتورة صادرة' },
     ...filteredInvoices.map(i => ({
       value: i.id,
       label: `#${i.invoice_number} — ${i.customer_name} — متبقي: ${i.remaining_balance.toFixed(3)} د.ب`
     }))
-  ]
+  ], [filteredInvoices])
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
