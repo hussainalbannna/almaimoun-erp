@@ -1,61 +1,72 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "npm:@supabase/supabase-js@2.49.1";
+// supabase/functions/create-user/index.ts
+import "jsr:@supabase/functions-js/edge-runtime.d.ts"
+import { createClient } from "npm:@supabase/supabase-js@2.49.1"
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, X-Client-Info, Apikey",
-};
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+}
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  })
+
+/**
+ * يتحقق من أنّ مُرسِل الطلب مستخدم مسجّل الدخول فعلاً قبل السماح بإنشاء مستخدم جديد.
+ * حرج أمنياً: بدونه يستطيع أي طرف يصل إلى رابط الدالة إنشاء حسابات بلا قيود.
+ */
+async function isAuthenticated(req: Request): Promise<boolean> {
+  const authHeader = req.headers.get("Authorization")
+  if (!authHeader) return false
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: authHeader } } },
+  )
+  const { data, error } = await supabase.auth.getUser()
+  return !error && Boolean(data.user)
+}
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders })
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
 
   try {
-    const { email, password } = await req.json();
+    // لا تُنشئ مستخدمين إلا لطلب صادر عن مستخدم مسجّل الدخول
+    if (!(await isAuthenticated(req))) {
+      return json({ error: "Unauthorized" }, 401)
+    }
+
+    const { email, password } = await req.json()
 
     if (!email || !password) {
-      return new Response(
-        JSON.stringify({ error: "Email and password are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ error: "Email and password are required" }, 400)
+    }
+    if (typeof password !== "string" || password.length < 6) {
+      return json({ error: "Password must be at least 6 characters" }, 400)
     }
 
-    if (password.length < 6) {
-      return new Response(
-        JSON.stringify({ error: "Password must be at least 6 characters" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
+    // عميل بصلاحيات الخدمة (Service Role) لإنشاء المستخدم — لا يُستخدم إلا بعد اجتياز التحقق أعلاه
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    )
 
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-    });
+    })
 
     if (error) {
-      return new Response(
-        JSON.stringify({ error: error.message }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ error: error.message }, 400)
     }
 
-    return new Response(
-      JSON.stringify({ success: true, user_id: data.user.id }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return json({ success: true, user_id: data.user.id })
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return json({ error: err instanceof Error ? err.message : "Unknown error" }, 500)
   }
-});
+})
