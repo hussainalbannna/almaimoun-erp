@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Plus, Search, Eye, Pencil, Trash2, ShoppingCart } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
@@ -17,27 +18,31 @@ const STATUS_FILTERS = [
   { value: 'cancelled', label: 'ملغى' },
 ]
 
+// جلب أوامر الشراء (مصدر React Query — نفس مفتاح إبطال LPOForm)
+async function fetchLpos(): Promise<LPO[]> {
+  const { data } = await supabase.from('lpos').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as LPO[]
+}
+
 export default function LPOList() {
-  const [lpos, setLpos] = useState<LPO[]>([])
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [loading, setLoading] = useState(true)
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('lpos').select('*').order('created_at', { ascending: false })
-    setLpos((data ?? []) as LPO[])
-    setLoading(false)
-  }
+  const { data: lpos = [], isLoading } = useQuery({ queryKey: ['lpos-list'], queryFn: fetchLpos })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['lpos-list'] })
 
-  useEffect(() => { load() }, [])
-
-  const filtered = lpos.filter(l => {
-    const matchSearch = l.lpo_number.includes(search) || l.supplier_name.includes(search)
-    const matchStatus = statusFilter === 'all' || l.status === statusFilter
-    return matchSearch && matchStatus
-  })
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return lpos.filter(l => {
+      const matchSearch = !q
+        || l.lpo_number.toLowerCase().includes(q)
+        || (l.supplier_name || '').toLowerCase().includes(q)
+      const matchStatus = statusFilter === 'all' || l.status === statusFilter
+      return matchSearch && matchStatus
+    })
+  }, [lpos, search, statusFilter])
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -46,7 +51,7 @@ export default function LPOList() {
     if (error) { toast.error('حدث خطأ أثناء الحذف'); return }
     toast.success('تم حذف أمر الشراء')
     setDeleteId(null)
-    load()
+    reload()
   }
 
   return (
@@ -83,7 +88,7 @@ export default function LPOList() {
         ))}
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="flex justify-center py-16">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
