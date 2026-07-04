@@ -23,7 +23,6 @@ interface ProjectReport {
   status: string
 }
 
-export default function ReportsPage() {
 interface ReportsData {
   totalContractValue: number
   totalInvoiced: number
