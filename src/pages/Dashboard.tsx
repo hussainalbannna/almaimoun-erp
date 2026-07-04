@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import {
   Building2, FileText, Users, BookOpen,
   ClipboardList, GitMerge, Layers, CalendarDays,
@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { formatCurrency, formatDate } from '../lib/utils'
-import { fetchAllAlerts, type AppAlert, type AlertLevel } from '../lib/notifications'
+import { fetchAllAlerts, type AlertLevel } from '../lib/notifications'
 
 interface ProjectFin {
   id: string
@@ -40,89 +40,87 @@ const LEVEL_STYLE: Record<AlertLevel, { dot: string; border: string; bg: string;
 const LEVEL_LABEL: Record<AlertLevel, string> = { overdue: 'متأخر', danger: 'عاجل', warning: 'تحذير', info: 'تنبيه' }
 
 export default function Dashboard() {
-  const navigate = useNavigate()
-  const [stats, setStats] = useState<Stats>({
-    activeProjects: 0, totalWorkers: 0, currentMonthExpenses: 0, supplierPayables: 0, subcontractorDue: 0,
-    upcomingMilestones: [], projectFin: [], recentLogs: [],
+const EMPTY_STATS: Stats = {
+  activeProjects: 0, totalWorkers: 0, currentMonthExpenses: 0, supplierPayables: 0, subcontractorDue: 0,
+  upcomingMilestones: [], projectFin: [], recentLogs: [],
+}
+
+// جلب إحصائيات لوحة التحكم وحسابها (مصدر React Query — الحسابات منقولة حرفياً)
+async function fetchDashboardStats(): Promise<Stats> {
+  const now = new Date()
+  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10)
+
+  const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<{ data: T[] | null }> => {
+    try { return await p } catch { return { data: [] } }
+  }
+
+  const [
+    projRes, workRes, expRes, lpoRes, milRes, logRes,
+    allMilRes, apRes, piAllRes, subPayRes, subAssignRes
+  ] = await Promise.all([
+    safe(supabase.from('projects').select('id, project_name, contract_value, status').eq('status', 'active')),
+    safe(supabase.from('workers').select('id').eq('status', 'active')),
+    safe(supabase.from('accounts_payable').select('amount').gte('entry_date', monthStart).lte('entry_date', monthEnd)),
+    safe(supabase.from('lpos').select('total').eq('status', 'approved')),
+    safe(supabase.from('project_milestones').select('id, project_id, name, amount, status').in('status', ['pending', 'in_progress', 'completed']).order('sort_order').limit(6)),
+    safe(supabase.from('daily_logs').select('id, project_id, log_date, description').order('log_date', { ascending: false }).limit(5)),
+    safe(supabase.from('project_milestones').select('project_id, amount, status')),
+    safe(supabase.from('accounts_payable').select('project_id, amount')),
+    safe(supabase.from('purchase_invoices').select('project_id, amount')),
+    safe(supabase.from('subcontractor_payments').select('project_id, amount')),
+    safe(supabase.from('subcontractor_assignments').select('agreed_amount, paid_amount')),
+  ])
+
+  const projects = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
+  const milestones = (milRes.data ?? []) as { id: string; project_id: string; name: string; amount: number; status: string }[]
+  const logs = (logRes.data ?? []) as { id: string; project_id: string; log_date: string; description: string }[]
+  const allMilestones = (allMilRes.data ?? []) as { project_id: string; amount: number; status: string }[]
+  const ap = (apRes.data ?? []) as { project_id: string | null; amount: number }[]
+  const piAll = (piAllRes.data ?? []) as { project_id: string | null; amount: number }[]
+  const subPay = (subPayRes.data ?? []) as { project_id: string | null; amount: number }[]
+  const subAssign = (subAssignRes.data ?? []) as { agreed_amount: number; paid_amount: number }[]
+
+  const monthExpenses = (expRes.data ?? []).reduce((s, e: { amount: number }) => s + Number(e.amount), 0)
+  const supplierPayables = (lpoRes.data ?? []).reduce((s, l: { total: number }) => s + Number(l.total), 0)
+  const subcontractorDue = subAssign.reduce((s, a) => s + (Number(a.agreed_amount) - Number(a.paid_amount)), 0)
+
+  const projectFin: ProjectFin[] = projects.map(p => {
+    const invoiced = allMilestones.filter(m => m.project_id === p.id && ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0)
+    const costs =
+      ap.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0) +
+      piAll.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0) +
+      subPay.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0)
+    const revenue = Number(p.contract_value)
+    return { id: p.id, project_name: p.project_name, contract_value: revenue, revenue, costs, profit: revenue - costs, invoiced }
   })
-  const [loading, setLoading] = useState(true)
-  const [alerts, setAlerts] = useState<AppAlert[]>([])
 
-  useEffect(() => {
-    // تنبيهات لوحة التحكم = نفس مصدر مركز الإشعارات
-    fetchAllAlerts().then(setAlerts)
+  const upcomingMilestones = milestones.map(m => ({
+    ...m, project_name: projects.find(p => p.id === m.project_id)?.project_name ?? '',
+  })).filter(m => m.project_name)
 
-    const load = async () => {
-      const now = new Date()
-      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10)
+  const recentLogs = logs.map(l => ({
+    ...l, project_name: projects.find(p => p.id === l.project_id)?.project_name,
+  }))
 
-      const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<{ data: T[] | null }> => {
-        try { return await p } catch { return { data: [] } }
-      }
+  return {
+    activeProjects: projects.length,
+    totalWorkers: workRes.data?.length ?? 0,
+    currentMonthExpenses: monthExpenses,
+    supplierPayables,
+    subcontractorDue,
+    upcomingMilestones,
+    projectFin,
+    recentLogs,
+  }
+}
 
-      const [
-        projRes, workRes, expRes, lpoRes, milRes, logRes,
-        allMilRes, apRes, piAllRes, subPayRes, subAssignRes
-      ] = await Promise.all([
-        safe(supabase.from('projects').select('id, project_name, contract_value, status').eq('status', 'active')),
-        safe(supabase.from('workers').select('id').eq('status', 'active')),
-        safe(supabase.from('accounts_payable').select('amount').gte('entry_date', monthStart).lte('entry_date', monthEnd)),
-        safe(supabase.from('lpos').select('total').eq('status', 'approved')),
-        safe(supabase.from('project_milestones').select('id, project_id, name, amount, status').in('status', ['pending', 'in_progress', 'completed']).order('sort_order').limit(6)),
-        safe(supabase.from('daily_logs').select('id, project_id, log_date, description').order('log_date', { ascending: false }).limit(5)),
-        safe(supabase.from('project_milestones').select('project_id, amount, status')),
-        safe(supabase.from('accounts_payable').select('project_id, amount')),
-        safe(supabase.from('purchase_invoices').select('project_id, amount')),
-        safe(supabase.from('subcontractor_payments').select('project_id, amount')),
-        safe(supabase.from('subcontractor_assignments').select('agreed_amount, paid_amount')),
-      ])
+export default function Dashboard() {
+  const navigate = useNavigate()
 
-      const projects = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
-      const milestones = (milRes.data ?? []) as { id: string; project_id: string; name: string; amount: number; status: string }[]
-      const logs = (logRes.data ?? []) as { id: string; project_id: string; log_date: string; description: string }[]
-      const allMilestones = (allMilRes.data ?? []) as { project_id: string; amount: number; status: string }[]
-      const ap = (apRes.data ?? []) as { project_id: string | null; amount: number }[]
-      const piAll = (piAllRes.data ?? []) as { project_id: string | null; amount: number }[]
-      const subPay = (subPayRes.data ?? []) as { project_id: string | null; amount: number }[]
-      const subAssign = (subAssignRes.data ?? []) as { agreed_amount: number; paid_amount: number }[]
-
-      const monthExpenses = (expRes.data ?? []).reduce((s, e: { amount: number }) => s + Number(e.amount), 0)
-      const supplierPayables = (lpoRes.data ?? []).reduce((s, l: { total: number }) => s + Number(l.total), 0)
-      const subcontractorDue = subAssign.reduce((s, a) => s + (Number(a.agreed_amount) - Number(a.paid_amount)), 0)
-
-      const projectFin: ProjectFin[] = projects.map(p => {
-        const invoiced = allMilestones.filter(m => m.project_id === p.id && ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0)
-        const costs =
-          ap.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0) +
-          piAll.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0) +
-          subPay.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0)
-        const revenue = Number(p.contract_value)
-        return { id: p.id, project_name: p.project_name, contract_value: revenue, revenue, costs, profit: revenue - costs, invoiced }
-      })
-
-      const upcomingMilestones = milestones.map(m => ({
-        ...m, project_name: projects.find(p => p.id === m.project_id)?.project_name ?? '',
-      })).filter(m => m.project_name)
-
-      const recentLogs = logs.map(l => ({
-        ...l, project_name: projects.find(p => p.id === l.project_id)?.project_name,
-      }))
-
-      setStats({
-        activeProjects: projects.length,
-        totalWorkers: workRes.data?.length ?? 0,
-        currentMonthExpenses: monthExpenses,
-        supplierPayables,
-        subcontractorDue,
-        upcomingMilestones,
-        projectFin,
-        recentLogs,
-      })
-      setLoading(false)
-    }
-    load()
-  }, [])
+  const { data: stats = EMPTY_STATS, isLoading } = useQuery({ queryKey: ['dashboard-stats'], queryFn: fetchDashboardStats })
+  // التنبيهات = نفس مصدر ومفتاح مركز الإشعارات والهيدر (كاش مشترك)
+  const { data: alerts = [] } = useQuery({ queryKey: ['app-alerts'], queryFn: fetchAllAlerts })
 
   const MILESTONE_STATUS: Record<string, { label: string; color: string }> = {
     pending: { label: 'معلق', color: 'bg-slate-100 text-slate-600' },
@@ -234,7 +232,7 @@ export default function Dashboard() {
             </div>
             <button onClick={() => navigate('/projects')} className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700">كل <ChevronLeft size={12} /></button>
           </div>
-          {loading ? <div className="p-6 text-center text-slate-400 text-sm">جاري التحميل...</div> :
+          {isLoading ? <div className="p-6 text-center text-slate-400 text-sm">جاري التحميل...</div> :
             stats.upcomingMilestones.length === 0 ? (
               <div className="p-6 text-center text-slate-400 text-sm">لا توجد مراحل معلقة</div>
             ) : (
@@ -267,7 +265,7 @@ export default function Dashboard() {
             </div>
             <button onClick={() => navigate('/projects')} className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700">تفاصيل <ChevronLeft size={12} /></button>
           </div>
-          {loading ? <div className="p-6 text-center text-slate-400 text-sm">جاري التحميل...</div> :
+          {isLoading ? <div className="p-6 text-center text-slate-400 text-sm">جاري التحميل...</div> :
             stats.projectFin.length === 0 ? (
               <div className="p-6 text-center text-slate-400 text-sm">لا توجد مشاريع نشطة</div>
             ) : (
@@ -305,7 +303,7 @@ export default function Dashboard() {
           </div>
           <button onClick={() => navigate('/daily-logs')} className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700">كل <ChevronLeft size={12} /></button>
         </div>
-        {loading ? <div className="p-6 text-center text-slate-400 text-sm">جاري التحميل...</div> :
+        {isLoading ? <div className="p-6 text-center text-slate-400 text-sm">جاري التحميل...</div> :
           stats.recentLogs.length === 0 ? (
             <div className="p-6 text-center text-slate-400 text-sm">لا توجد تقارير حديثة</div>
           ) : (
