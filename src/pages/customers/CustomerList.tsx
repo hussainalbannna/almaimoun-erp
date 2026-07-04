@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Plus, Search, Pencil, Trash2, Phone, Mail, MessageCircle, Users } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
@@ -8,24 +9,28 @@ import Button from '../../components/ui/Button'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 
+// جلب العملاء (مصدر React Query — نفس مفتاح الإبطال في CustomerForm)
+async function fetchCustomers(): Promise<Customer[]> {
+  const { data } = await supabase.from('customers').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Customer[]
+}
+
 export default function CustomerList() {
-  const [customers, setCustomers] = useState<Customer[]>([])
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('customers').select('*').order('created_at', { ascending: false })
-    setCustomers((data ?? []) as Customer[])
-    setLoading(false)
-  }
+  const { data: customers = [], isLoading } = useQuery({ queryKey: ['customers-list'], queryFn: fetchCustomers })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['customers-list'] })
 
-  useEffect(() => { load() }, [])
-
-  const filtered = customers.filter(c =>
-    c.name.includes(search) || c.company_name?.includes(search) || c.email?.includes(search)
-  )
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return customers.filter(c =>
+      (c.name || '').toLowerCase().includes(q) ||
+      c.company_name?.toLowerCase().includes(q) ||
+      c.email?.toLowerCase().includes(q)
+    )
+  }, [customers, search])
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -33,7 +38,7 @@ export default function CustomerList() {
     if (error) { toast.error('حدث خطأ أثناء الحذف'); return }
     toast.success('تم حذف العميل')
     setDeleteId(null)
-    load()
+    reload()
   }
 
   return (
@@ -54,7 +59,7 @@ export default function CustomerList() {
         </Link>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="flex justify-center py-16">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
