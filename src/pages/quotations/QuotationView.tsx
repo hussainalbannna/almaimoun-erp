@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Printer, Globe, Pencil, Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { readDocumentText, hasApiKey } from '../../lib/ai'
@@ -164,29 +165,35 @@ const NOTES_AR = [
 const fmt = (n: number) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })
 const looksArabic = (s: string) => /[\u0600-\u06FF]/.test(s)
 
+const EMPTY_ITEMS: QItem[] = []
+
+// جلب العرض وبنوده (مصدر React Query)
+async function fetchQuotationView(id: string): Promise<{ quote: Quotation | null; items: QItem[] }> {
+  const [{ data: q }, { data: its }] = await Promise.all([
+    supabase.from('quotations').select('*').eq('id', id).maybeSingle(),
+    supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order'),
+  ])
+  return { quote: (q as Quotation) ?? null, items: (its ?? []) as QItem[] }
+}
+
 export default function QuotationView() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [quote, setQuote] = useState<Quotation | null>(null)
-  const [items, setItems] = useState<QItem[]>([])
   const [lang, setLang] = useState<'ar' | 'en'>('en')
-  const [loading, setLoading] = useState(true)
   // أسماء محوّلة بالذكاء (كاش)
   const [tName, setTName] = useState('')
   const [tAddr, setTAddr] = useState('')
   const [tLoc, setTLoc] = useState('')
   const [translating, setTranslating] = useState(false)
 
+  const { data, isLoading } = useQuery({ queryKey: ['quotation-view', id], queryFn: () => fetchQuotationView(id!), enabled: !!id })
+  const quote = data?.quote ?? null
+  const items = data?.items ?? EMPTY_ITEMS
+
+  // ضبط لغة العرض من العرض المحفوظ عند وصوله (تبقى قابلة للتبديل يدوياً)
   useEffect(() => {
-    const load = async () => {
-      const { data: q } = await supabase.from('quotations').select('*').eq('id', id).single()
-      const { data: its } = await supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order')
-      if (q) { setQuote(q as Quotation); setLang((q.language as 'ar' | 'en') ?? 'en') }
-      setItems((its ?? []) as QItem[])
-      setLoading(false)
-    }
-    load()
-  }, [id])
+    if (quote?.language) setLang(quote.language as 'ar' | 'en')
+  }, [quote])
 
   // تحويل الأسماء للغة المختارة بالذكاء (عند تغير اللغة أو التحميل)
   useEffect(() => {
@@ -231,7 +238,7 @@ export default function QuotationView() {
     run()
   }, [quote, lang])
 
-  if (loading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
+  if (isLoading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
   if (!quote) return <div className="p-12 text-center text-slate-400">العرض غير موجود</div>
 
   const isAr = lang === 'ar'
