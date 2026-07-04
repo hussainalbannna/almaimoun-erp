@@ -1,5 +1,6 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Plus, Trash2, Sparkles, Loader2, FileCheck, FolderOpen,
   FileText, FileImage, Eye, X, Building2, User, Layers, Paperclip
@@ -82,6 +83,7 @@ const CONTRACT_PROMPT = `أنت مساعد متخصص في قراءة عقود �
 export default function ProjectForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -136,7 +138,7 @@ export default function ProjectForm() {
   }
   const addMilestone = () => setMilestones(prev => [...prev, { name: '', description: '', percentage: 0, amount: 0, status: 'pending', sort_order: prev.length }])
   const removeMilestone = (idx: number) => setMilestones(prev => prev.filter((_, i) => i !== idx))
-  const totalMilestoneAmount = milestones.reduce((s, m) => s + Number(m.amount || 0), 0)
+  const totalMilestoneAmount = useMemo(() => milestones.reduce((s, m) => s + Number(m.amount || 0), 0), [milestones])
 
   // ─── قراءة العقد بالذكاء الاصطناعي ───────────────────────────────────
   const handleContractScan = async (file: File) => {
@@ -259,6 +261,8 @@ export default function ProjectForm() {
         )
       }
 
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] })
       toast.success(isEdit ? 'تم تحديث المشروع' : 'تم إنشاء المشروع')
       navigate(`/projects/${projectId}`)
     } catch (e: unknown) {
@@ -268,10 +272,10 @@ export default function ProjectForm() {
     }
   }
 
-  const customerOptions = [
+  const customerOptions = useMemo(() => [
     { value: '', label: 'اختر العميل (اختياري)' },
     ...customers.map(c => ({ value: c.id, label: c.name }))
-  ]
+  ], [customers])
   const onCustomerChange = (cid: string) => {
     const c = customers.find(x => x.id === cid)
     setForm(prev => ({ ...prev, client_id: cid || null, client_name: c?.name ?? prev.client_name, client_phone: c?.phone ?? prev.client_phone }))
