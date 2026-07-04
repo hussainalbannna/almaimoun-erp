@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, RefreshCw, CreditCard, UserCog, Package, FileText, ListTodo, Calculator, ChevronLeft, CheckCircle2, Landmark } from 'lucide-react'
 import { fetchAllAlerts, type AppAlert, type AlertKind, type AlertLevel } from '../../lib/notifications'
 import { formatCurrency, formatDate } from '../../lib/utils'
@@ -34,35 +35,35 @@ const FILTERS: { key: 'all' | AlertLevel; label: string }[] = [
   { key: 'info', label: 'تنبيه' },
 ]
 
+const EMPTY_ALERTS: AppAlert[] = []
+
 export default function NotificationsCenter() {
   const navigate = useNavigate()
-  const [alerts, setAlerts] = useState<AppAlert[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [filter, setFilter] = useState<'all' | AlertLevel>('all')
 
-  const load = async () => {
-    setLoading(true)
-    const data = await fetchAllAlerts()
-    setAlerts(data)
-    setLoading(false)
-  }
+  // نفس مفتاح Header ('app-alerts') → جلب واحد وكاش مشترك (تجنّب تكرار الاستعلامات السبعة)
+  const { data: alerts = EMPTY_ALERTS, isLoading, isFetching } = useQuery({ queryKey: ['app-alerts'], queryFn: fetchAllAlerts })
+  // التحديث يُبطِل المفتاح فيتحدّث الجرس والمركز معاً
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
 
-  useEffect(() => { load() }, [])
-
-  const filtered = filter === 'all' ? alerts : alerts.filter(a => a.level === filter)
-
-  const counts = {
+  const counts = useMemo(() => ({
     overdue: alerts.filter(a => a.level === 'overdue').length,
     danger: alerts.filter(a => a.level === 'danger').length,
     warning: alerts.filter(a => a.level === 'warning').length,
     info: alerts.filter(a => a.level === 'info').length,
-  }
+  }), [alerts])
+
+  const filtered = useMemo(
+    () => (filter === 'all' ? alerts : alerts.filter(a => a.level === filter)),
+    [alerts, filter],
+  )
 
   // تجميع حسب النوع (مع الحفاظ على ترتيب الإلحاح من fetchAllAlerts)
-  const byKind = filtered.reduce((acc, a) => {
+  const byKind = useMemo(() => filtered.reduce((acc, a) => {
     (acc[a.kind] ??= []).push(a)
     return acc
-  }, {} as Record<AlertKind, AppAlert[]>)
+  }, {} as Record<AlertKind, AppAlert[]>), [filtered])
 
   return (
     <div className="p-6 max-w-4xl mx-auto" dir="rtl">
@@ -77,8 +78,8 @@ export default function NotificationsCenter() {
             <p className="text-sm text-slate-500">{alerts.length} تنبيه</p>
           </div>
         </div>
-        <button onClick={load} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> تحديث
+        <button onClick={() => reload()} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">
+          <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} /> تحديث
         </button>
       </div>
 
@@ -112,7 +113,7 @@ export default function NotificationsCenter() {
       </div>
 
       {/* القائمة */}
-      {loading ? (
+      {isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري فحص التنبيهات...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
