@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Search, Eye, Pencil, Trash2, X, Banknote, ShieldCheck,
   AlertTriangle, CheckCircle2, Undo2, Ban, Landmark, CalendarClock,
@@ -91,10 +92,18 @@ const emptyForm = {
   notes: '',
 }
 
+// جلب الشيكات ('cheques' — مفتاح مشترك) وقائمة المشاريع (مصادر React Query)
+async function fetchAllCheques(): Promise<Cheque[]> {
+  const { data } = await supabase.from('cheques').select('*').order('due_date', { ascending: true, nullsFirst: false })
+  return (data ?? []) as Cheque[]
+}
+async function fetchProjectsList(): Promise<ProjectOpt[]> {
+  const { data } = await supabase.from('projects').select('id, project_name').order('project_name')
+  return (data ?? []) as ProjectOpt[]
+}
+
 export default function ChequesCenter() {
-  const [cheques, setCheques] = useState<Cheque[]>([])
-  const [projects, setProjects] = useState<ProjectOpt[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [tab, setTab] = useState<Tab>('action')
   const [search, setSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState('')
@@ -113,18 +122,10 @@ export default function ChequesCenter() {
 
   const t = new Date().toISOString().slice(0, 10)
 
-  const load = async () => {
-    setLoading(true)
-    const [{ data: cData }, { data: pData }] = await Promise.all([
-      supabase.from('cheques').select('*').order('due_date', { ascending: true, nullsFirst: false }),
-      supabase.from('projects').select('id, project_name').order('project_name'),
-    ])
-    setCheques((cData ?? []) as Cheque[])
-    setProjects((pData ?? []) as ProjectOpt[])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const { data: cheques = [], isLoading } = useQuery({ queryKey: ['cheques'], queryFn: fetchAllCheques })
+  const { data: projects = [] } = useQuery({ queryKey: ['projects-list'], queryFn: fetchProjectsList })
+  // أي تعديل على الشيكات يُبطِل المفتاح فيتحدّث كل مستهلِك له تلقائياً
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['cheques'] })
 
   // ─── إحصائيات البطاقات ───────────────────────────────────────────
   const stats = useMemo(() => {
@@ -229,7 +230,7 @@ export default function ChequesCenter() {
         toast.success('تم تسجيل الشيك')
       }
       setShowForm(false)
-      load()
+      reload()
     } catch (e) {
       toast.error('حدث خطأ: ' + ((e as Error)?.message ?? ''))
     } finally {
@@ -255,7 +256,7 @@ export default function ChequesCenter() {
     toast.success(msg[status])
     setClearTarget(null)
     setViewCheque(null)
-    load()
+    reload()
   }
 
   // ─── حذف (اليدوي فقط) ────────────────────────────────────────────
@@ -271,7 +272,7 @@ export default function ChequesCenter() {
     if (error) { toast.error('تعذّر الحذف'); return }
     toast.success('تم حذف الشيك')
     setDeleteId(null)
-    load()
+    reload()
   }
 
   // ─── صورة الشيك ──────────────────────────────────────────────────
@@ -297,12 +298,12 @@ export default function ChequesCenter() {
     return null
   }
 
-  const TABS: { key: Tab; label: string; count: number }[] = [
+  const TABS: { key: Tab; label: string; count: number }[] = useMemo(() => [
     { key: 'action', label: 'تحتاج إجراء', count: cheques.filter(c => (c.status === 'pending' && c.cheque_type !== 'guarantee' && c.due_date && c.due_date <= t) || c.status === 'bounced').length },
     { key: 'pending', label: 'معلّقة (آجلة)', count: stats.pendingCount },
     { key: 'guarantee', label: 'شيكات الضمان', count: cheques.filter(c => c.cheque_type === 'guarantee').length },
     { key: 'all', label: 'السجل الكامل', count: cheques.length },
-  ]
+  ], [cheques, stats.pendingCount, t])
 
   return (
     <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-5" dir="rtl">
@@ -369,7 +370,7 @@ export default function ChequesCenter() {
       </div>
 
       {/* الجدول */}
-      {loading ? (
+      {isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
