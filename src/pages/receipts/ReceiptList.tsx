@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Eye, Trash2, Search } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Receipt } from '../../types'
@@ -8,35 +9,38 @@ import Button from '../../components/ui/Button'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 
+// جلب الإيصالات (مصدر React Query)
+async function fetchReceipts(): Promise<Receipt[]> {
+  const { data } = await supabase.from('receipts').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Receipt[]
+}
+
 export default function ReceiptList() {
   const navigate = useNavigate()
-  const [receipts, setReceipts] = useState<Receipt[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('receipts').select('*').order('created_at', { ascending: false })
-    setReceipts((data ?? []) as Receipt[])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const { data: receipts = [], isLoading } = useQuery({ queryKey: ['receipts-list'], queryFn: fetchReceipts })
 
   const handleDelete = async () => {
     if (!deleteId) return
     await supabase.from('receipts').delete().eq('id', deleteId)
     toast.success('تم حذف الإيصال')
     setDeleteId(null)
-    load()
+    // حذف الإيصال يغيّر متبقّي الفاتورة → تحديث القائمتين
+    queryClient.invalidateQueries({ queryKey: ['receipts-list'] })
+    queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
   }
 
-  const filtered = receipts.filter(r =>
-    r.receipt_number.includes(search) ||
-    r.customer_name.toLowerCase().includes(search.toLowerCase()) ||
-    r.invoice_number?.includes(search)
-  )
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return receipts.filter(r =>
+      r.receipt_number.includes(search) ||
+      (r.customer_name || '').toLowerCase().includes(q) ||
+      r.invoice_number?.includes(search)
+    )
+  }, [receipts, search])
 
   return (
     <div className="p-6">
@@ -59,7 +63,7 @@ export default function ReceiptList() {
             />
           </div>
         </div>
-        {loading ? (
+        {isLoading ? (
           <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center text-slate-400">لا توجد إيصالات</div>
