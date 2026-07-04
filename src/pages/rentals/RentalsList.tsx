@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Search, Trash2, Edit, Eye, X, Paperclip, FileText, AlertTriangle,
   Building2, Truck, Home, Zap, Wrench, Package, Calendar, Wallet, CreditCard,
@@ -76,11 +77,21 @@ const monthlyEquivalent = (r: Rental): number => {
 
 type Tab = 'overview' | 'rentals' | 'payments'
 
+// جلب الإيجارات ودفعاتها مرتّبة (مصدر React Query)
+async function fetchRentalsData(): Promise<{ rentals: Rental[]; payments: RentalPayment[] }> {
+  const [rRes, pRes] = await Promise.all([
+    supabase.from('rentals').select('*'),
+    supabase.from('rental_payments').select('*'),
+  ])
+  const rentals = ((rRes.data ?? []) as Rental[]).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+  const payments = ((pRes.data ?? []) as RentalPayment[]).sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''))
+  return { rentals, payments }
+}
+const EMPTY_RENTALS_DATA = { rentals: [] as Rental[], payments: [] as RentalPayment[] }
+
 export default function RentalsList() {
   const navigate = useNavigate()
-  const [rentals, setRentals] = useState<Rental[]>([])
-  const [payments, setPayments] = useState<RentalPayment[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [tab, setTab] = useState<Tab>('overview')
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -90,19 +101,10 @@ export default function RentalsList() {
   // نموذج تسجيل دفعة
   const [payFor, setPayFor] = useState<Rental | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const [rRes, pRes] = await Promise.all([
-      supabase.from('rentals').select('*'),
-      supabase.from('rental_payments').select('*'),
-    ])
-    const rRows = ((rRes.data ?? []) as Rental[]).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
-    const pRows = ((pRes.data ?? []) as RentalPayment[]).sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''))
-    setRentals(rRows)
-    setPayments(pRows)
-    setLoading(false)
-  }
-  useEffect(() => { load() }, [])
+  const { data = EMPTY_RENTALS_DATA, isLoading } = useQuery({ queryKey: ['rentals-list'], queryFn: fetchRentalsData })
+  const rentals = data.rentals
+  const payments = data.payments
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['rentals-list'] })
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -110,7 +112,7 @@ export default function RentalsList() {
     toast.success('تم حذف الإيجار')
     setDeleteId(null)
     if (viewRental?.id === deleteId) setViewRental(null)
-    load()
+    reload()
   }
 
   const openDoc = (data: string) => {
@@ -122,24 +124,28 @@ export default function RentalsList() {
   const paymentsOf = (rentalId: string) => payments.filter(p => p.rental_id === rentalId)
   const paidTotal = (rentalId: string) => paymentsOf(rentalId).reduce((s, p) => s + num(p.amount), 0)
 
-  // ── حسابات النظرة العامة ──
-  const activeRentals = rentals.filter(r => r.status === 'active')
-  const recurringActive = activeRentals.filter(r => r.rental_type === 'recurring')
-  const monthlyCommitment = recurringActive.reduce((s, r) => s + monthlyEquivalent(r), 0)
-  const totalPaid = payments.reduce((s, p) => s + num(p.amount), 0)
+  // ── حسابات النظرة العامة (تُحسب عند تغيّر الإيجارات/الدفعات فقط) ──
+  const { activeRentals, recurringActive, monthlyCommitment, totalPaid, dueThisMonth, dueThisMonthTotal, endingSoon } = useMemo(() => {
+    const paymentsOfLocal = (rentalId: string) => payments.filter(p => p.rental_id === rentalId)
+    const activeRentals = rentals.filter(r => r.status === 'active')
+    const recurringActive = activeRentals.filter(r => r.rental_type === 'recurring')
+    const monthlyCommitment = recurringActive.reduce((s, r) => s + monthlyEquivalent(r), 0)
+    const totalPaid = payments.reduce((s, p) => s + num(p.amount), 0)
 
-  // المستحق هذا الشهر (الدوري الذي لم تُسجّل له دفعة بهذا الشهر)
-  const thisMonthPrefix = todayStr().slice(0, 7) // YYYY-MM
-  const dueThisMonth = recurringActive.filter(r => {
-    const paidThisMonth = paymentsOf(r.id).some(p => (p.payment_date || '').slice(0, 7) === thisMonthPrefix)
-    return !paidThisMonth
-  })
-  const dueThisMonthTotal = dueThisMonth.reduce((s, r) => s + monthlyEquivalent(r), 0)
+    // المستحق هذا الشهر (الدوري الذي لم تُسجّل له دفعة بهذا الشهر)
+    const thisMonthPrefix = todayStr().slice(0, 7) // YYYY-MM
+    const dueThisMonth = recurringActive.filter(r => {
+      const paidThisMonth = paymentsOfLocal(r.id).some(p => (p.payment_date || '').slice(0, 7) === thisMonthPrefix)
+      return !paidThisMonth
+    })
+    const dueThisMonthTotal = dueThisMonth.reduce((s, r) => s + monthlyEquivalent(r), 0)
 
-  // الإيجارات المؤقتة القريبة من الانتهاء (خلال 7 أيام)
-  const endingSoon = activeRentals.filter(r =>
-    r.rental_type === 'temporary' && r.end_date && r.end_date >= todayStr() && daysUntil(r.end_date) <= 7
-  )
+    // الإيجارات المؤقتة القريبة من الانتهاء (خلال 7 أيام)
+    const endingSoon = activeRentals.filter(r =>
+      r.rental_type === 'temporary' && r.end_date && r.end_date >= todayStr() && daysUntil(r.end_date) <= 7
+    )
+    return { activeRentals, recurringActive, monthlyCommitment, totalPaid, dueThisMonth, dueThisMonthTotal, endingSoon }
+  }, [rentals, payments])
 
   // ── تصفية قائمة الإيجارات ──
   const filteredRentals = useMemo(() => activeRentals.concat(rentals.filter(r => r.status !== 'active')).filter(r => {
@@ -180,7 +186,7 @@ export default function RentalsList() {
         ))}
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">جاري التحميل...</div>
       ) : (
         <>
@@ -389,7 +395,7 @@ export default function RentalsList() {
 
       {/* نافذة تسجيل دفعة */}
       {payFor && (
-        <PaymentModal rental={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); load() }} onPreviewImage={setPreviewImg} />
+        <PaymentModal rental={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); reload(); queryClient.invalidateQueries({ queryKey: ['project-detail'] }) }} onPreviewImage={setPreviewImg} />
       )}
 
       {/* نافذة استعراض الإيجار */}
