@@ -26,6 +26,16 @@ export default {
           light:   '#f1d5b2',
         },
       },
+      keyframes: {
+        shimmer: {
+          '0%':   { transform: 'translateX(100%)' },
+          '50%':  { transform: 'translateX(-20%)' },
+          '100%': { transform: 'translateX(100%)' },
+        },
+      },
+      animation: {
+        shimmer: 'shimmer 1.6s ease-in-out infinite',
+      },
     },
   },
   plugins: [],
