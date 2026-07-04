@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2, Upload, ClipboardList } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { nextSerial, formatCurrency } from '../../lib/utils'
@@ -34,6 +35,7 @@ export default function LPOForm() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const queryClient = useQueryClient()
   const isEdit = !!id
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [projects, setProjects] = useState<{ id: string; project_name: string }[]>([])
@@ -159,9 +161,13 @@ export default function LPOForm() {
   const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM, sort_order: prev.length }])
   const removeItem = (idx: number) => setItems(prev => prev.filter((_, i) => i !== idx))
 
-  const subtotal = items.reduce((s, i) => s + Number(i.total), 0)
-  const taxAmount = (subtotal * Number(form.tax_rate)) / 100
-  const total = subtotal + taxAmount - Number(form.discount)
+  // الحسابات المالية — تُعاد فقط عند تغيّر البنود أو نسبة الضريبة أو الخصم
+  const { subtotal, taxAmount, total } = useMemo(() => {
+    const subtotal = items.reduce((s, i) => s + Number(i.total), 0)
+    const taxAmount = (subtotal * Number(form.tax_rate)) / 100
+    const total = subtotal + taxAmount - Number(form.discount)
+    return { subtotal, taxAmount, total }
+  }, [items, form.tax_rate, form.discount])
 
   const handleExtracted = (data: ExtractedDocumentData) => {
     if (data.lpo_number) setForm(prev => ({ ...prev, lpo_number: data.lpo_number! }))
@@ -214,6 +220,7 @@ export default function LPOForm() {
     }
 
     setLoading(false)
+    queryClient.invalidateQueries({ queryKey: ['lpos-list'] })
     toast.success(isEdit ? 'تم تحديث أمر الشراء' : 'تم إنشاء أمر الشراء')
     navigate('/lpos')
   }
