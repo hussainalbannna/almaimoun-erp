@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, FileText, Eye, Pencil, Trash2, Calculator } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate } from '../../lib/utils'
@@ -31,21 +32,20 @@ const STATUS: Record<string, { label: string; color: 'gray' | 'blue' | 'green' |
   expired: { label: 'منتهي', color: 'amber' },
 }
 
+// جلب عروض الأسعار (مصدر React Query — نفس مفتاح إبطال QuotationForm)
+async function fetchQuotations(): Promise<Quotation[]> {
+  const { data } = await supabase.from('quotations').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Quotation[]
+}
+
 export default function QuotationList() {
   const navigate = useNavigate()
-  const [items, setItems] = useState<Quotation[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('quotations').select('*').order('created_at', { ascending: false })
-    setItems((data ?? []) as Quotation[])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const { data: items = [], isLoading } = useQuery({ queryKey: ['quotations-list'], queryFn: fetchQuotations })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['quotations-list'] })
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -53,20 +53,25 @@ export default function QuotationList() {
     if (error) { toast.error('تعذّر الحذف'); return }
     toast.success('تم حذف العرض')
     setDeleteId(null)
-    load()
+    reload()
   }
 
-  const filtered = items.filter(q =>
-    !search ||
-    q.quote_number?.toLowerCase().includes(search.toLowerCase()) ||
-    q.customer_name?.toLowerCase().includes(search.toLowerCase()) ||
-    q.project_name?.toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return items.filter(it =>
+      !q ||
+      it.quote_number?.toLowerCase().includes(q) ||
+      it.customer_name?.toLowerCase().includes(q) ||
+      it.project_name?.toLowerCase().includes(q)
+    )
+  }, [items, search])
 
   // إحصائيات سريعة
-  const totalValue = items.reduce((s, q) => s + Number(q.total || 0), 0)
-  const acceptedValue = items.filter(q => q.status === 'accepted').reduce((s, q) => s + Number(q.total || 0), 0)
-  const pendingCount = items.filter(q => q.status === 'sent').length
+  const { totalValue, acceptedValue, pendingCount } = useMemo(() => ({
+    totalValue: items.reduce((s, q) => s + Number(q.total || 0), 0),
+    acceptedValue: items.filter(q => q.status === 'accepted').reduce((s, q) => s + Number(q.total || 0), 0),
+    pendingCount: items.filter(q => q.status === 'sent').length,
+  }), [items])
 
   return (
     <div className="p-6" dir="rtl">
@@ -107,7 +112,7 @@ export default function QuotationList() {
       </div>
 
       {/* القائمة */}
-      {loading ? (
+      {isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
