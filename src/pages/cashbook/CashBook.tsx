@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, Search, Upload, ExternalLink, Sparkles, Loader2, X, BarChart3, Receipt as ReceiptIcon } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Project } from '../../types'
@@ -90,10 +91,18 @@ const emptyForm = (): Partial<CashEntry> => ({
   vat_amount: 0, is_vat_recoverable: false, notes: '',
 })
 
+// جلب القيود والمشاريع (مصادر React Query)
+async function fetchEntries(): Promise<CashEntry[]> {
+  const { data } = await supabase.from('accounts_payable').select('*').order('entry_date', { ascending: false })
+  return (data ?? []) as CashEntry[]
+}
+async function fetchProjectsList(): Promise<Project[]> {
+  const { data } = await supabase.from('projects').select('id, project_name').order('project_name')
+  return (data ?? []) as Project[]
+}
+
 export default function CashBook() {
-  const [entries, setEntries] = useState<CashEntry[]>([])
-  const [projects, setProjects] = useState<Project[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -108,18 +117,10 @@ export default function CashBook() {
 
   const [form, setForm] = useState<Partial<CashEntry>>(emptyForm())
 
-  const load = async () => {
-    setLoading(true)
-    const [eRes, pRes] = await Promise.all([
-      supabase.from('accounts_payable').select('*').order('entry_date', { ascending: false }),
-      supabase.from('projects').select('id, project_name').order('project_name'),
-    ])
-    setEntries((eRes.data ?? []) as CashEntry[])
-    setProjects((pRes.data ?? []) as Project[])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  // القيود ('accounts-payable') وقائمة المشاريع ('projects-list' — تُشارَك مع صفحات أخرى)
+  const { data: entries = [], isLoading } = useQuery({ queryKey: ['accounts-payable'], queryFn: fetchEntries })
+  const { data: projects = [] } = useQuery({ queryKey: ['projects-list'], queryFn: fetchProjectsList })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['accounts-payable'] })
 
   // ── قراءة الإيصال بالذكاء الاصطناعي ──
   const handleScan = async (file: File) => {
@@ -207,7 +208,7 @@ export default function CashBook() {
     toast.success('تم تسجيل القيد')
     setForm(emptyForm())
     setShowForm(false)
-    load()
+    reload()
   }
 
   const handleDelete = async () => {
@@ -215,7 +216,7 @@ export default function CashBook() {
     await supabase.from('accounts_payable').delete().eq('id', deleteId)
     toast.success('تم الحذف')
     setDeleteId(null)
-    load()
+    reload()
   }
 
   // ── التصفية ──
@@ -237,9 +238,11 @@ export default function CashBook() {
     })
   }, [entries, search, filterType, filterProject, filterPeriod])
 
-  const total = filtered.reduce((s, e) => s + n(e.amount), 0)
-  const totalVAT = filtered.reduce((s, e) => s + n(e.vat_amount), 0)
-  const recoverableVAT = filtered.filter(e => e.is_vat_recoverable).reduce((s, e) => s + n(e.vat_amount), 0)
+  const { total, totalVAT, recoverableVAT } = useMemo(() => ({
+    total: filtered.reduce((s, e) => s + n(e.amount), 0),
+    totalVAT: filtered.reduce((s, e) => s + n(e.vat_amount), 0),
+    recoverableVAT: filtered.filter(e => e.is_vat_recoverable).reduce((s, e) => s + n(e.vat_amount), 0),
+  }), [filtered])
 
   // تحليل حسب المشروع والتصنيف
   const byProject = useMemo(() => {
@@ -435,7 +438,7 @@ export default function CashBook() {
           </div>
           <span className="text-sm text-slate-500">{filtered.length} قيد</span>
         </div>
-        {loading ? (
+        {isLoading ? (
           <div className="p-8 text-center text-slate-400">جاري التحميل...</div>
         ) : (
           <div className="overflow-x-auto">
