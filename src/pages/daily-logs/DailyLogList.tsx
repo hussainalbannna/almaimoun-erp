@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp, ShoppingCart, Sparkles, Loader2, Cloud, Users, Eye } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
@@ -247,16 +248,37 @@ function buildPrintHTML(logs: PrintLog[]): string {
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
+// أنواع بيانات الصفحة + مصدر React Query
+interface DailyLogsData {
+  logs: (DailyLog & { project_name?: string })[]
+  projects: Project[]
+  workers: Worker[]
+}
+const EMPTY_LOGS: DailyLogsData['logs'] = []
+const EMPTY_PROJECTS: Project[] = []
+const EMPTY_WORKERS: Worker[] = []
+
+// استعلام واحد: المشاريع والعمّال والتقارير (ربط اسم المشروع بالتقرير يحتاج المشاريع)
+async function fetchDailyLogsData(): Promise<DailyLogsData> {
+  const [pRes, wRes, lRes] = await Promise.all([
+    supabase.from('projects').select('id, project_name').order('project_name'),
+    supabase.from('workers').select('id, name, name_en, branch').eq('status', 'active').order('name'),
+    supabase.from('daily_logs').select('*').order('log_date', { ascending: false }).limit(200),
+  ])
+  const projects = (pRes.data ?? []) as Project[]
+  const workers = (wRes.data ?? []) as Worker[]
+  const logData = (lRes.data ?? []) as DailyLog[]
+  const logs = logData.map(l => ({ ...l, project_name: projects.find(p => p.id === l.project_id)?.project_name }))
+  return { logs, projects, workers }
+}
+
 export default function DailyLogList() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const prefillProject = searchParams.get('project') ?? ''
   const printRef = useRef<HTMLDivElement>(null)
 
-  const [projects, setProjects] = useState<Project[]>([])
-  const [workers, setWorkers] = useState<Worker[]>([])
-  const [logs, setLogs] = useState<(DailyLog & { project_name?: string })[]>([])
-  const [loading, setLoading] = useState(true)
   const [filterProject, setFilterProject] = useState(prefillProject)
   const [showForm, setShowForm] = useState(!!prefillProject)
   const [saving, setSaving] = useState(false)
@@ -273,22 +295,13 @@ export default function DailyLogList() {
 
   const [form, setForm] = useState(EMPTY_FORM(prefillProject))
 
-  const load = async () => {
-    setLoading(true)
-    const [pRes, wRes, lRes] = await Promise.all([
-      supabase.from('projects').select('id, project_name').order('project_name'),
-      supabase.from('workers').select('id, name, name_en, branch').eq('status', 'active').order('name'),
-      supabase.from('daily_logs').select('*').order('log_date', { ascending: false }).limit(200),
-    ])
-    const ps = (pRes.data ?? []) as Project[]
-    setProjects(ps)
-    setWorkers((wRes.data ?? []) as Worker[])
-    const logData = (lRes.data ?? []) as DailyLog[]
-    setLogs(logData.map(l => ({ ...l, project_name: ps.find(p => p.id === l.project_id)?.project_name })))
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  // المشاريع والعمّال والتقارير عبر React Query
+  const { data, isLoading } = useQuery({ queryKey: ['daily-logs-data'], queryFn: fetchDailyLogsData })
+  const projects = data?.projects ?? EMPTY_PROJECTS
+  const workers = data?.workers ?? EMPTY_WORKERS
+  const logs = data?.logs ?? EMPTY_LOGS
+  // أي حفظ/حذف يُبطِل الكاش فيُعاد الجلب تلقائياً
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['daily-logs-data'] })
 
   const resetForm = () => {
     setForm(EMPTY_FORM(prefillProject))
@@ -428,7 +441,7 @@ export default function DailyLogList() {
       await syncAttendance(logId, form.log_date, form.project_id, selectedWorkers)
       toast.success(editingId ? 'تم تحديث التقرير' : 'تم تسجيل التقرير اليومي')
       resetForm()
-      load()
+      reload()
     } catch {
       toast.error('حدث خطأ أثناء الحفظ')
     } finally {
@@ -445,7 +458,7 @@ export default function DailyLogList() {
       toast.error('حدث خطأ أثناء الحذف')
     } else {
       toast.success('تم حذف التقرير')
-      setLogs(prev => prev.filter(l => l.id !== deleteTarget))
+      reload()
     }
     setDeletingId(null)
   }
@@ -553,7 +566,7 @@ export default function DailyLogList() {
     openPrintWindow(buildPrintHTML(logsWithWorkers))
   }
 
-  const filtered = logs.filter(l => !filterProject || l.project_id === filterProject)
+  const filtered = useMemo(() => logs.filter(l => !filterProject || l.project_id === filterProject), [logs, filterProject])
 
   const projectOptions = [
     { value: '', label: 'جميع المشاريع' },
@@ -725,7 +738,7 @@ export default function DailyLogList() {
           </div>
         </div>
 
-        {loading ? (
+        {isLoading ? (
           <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center">
