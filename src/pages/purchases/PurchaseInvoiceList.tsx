@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Edit, Trash2, Search, FileText, AlertTriangle, Paperclip, Eye, X,
   Image as ImageIcon, Receipt, CreditCard, Building2, ChevronDown, ChevronLeft,
@@ -48,10 +49,15 @@ const invTax = (inv: InvoiceRow): number => invTotal(inv) - invSubtotal(inv)
 
 interface DocItem { label: string; data: string }
 
+// جلب فواتير الشراء مرتّبة حسب تاريخ الفاتورة الفعلي (مصدر React Query)
+async function fetchPurchaseInvoices(): Promise<InvoiceRow[]> {
+  const { data } = await supabase.from('purchase_invoices').select('*')
+  return ((data ?? []) as InvoiceRow[]).sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a)))
+}
+
 export default function PurchaseInvoiceList() {
   const navigate = useNavigate()
-  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [previewImg, setPreviewImg] = useState<string | null>(null)
@@ -62,20 +68,8 @@ export default function PurchaseInvoiceList() {
   const [viewDeliveries, setViewDeliveries] = useState<PurchaseInvoiceDelivery[]>([])
   const [loadingView, setLoadingView] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase
-      .from('purchase_invoices')
-      .select('*')
-    // الترتيب يدوياً حسب تاريخ الفاتورة الفعلي (entry_date)
-    const rows = ((data ?? []) as InvoiceRow[]).sort((a, b) =>
-      invoiceDate(b).localeCompare(invoiceDate(a))
-    )
-    setInvoices(rows)
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const { data: invoices = [], isLoading } = useQuery({ queryKey: ['purchase-invoices-list'], queryFn: fetchPurchaseInvoices })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['purchase-invoices-list'] })
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -83,7 +77,7 @@ export default function PurchaseInvoiceList() {
     toast.success('تم حذف فاتورة الشراء')
     setDeleteId(null)
     if (viewInv?.id === deleteId) setViewInv(null)
-    load()
+    reload()
   }
 
   // فتح نافذة الاستعراض الكامل + جلب الديلفري نوت
@@ -120,13 +114,16 @@ export default function PurchaseInvoiceList() {
 
   // ── الإجماليات ──
   const today = todayStr()
-  const totalAmount = invoices.reduce((s, inv) => s + num(inv.amount), 0)
-  const pendingCheques = invoices.filter(inv => inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today)
-  const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
-  const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
-  const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
-  const recoverableVAT = invoices.reduce((s, inv) => s + invTax(inv), 0)
-  const totalSubtotal = invoices.reduce((s, inv) => s + invSubtotal(inv), 0)
+  const { totalAmount, pendingCheques, pendingChequesTotal, soonCheques, soonChequesTotal, recoverableVAT, totalSubtotal } = useMemo(() => {
+    const totalAmount = invoices.reduce((s, inv) => s + num(inv.amount), 0)
+    const pendingCheques = invoices.filter(inv => inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today)
+    const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
+    const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
+    const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
+    const recoverableVAT = invoices.reduce((s, inv) => s + invTax(inv), 0)
+    const totalSubtotal = invoices.reduce((s, inv) => s + invSubtotal(inv), 0)
+    return { totalAmount, pendingCheques, pendingChequesTotal, soonCheques, soonChequesTotal, recoverableVAT, totalSubtotal }
+  }, [invoices, today])
 
   // ── التجميع حسب المشروع ──
   const groups = useMemo(() => {
@@ -325,7 +322,7 @@ export default function PurchaseInvoiceList() {
       )}
 
       {/* بطاقات ملخّص */}
-      {!loading && invoices.length > 0 && (
+      {!isLoading && invoices.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-5">
           <div className="bg-white rounded-xl border border-slate-200 p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Receipt size={13} /> إجمالي المشتريات</div>
@@ -379,7 +376,7 @@ export default function PurchaseInvoiceList() {
       </div>
 
       {/* المحتوى */}
-      {loading ? (
+      {isLoading ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
