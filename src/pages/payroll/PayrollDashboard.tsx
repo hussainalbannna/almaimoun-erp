@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, ArrowLeft, Printer, CheckCircle } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Worker, WorkerAdvance } from '../../types'
@@ -11,43 +12,45 @@ const BRANCHES = ['all', '2', '4', '5']
 const BRANCH_LABELS: Record<string, string> = { all: 'الكل', '2': 'الفرع 2', '4': 'الفرع 4', '5': 'الفرع 5' }
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
 
-type WorkerWithAdvances = Worker & { advances: WorkerAdvance[]; paid?: boolean }
+type WorkerWithAdvances = Worker & { advances: WorkerAdvance[] }
+const EMPTY_WORKERS: WorkerWithAdvances[] = []
+
+// جلب عمّال الشركة الشهريين وسلفهم غير المخصومة (مصدر React Query)
+async function fetchPayrollWorkers(): Promise<WorkerWithAdvances[]> {
+  const { data: wData } = await supabase.from('workers').select('*').eq('worker_type', 'company').eq('status', 'active').order('name')
+  const { data: aData } = await supabase.from('worker_advances').select('*').eq('deducted', false)
+  const advances = (aData ?? []) as WorkerAdvance[]
+  return ((wData ?? []) as Worker[]).map(w => ({
+    ...w,
+    advances: advances.filter(a => a.worker_id === w.id),
+  }))
+}
 
 export default function PayrollDashboard() {
   const navigate = useNavigate()
-  const [workers, setWorkers] = useState<WorkerWithAdvances[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [branch, setBranch] = useState('all')
   const [payingAll, setPayingAll] = useState(false)
+  // حالة "تم الصرف" مؤشّر جلسة مؤقت (لا يُحفظ في القاعدة) — منفصل عن بيانات الخادم
+  const [paidIds, setPaidIds] = useState<Set<string>>(new Set())
   const today = new Date()
   const [month, setMonth] = useState(today.getMonth())
   const [year, setYear] = useState(today.getFullYear())
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      const { data: wData } = await supabase.from('workers').select('*').eq('worker_type', 'company').eq('status', 'active').order('name')
-      const { data: aData } = await supabase.from('worker_advances').select('*').eq('deducted', false)
-      const advances = (aData ?? []) as WorkerAdvance[]
-      const ws = ((wData ?? []) as Worker[]).map(w => ({
-        ...w,
-        advances: advances.filter(a => a.worker_id === w.id),
-        paid: false,
-      }))
-      setWorkers(ws)
-      setLoading(false)
-    }
-    load()
-  }, [])
+  const { data: workers = EMPTY_WORKERS, isLoading } = useQuery({ queryKey: ['payroll-workers'], queryFn: fetchPayrollWorkers })
 
-  const branchWorkers = workers.filter(w =>
-    w.pay_type === 'monthly' && (branch === 'all' || w.branch === branch)
+  const branchWorkers = useMemo(
+    () => workers.filter(w => w.pay_type === 'monthly' && (branch === 'all' || w.branch === branch)),
+    [workers, branch],
   )
 
-  const totalWPS = branchWorkers.reduce((s, w) => s + Number(w.basic_salary) + Number(w.social_allowance), 0)
-  const totalActual = branchWorkers.reduce((s, w) => s + Number(w.actual_salary), 0)
-  const totalAdvances = branchWorkers.reduce((s, w) => s + w.advances.reduce((a, adv) => a + Number(adv.amount), 0), 0)
-  const paidCount = branchWorkers.filter(w => w.paid).length
+  const { totalWPS, totalActual, totalAdvances } = useMemo(() => ({
+    totalWPS: branchWorkers.reduce((s, w) => s + Number(w.basic_salary) + Number(w.social_allowance), 0),
+    totalActual: branchWorkers.reduce((s, w) => s + Number(w.actual_salary), 0),
+    totalAdvances: branchWorkers.reduce((s, w) => s + w.advances.reduce((a, adv) => a + Number(adv.amount), 0), 0),
+  }), [branchWorkers])
+
+  const paidCount = useMemo(() => branchWorkers.filter(w => paidIds.has(w.id)).length, [branchWorkers, paidIds])
 
   const exportWPS = () => {
     const rows = [
@@ -85,7 +88,8 @@ export default function PayrollDashboard() {
         await supabase.from('worker_advances').update({ deducted: true }).eq('id', adv.id)
       }
     }
-    setWorkers(prev => prev.map(w => ({ ...w, paid: true })))
+    setPaidIds(prev => new Set([...prev, ...branchWorkers.map(w => w.id)]))
+    queryClient.invalidateQueries({ queryKey: ['payroll-workers'] })
     toast.success(`تم تسجيل صرف الرواتب لـ ${branchWorkers.length} موظف`)
     setPayingAll(false)
   }
@@ -153,7 +157,7 @@ export default function PayrollDashboard() {
         <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-600">
           {BRANCH_LABELS[branch]} — {MONTHS[month]} {year} ({branchWorkers.length} عامل)
         </div>
-        {loading ? (
+        {isLoading ? (
           <div className="p-8 text-center text-slate-400">جاري التحميل...</div>
         ) : branchWorkers.length === 0 ? (
           <div className="p-8 text-center text-slate-400">لا يوجد موظفون في هذا الفرع</div>
@@ -177,7 +181,7 @@ export default function PayrollDashboard() {
                   const pendingAdv = w.advances.reduce((s, a) => s + Number(a.amount), 0)
                   const wpsTotal = Number(w.basic_salary) + Number(w.social_allowance)
                   return (
-                    <tr key={w.id} className={`hover:bg-slate-50/50 ${w.paid ? 'bg-green-50/30' : ''}`}>
+                    <tr key={w.id} className={`hover:bg-slate-50/50 ${paidIds.has(w.id) ? 'bg-green-50/30' : ''}`}>
                       <td className="px-4 py-2.5 font-medium text-slate-800">
                         <div>{w.name_en || w.name}</div>
                         {w.branch && <div className="text-xs text-slate-400">فرع {w.branch}</div>}
@@ -193,7 +197,7 @@ export default function PayrollDashboard() {
                         ) : <span className="text-slate-400">—</span>}
                       </td>
                       <td className="px-4 py-2.5">
-                        {w.paid ? (
+                        {paidIds.has(w.id) ? (
                           <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">تم الصرف</span>
                         ) : (
                           <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">معلق</span>
