@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Eye, Edit, Trash2, Search } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Project } from '../../types'
@@ -16,21 +17,24 @@ const STATUS_COLORS: Record<string, 'green' | 'blue' | 'yellow' | 'red'> = {
   active: 'green', completed: 'blue', on_hold: 'yellow', cancelled: 'red'
 }
 
+// جلب المشاريع (مصدر React Query)
+async function fetchProjects(): Promise<Project[]> {
+  const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Project[]
+}
+
 export default function ProjectList() {
   const navigate = useNavigate()
-  const [projects, setProjects] = useState<Project[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false })
-    setProjects((data ?? []) as Project[])
-    setLoading(false)
+  const { data: projects = [], isLoading } = useQuery({ queryKey: ['projects'], queryFn: fetchProjects })
+  // إبطال قائمة المشاريع الكاملة + القائمة الخفيفة المستخدمة في القوائم المنسدلة
+  const reload = () => {
+    queryClient.invalidateQueries({ queryKey: ['projects'] })
+    queryClient.invalidateQueries({ queryKey: ['projects-list'] })
   }
-
-  useEffect(() => { load() }, [])
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -38,14 +42,17 @@ export default function ProjectList() {
     if (error) { toast.error('حدث خطأ أثناء الحذف'); return }
     toast.success('تم حذف المشروع')
     setDeleteId(null)
-    load()
+    reload()
   }
 
-  const filtered = projects.filter(p =>
-    p.project_name.toLowerCase().includes(search.toLowerCase()) ||
-    p.client_name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.project_number ?? '').includes(search)
-  )
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return projects.filter(p =>
+      (p.project_name || '').toLowerCase().includes(q) ||
+      (p.client_name || '').toLowerCase().includes(q) ||
+      (p.project_number ?? '').includes(search)
+    )
+  }, [projects, search])
 
   return (
     <div className="p-6">
@@ -69,7 +76,7 @@ export default function ProjectList() {
           </div>
         </div>
 
-        {loading ? (
+        {isLoading ? (
           <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center text-slate-400">لا توجد مشاريع</div>
