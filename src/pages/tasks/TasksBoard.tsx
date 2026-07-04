@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, ListTodo, Clock, CheckCircle2, Trash2, Pencil, AlertTriangle, Calendar } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatDate } from '../../lib/utils'
@@ -44,25 +45,30 @@ const emptyForm = () => ({
   status: 'todo' as Task['status'], due_date: '', project_id: '', assigned_to: '',
 })
 
+// جلب المهام (مصدر React Query)
+async function fetchTasks(): Promise<Task[]> {
+  const { data } = await supabase.from('tasks').select('*').order('created_at', { ascending: false })
+  return (data ?? []) as Task[]
+}
+
 export default function TasksBoard() {
-  const [tasks, setTasks] = useState<Task[]>([])
+  const queryClient = useQueryClient()
   const [projects, setProjects] = useState<ProjectOpt[]>([])
-  const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm())
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('tasks').select('*').order('created_at', { ascending: false })
-    setTasks((data ?? []) as Task[])
-    setLoading(false)
+  const { data: tasks = [], isLoading } = useQuery({ queryKey: ['tasks-board'], queryFn: fetchTasks })
+  // إبطال لوحة المهام + شارة التنبيهات (المهام المتأخرة تظهر في التنبيهات)
+  const reload = () => {
+    queryClient.invalidateQueries({ queryKey: ['tasks-board'] })
+    queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
   }
 
+  // جلب المشاريع لقائمة الربط (يُبقى كتأثير لتفادي تعارض ترتيب الكاش)
   useEffect(() => {
-    load()
     supabase.from('projects').select('id,project_name').order('created_at', { ascending: false }).then(({ data }) => {
       setProjects((data ?? []) as ProjectOpt[])
     })
@@ -104,7 +110,7 @@ export default function TasksBoard() {
       }
       toast.success(editId ? 'تم تحديث المهمة' : 'تمت إضافة المهمة')
       setModalOpen(false)
-      load()
+      reload()
     } catch (e) {
       toast.error('حدث خطأ: ' + ((e as Error)?.message ?? ''))
     } finally {
@@ -112,14 +118,16 @@ export default function TasksBoard() {
     }
   }
 
-  // نقل سريع بين الحالات
+  // نقل سريع بين الحالات (تحديث تفاؤلي فوري في الكاش)
   const moveTask = async (t: Task, status: Task['status']) => {
-    setTasks(prev => prev.map(x => x.id === t.id ? { ...x, status } : x))
+    queryClient.setQueryData<Task[]>(['tasks-board'], prev => (prev ?? []).map(x => x.id === t.id ? { ...x, status } : x))
     await supabase.from('tasks').update({
       status,
       completed_at: status === 'done' ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
     }).eq('id', t.id)
+    // المهام المتأخرة تظهر في التنبيهات
+    queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
   }
 
   const handleDelete = async () => {
@@ -127,7 +135,7 @@ export default function TasksBoard() {
     await supabase.from('tasks').delete().eq('id', deleteId)
     setDeleteId(null)
     toast.success('تم حذف المهمة')
-    load()
+    reload()
   }
 
   const isOverdue = (t: Task) => t.status !== 'done' && t.due_date && new Date(t.due_date) < new Date(new Date().toDateString())
@@ -162,7 +170,7 @@ export default function TasksBoard() {
       )}
 
       {/* لوحة الأعمدة */}
-      {loading ? (
+      {isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
