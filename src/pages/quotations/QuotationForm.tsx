@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Globe, Building2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import Button from '../../components/ui/Button'
@@ -41,6 +42,7 @@ const OPTIONAL_ITEMS = [
 export default function QuotationForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id && id !== 'new'
   const [saving, setSaving] = useState(false)
   const [customers, setCustomers] = useState<CustomerOpt[]>([])
@@ -135,13 +137,16 @@ export default function QuotationForm() {
     setForm(f => ({ ...f, customer_id: cid, customer_name: c?.name ?? f.customer_name, customer_phone: c?.phone ?? f.customer_phone }))
   }
 
-  const optSum = Object.entries(optionals).reduce((s, [, v]) => s + (v.enabled ? Number(v.price || 0) : 0), 0)
-  // حساب الإجمالي من سعر المتر × المساحة (أداة داخلية)
-  const areaNum = parseFloat(form.area) || 0
-  const ppmNum = parseFloat(form.price_per_meter) || 0
-  const calculatedFromMeter = Math.round(areaNum * ppmNum)
-  // لو فيه سعر متر ومساحة، نحسب تلقائياً؛ وإلا نستخدم الإجمالي اليدوي
-  const grandTotal = calculatedFromMeter > 0 ? calculatedFromMeter : (Number(form.grand_total) || 0)
+  const { optSum, areaNum, ppmNum, calculatedFromMeter, grandTotal } = useMemo(() => {
+    const optSum = Object.entries(optionals).reduce((s, [, v]) => s + (v.enabled ? Number(v.price || 0) : 0), 0)
+    // حساب الإجمالي من سعر المتر × المساحة (أداة داخلية)
+    const areaNum = parseFloat(form.area) || 0
+    const ppmNum = parseFloat(form.price_per_meter) || 0
+    const calculatedFromMeter = Math.round(areaNum * ppmNum)
+    // لو فيه سعر متر ومساحة، نحسب تلقائياً؛ وإلا نستخدم الإجمالي اليدوي
+    const grandTotal = calculatedFromMeter > 0 ? calculatedFromMeter : (Number(form.grand_total) || 0)
+    return { optSum, areaNum, ppmNum, calculatedFromMeter, grandTotal }
+  }, [optionals, form.area, form.price_per_meter, form.grand_total])
 
   // تحديث الإجمالي تلقائياً عند تغيير سعر المتر أو المساحة
   useEffect(() => {
@@ -216,6 +221,7 @@ export default function QuotationForm() {
         if (itErr) throw itErr
       }
 
+      queryClient.invalidateQueries({ queryKey: ['quotations-list'] })
       toast.success(isEdit ? 'تم تحديث العرض' : 'تم إنشاء العرض')
       navigate(`/quotations/${quoteId}`)
     } catch (e) {
