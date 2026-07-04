@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Phone, Mail, MapPin, Edit, Trash2, MessageCircle, Copy, FileText } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import type { Customer, Supplier } from '../../types'
 import { openWhatsApp } from '../../lib/utils'
 import Button from '../../components/ui/Button'
@@ -60,10 +61,55 @@ function getInitials(name: string): string {
 
 const emptyForm = () => ({ name: '', company_name: '', contact_type: 'engineer', phone: '', email: '', address: '', specialty: '', notes: '' })
 
+// نوع صف جدول جهات الاتصال اليدوية
+interface ContactRow {
+  id: string
+  name: string
+  contact_type?: string
+  company_name?: string
+  phone?: string
+  email?: string
+  address?: string
+  specialty?: string
+  notes?: string
+}
+
+// جلب ودمج جهات الاتصال من العملاء والموردين والجهات اليدوية (مصدر React Query)
+async function fetchContacts(): Promise<Contact[]> {
+  const [cRes, sRes, mRes] = await Promise.all([
+    safeSelect<Customer>('customers', '*', q => q.order('name')),
+    safeSelect<Supplier>('suppliers', '*', q => q.order('name')),
+    safeSelect<ContactRow>('contacts', '*', q => q.order('name')),
+  ])
+  const customers: Contact[] = cRes.map(c => ({
+    id: c.id, name: c.name, name_en: c.company_name || undefined,
+    type: 'client' as ContactType, company_name: c.company_name || undefined,
+    phone: c.phone || undefined, email: c.email || undefined,
+    address: c.city ? `${c.address ? c.address + '، ' : ''}${c.city}` : c.address || undefined,
+    notes: c.notes || undefined, source: 'customer' as const,
+  }))
+  const suppliers: Contact[] = sRes.map(s => ({
+    id: s.id, name: s.name, name_en: s.company_name || undefined,
+    type: 'supplier' as ContactType, company_name: s.company_name || undefined,
+    phone: s.phone || undefined, email: s.email || undefined,
+    address: s.city ? `${s.address ? s.address + '، ' : ''}${s.city}` : s.address || undefined,
+    notes: s.notes || undefined, source: 'supplier' as const,
+  }))
+  const manual: Contact[] = mRes.map(m => ({
+    id: m.id, name: m.name,
+    type: (m.contact_type as ContactType) || 'other',
+    company_name: m.company_name || undefined,
+    phone: m.phone || undefined, email: m.email || undefined,
+    address: m.address || undefined,
+    specialty: m.specialty || undefined,
+    notes: m.notes || undefined, source: 'contact' as const,
+  }))
+  return [...customers, ...suppliers, ...manual]
+}
+
 export default function ContactsDirectory() {
   const navigate = useNavigate()
-  const [contacts, setContacts] = useState<Contact[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<ContactType | 'all'>('all')
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; source: Source } | null>(null)
@@ -72,44 +118,9 @@ export default function ContactsDirectory() {
   const [form, setForm] = useState(emptyForm())
   const [saving, setSaving] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
-    const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> => {
-      try { const { data } = await p; return data ?? [] } catch { return [] }
-    }
-    const [cRes, sRes, mRes] = await Promise.all([
-      safe(supabase.from('customers').select('*').order('name')),
-      safe(supabase.from('suppliers').select('*').order('name')),
-      safe(supabase.from('contacts').select('*').order('name')),
-    ])
-    const customers = (cRes as Customer[]).map(c => ({
-      id: c.id, name: c.name, name_en: c.company_name || undefined,
-      type: 'client' as ContactType, company_name: c.company_name || undefined,
-      phone: c.phone || undefined, email: c.email || undefined,
-      address: c.city ? `${c.address ? c.address + '، ' : ''}${c.city}` : c.address || undefined,
-      notes: c.notes || undefined, source: 'customer' as const,
-    }))
-    const suppliers = (sRes as Supplier[]).map(s => ({
-      id: s.id, name: s.name, name_en: s.company_name || undefined,
-      type: 'supplier' as ContactType, company_name: s.company_name || undefined,
-      phone: s.phone || undefined, email: s.email || undefined,
-      address: s.city ? `${s.address ? s.address + '، ' : ''}${s.city}` : s.address || undefined,
-      notes: s.notes || undefined, source: 'supplier' as const,
-    }))
-    const manual = (mRes as Record<string, unknown>[]).map(m => ({
-      id: m.id as string, name: m.name as string,
-      type: (m.contact_type as ContactType) || 'other',
-      company_name: (m.company_name as string) || undefined,
-      phone: (m.phone as string) || undefined, email: (m.email as string) || undefined,
-      address: (m.address as string) || undefined,
-      specialty: (m.specialty as string) || undefined,
-      notes: (m.notes as string) || undefined, source: 'contact' as const,
-    }))
-    setContacts([...customers, ...suppliers, ...manual])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const { data: contacts = [], isLoading } = useQuery({ queryKey: ['contacts-directory'], queryFn: fetchContacts })
+  // أي تعديل يدوي أو حذف يُبطِل الكاش فيُعاد الدمج تلقائياً
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['contacts-directory'] })
 
   const openNew = () => { setEditId(null); setForm(emptyForm()); setModalOpen(true) }
   const openEditManual = (c: Contact) => {
@@ -136,7 +147,7 @@ export default function ContactsDirectory() {
       }
       toast.success(editId ? 'تم التحديث' : 'تمت الإضافة')
       setModalOpen(false)
-      load()
+      reload()
     } catch (e) {
       toast.error('خطأ: ' + ((e as Error)?.message ?? ''))
     } finally {
@@ -150,7 +161,7 @@ export default function ContactsDirectory() {
     await supabase.from(table).delete().eq('id', deleteTarget.id)
     toast.success('تم الحذف')
     setDeleteTarget(null)
-    load()
+    reload()
   }
 
   const copyPhone = (phone: string) => {
@@ -160,19 +171,19 @@ export default function ContactsDirectory() {
     )
   }
 
-  const filtered = contacts.filter(c => {
+  const filtered = useMemo(() => contacts.filter(c => {
     const matchType = typeFilter === 'all' || c.type === typeFilter
     const q = search.toLowerCase()
     const matchSearch = !q || c.name.toLowerCase().includes(q) ||
       c.company_name?.toLowerCase().includes(q) ||
       c.phone?.includes(q) || c.email?.toLowerCase().includes(q)
     return matchType && matchSearch
-  })
+  }), [contacts, typeFilter, search])
 
-  const typeCounts = contacts.reduce<Record<string, number>>((acc, c) => {
+  const typeCounts = useMemo(() => contacts.reduce<Record<string, number>>((acc, c) => {
     acc[c.type] = (acc[c.type] || 0) + 1
     return acc
-  }, {})
+  }, {}), [contacts])
 
   return (
     <div className="p-6" dir="rtl">
@@ -213,7 +224,7 @@ export default function ContactsDirectory() {
           className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="p-12 text-center text-slate-400">لا توجد جهات اتصال</div>
