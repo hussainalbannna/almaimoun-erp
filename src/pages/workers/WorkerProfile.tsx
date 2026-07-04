@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, User, FileText, CalendarCheck, Stethoscope,
   Plane, ShieldAlert, Wallet, Plus, Trash2, Upload, X, Eye, Loader2, Image as ImageIcon
@@ -54,6 +55,7 @@ const isImg = (t?: string) => !!t && t.startsWith('image/')
 export default function WorkerProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<TabId>('info')
   const [worker, setWorker] = useState<Worker | null>(null)
   const [saving, setSaving] = useState(false)
@@ -71,7 +73,7 @@ export default function WorkerProfile() {
   useEffect(() => {
     if (!id) return
     const loadAll = async () => {
-      const { data: w } = await supabase.from('workers').select('*').eq('id', id).single()
+      const { data: w } = await supabase.from('workers').select('*').eq('id', id).maybeSingle()
       if (w) { setWorker(w as Worker); setForm(w as Worker) }
 
       const [attRes, advRes, loanRes, medRes, travRes, docRes, discRes] = await Promise.all([
@@ -99,7 +101,13 @@ export default function WorkerProfile() {
     setSaving(true)
     const { error } = await supabase.from('workers').update({ ...form, updated_at: new Date().toISOString() }).eq('id', id)
     if (error) toast.error('حدث خطأ')
-    else { toast.success('تم حفظ البيانات'); setWorker({ ...worker!, ...form } as Worker) }
+    else {
+      toast.success('تم حفظ البيانات')
+      setWorker({ ...worker!, ...form } as Worker)
+      // تحديث قائمة العمال وكشف الرواتب في باقي الصفحات
+      queryClient.invalidateQueries({ queryKey: ['workers-list'] })
+      queryClient.invalidateQueries({ queryKey: ['payroll-workers'] })
+    }
     setSaving(false)
   }
 
