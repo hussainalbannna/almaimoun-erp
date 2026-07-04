@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Sparkles, Loader2, Copy, Paperclip, FileText, Trash2, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Customer } from '../../types'
@@ -24,29 +25,41 @@ interface CustomerDoc {
   created_at: string
 }
 
+// جلب بيانات العميل ومستنداته (مصادر React Query)
+async function fetchCustomer(id: string): Promise<Customer | null> {
+  const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle()
+  return (data as Customer) ?? null
+}
+async function fetchCustomerDocs(id: string): Promise<CustomerDoc[]> {
+  const { data } = await supabase.from('documents')
+    .select('id,name,doc_type,file_url,file_type,created_at')
+    .eq('related_id', id).eq('related_type', 'customer')
+    .order('created_at', { ascending: false })
+  return (data ?? []) as CustomerDoc[]
+}
+
 export default function CustomerForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
-  const [docs, setDocs] = useState<CustomerDoc[]>([])
   const [uploadingDoc, setUploadingDoc] = useState(false)
   const [previewImg, setPreviewImg] = useState<string | null>(null)
   const scanRef = useRef<HTMLInputElement>(null)
   const docRef = useRef<HTMLInputElement>(null)
 
+  // بيانات العميل ومستنداته عبر React Query (عند التعديل فقط)
+  const { data: customerData } = useQuery({ queryKey: ['customer', id], queryFn: () => fetchCustomer(id!), enabled: isEdit })
+  const { data: docs = [] } = useQuery({ queryKey: ['customer-docs', id], queryFn: () => fetchCustomerDocs(id!), enabled: isEdit })
+  const reloadDocs = () => queryClient.invalidateQueries({ queryKey: ['customer-docs', id] })
+
+  // تعبئة حقول النموذج من بيانات العميل المجلوبة (عند وصولها)
   useEffect(() => {
-    if (!isEdit) return
-    supabase.from('customers').select('*').eq('id', id).single().then(({ data }) => {
-      if (data) setForm(data as Customer)
-    })
-    // تحميل مستندات العميل
-    supabase.from('documents').select('id,name,doc_type,file_url,file_type,created_at')
-      .eq('related_id', id).eq('related_type', 'customer').order('created_at', { ascending: false })
-      .then(({ data }) => setDocs((data ?? []) as CustomerDoc[]))
-  }, [id, isEdit])
+    if (customerData) setForm(customerData)
+  }, [customerData])
 
   const set = (field: keyof typeof EMPTY) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }))
@@ -110,9 +123,7 @@ export default function CustomerForm() {
       })
       if (error) throw error
       toast.success('تم إرفاق المستند')
-      const { data } = await supabase.from('documents').select('id,name,doc_type,file_url,file_type,created_at')
-        .eq('related_id', id).eq('related_type', 'customer').order('created_at', { ascending: false })
-      setDocs((data ?? []) as CustomerDoc[])
+      reloadDocs()
     } catch (e) {
       toast.error('تعذّر رفع المستند: ' + ((e as Error)?.message ?? ''))
     } finally {
@@ -122,7 +133,7 @@ export default function CustomerForm() {
 
   const deleteDoc = async (docId: string) => {
     await supabase.from('documents').delete().eq('id', docId)
-    setDocs(prev => prev.filter(d => d.id !== docId))
+    reloadDocs()
     toast.success('تم حذف المستند')
   }
 
@@ -141,6 +152,9 @@ export default function CustomerForm() {
       : await supabase.from('customers').insert(payload)
     setLoading(false)
     if (error) { toast.error('حدث خطأ أثناء الحفظ'); return }
+    // تحديث كاش قائمة العملاء (وبيانات هذا العميل) لتظهر محدَّثة عند العودة
+    queryClient.invalidateQueries({ queryKey: ['customers-list'] })
+    if (isEdit) queryClient.invalidateQueries({ queryKey: ['customer', id] })
     toast.success(isEdit ? 'تم تحديث العميل' : 'تم إضافة العميل')
     navigate('/customers')
   }
