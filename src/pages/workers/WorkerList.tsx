@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Edit, Trash2, Search, User, FolderOpen } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Worker } from '../../types'
@@ -11,38 +12,42 @@ import toast from 'react-hot-toast'
 
 const BRANCH_LABELS: Record<string, string> = { '2': 'الفرع 2', '4': 'الفرع 4', '5': 'الفرع 5' }
 
+// جلب العمال (مصدر React Query — نفس مفتاح إبطال WorkerForm)
+async function fetchWorkers(): Promise<Worker[]> {
+  const { data } = await supabase.from('workers').select('*').order('name')
+  return (data ?? []) as Worker[]
+}
+
 export default function WorkerList() {
   const navigate = useNavigate()
-  const [workers, setWorkers] = useState<Worker[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'company' | 'lmra'>('all')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('workers').select('*').order('name')
-    setWorkers((data ?? []) as Worker[])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const { data: workers = [], isLoading } = useQuery({ queryKey: ['workers-list'], queryFn: fetchWorkers })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['workers-list'] })
 
   const handleDelete = async () => {
     if (!deleteId) return
     await supabase.from('workers').delete().eq('id', deleteId)
     toast.success('تم حذف العامل')
     setDeleteId(null)
-    load()
+    reload()
   }
 
-  const filtered = workers.filter(w =>
-    (filter === 'all' || w.worker_type === filter) &&
-    (w.name.toLowerCase().includes(search.toLowerCase()) || w.cpr.includes(search))
-  )
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return workers.filter(w =>
+      (filter === 'all' || w.worker_type === filter) &&
+      ((w.name || '').toLowerCase().includes(q) || (w.cpr || '').includes(search))
+    )
+  }, [workers, filter, search])
 
-  const companyCount = workers.filter(w => w.worker_type === 'company').length
-  const lmraCount = workers.filter(w => w.worker_type === 'lmra').length
+  const { companyCount, lmraCount } = useMemo(() => ({
+    companyCount: workers.filter(w => w.worker_type === 'company').length,
+    lmraCount: workers.filter(w => w.worker_type === 'lmra').length,
+  }), [workers])
 
   return (
     <div className="p-6">
@@ -78,7 +83,7 @@ export default function WorkerList() {
               className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
           </div>
         </div>
-        {loading ? (
+        {isLoading ? (
           <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center text-slate-400">لا يوجد عمال</div>
