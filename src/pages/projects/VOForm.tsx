@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, PenLine, Eraser, Camera, X, ImagePlus, Wallet, CreditCard, Clock } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { VariationOrder, Project } from '../../types'
@@ -165,6 +166,7 @@ function PhotoUploader({ label, photos, onChange, color }: { label: string; phot
 export default function VOForm() {
   const { projectId, id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
   const [project, setProject] = useState<Project | null>(null)
   const [saving, setSaving] = useState(false)
@@ -235,6 +237,8 @@ export default function VOForm() {
         if (error) throw error
         toast.success('تم إضافة أمر التغيير')
       }
+      // أمر التغيير يؤثّر على ربحية المشروع → تحديث كاش صفحة المشروع
+      queryClient.invalidateQueries({ queryKey: ['project-detail', resolvedPid] })
       navigate(`/projects/${resolvedPid}`)
     } catch (e) {
       toast.error('حدث خطأ: ' + ((e as Error)?.message ?? ''))
