@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Pencil, Printer, Mail, MessageCircle, CheckCircle, Package, Truck } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrencyEn, formatDate, lpoStatusLabel, lpoStatusColor, openWhatsApp, openEmail } from '../../lib/utils'
@@ -7,41 +7,58 @@ import type { LPO, LPOItem, CompanySettings, LPOStatus } from '../../types'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
+interface LPOViewData {
+  lpo: LPO | null
+  items: LPOItem[]
+  company: CompanySettings | null
+  supplierPhone: string
+}
+const EMPTY_ITEMS: LPOItem[] = []
+
+// جلب أمر الشراء وبنوده وإعدادات الشركة ورقم هاتف المورد (مصدر React Query)
+async function fetchLPOView(id: string): Promise<LPOViewData> {
+  const [{ data: lpoData }, { data: lpoItems }, { data: comp }] = await Promise.all([
+    supabase.from('lpos').select('*').eq('id', id).maybeSingle(),
+    supabase.from('lpo_items').select('*').eq('lpo_id', id).order('sort_order'),
+    supabase.from('company_settings').select('*').maybeSingle(),
+  ])
+  const lpo = (lpoData as LPO) ?? null
+  let supplierPhone = ''
+  if (lpo?.supplier_id) {
+    const { data } = await supabase.from('suppliers').select('whatsapp, phone').eq('id', lpo.supplier_id).maybeSingle()
+    if (data) {
+      const s = data as { whatsapp: string; phone: string }
+      supplierPhone = s.whatsapp || s.phone || ''
+    }
+  }
+  return {
+    lpo,
+    items: (lpoItems ?? []) as LPOItem[],
+    company: (comp as CompanySettings) ?? null,
+    supplierPhone,
+  }
+}
+
 export default function LPOView() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [lpo, setLpo] = useState<LPO | null>(null)
-  const [items, setItems] = useState<LPOItem[]>([])
-  const [company, setCompany] = useState<CompanySettings | null>(null)
-  const [supplierPhone, setSupplierPhone] = useState('')
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
 
-  useEffect(() => {
-    Promise.all([
-      supabase.from('lpos').select('*').eq('id', id).single(),
-      supabase.from('lpo_items').select('*').eq('lpo_id', id).order('sort_order'),
-      supabase.from('company_settings').select('*').single(),
-    ]).then(([{ data: lpoData }, { data: lpoItems }, { data: comp }]) => {
-      const lpoRecord = lpoData as LPO
-      setLpo(lpoRecord)
-      setItems((lpoItems ?? []) as LPOItem[])
-      setCompany(comp as CompanySettings)
-      if (lpoRecord?.supplier_id) {
-        supabase.from('suppliers').select('whatsapp, phone').eq('id', lpoRecord.supplier_id).single().then(({ data }) => {
-          if (data) setSupplierPhone((data as { whatsapp: string; phone: string }).whatsapp || (data as { whatsapp: string; phone: string }).phone || '')
-        })
-      }
-      setLoading(false)
-    })
-  }, [id])
+  const { data, isLoading } = useQuery({ queryKey: ['lpo-view', id], queryFn: () => fetchLPOView(id!), enabled: !!id })
+  const lpo = data?.lpo ?? null
+  const items = data?.items ?? EMPTY_ITEMS
+  const company = data?.company ?? null
+  const supplierPhone = data?.supplierPhone ?? ''
 
   const updateStatus = async (status: LPOStatus) => {
     await supabase.from('lpos').update({ status, updated_at: new Date().toISOString() }).eq('id', id)
-    setLpo(prev => prev ? { ...prev, status } : prev)
+    // تحديث كاش هذا الأمر والقائمة معاً
+    queryClient.invalidateQueries({ queryKey: ['lpo-view', id] })
+    queryClient.invalidateQueries({ queryKey: ['lpos-list'] })
     toast.success('Status updated')
   }
 
-  if (loading) return <div className="flex justify-center py-16"><div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" /></div>
+  if (isLoading) return <div className="flex justify-center py-16"><div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" /></div>
   if (!lpo) return <div className="text-center py-16 text-slate-500">Purchase Order not found</div>
 
   const subject = `Purchase Order No. ${lpo.lpo_number} from ${company?.name_en ?? 'AlMaimoun Construction'}`
