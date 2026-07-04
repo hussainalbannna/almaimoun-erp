@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { nextSerial, formatCurrency, BAHRAIN_VAT_RATE } from '../../lib/utils'
+import { nextSerial, formatCurrency } from '../../lib/utils'
 import type { Invoice, InvoiceItem, Customer, Project, ProjectMilestone, ExtractedDocumentData } from '../../types'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -46,7 +46,7 @@ export default function InvoiceForm() {
     issue_date: new Date().toISOString().slice(0, 10),
     due_date: '',
     status: 'draft',
-    tax_rate: BAHRAIN_VAT_RATE,
+    tax_rate: 0, // البناء الجديد للفلل صفري الضريبة (رخصة بناء جديدة)؛ الصيانة 10% تُعدّل يدوياً عند الحاجة
     discount: 0,
     notes: '',
     payment_terms: 'صافي 30 يوم',
