@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Printer, TrendingUp, TrendingDown, BarChart2, FileText } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
@@ -23,79 +24,90 @@ interface ProjectReport {
 }
 
 export default function ReportsPage() {
+interface ReportsData {
+  totalContractValue: number
+  totalInvoiced: number
+  totalExpenses: number
+  totalPayroll: number
+  monthlyExpenses: number[]
+  monthlyPayroll: number[]
+  categoryBreakdown: { category: string; total: number }[]
+  projects: ProjectReport[]
+}
+
+const EMPTY_REPORTS: ReportsData = {
+  totalContractValue: 0, totalInvoiced: 0, totalExpenses: 0, totalPayroll: 0,
+  monthlyExpenses: new Array(12).fill(0), monthlyPayroll: new Array(12).fill(0),
+  categoryBreakdown: [], projects: [],
+}
+
+// جلب بيانات التقارير السنوية وحسابها (مصدر React Query — الحسابات منقولة حرفياً)
+async function fetchReportsData(year: number): Promise<ReportsData> {
+  const [projRes, milRes, expRes, wRes] = await Promise.all([
+    supabase.from('projects').select('id, project_name, contract_value, status'),
+    supabase.from('project_milestones').select('project_id, amount, status'),
+    supabase.from('accounts_payable').select('amount, entry_date, category').gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`),
+    supabase.from('workers').select('basic_salary, social_allowance, status').eq('status', 'active').eq('pay_type', 'monthly'),
+  ])
+
+  const ps = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
+  const ms = (milRes.data ?? []) as { project_id: string; amount: number; status: string }[]
+  const exps = (expRes.data ?? []) as { amount: number; entry_date: string; category: string }[]
+  const ws = (wRes.data ?? []) as { basic_salary: number; social_allowance: number }[]
+
+  const totalContracts = ps.reduce((s, p) => s + Number(p.contract_value), 0)
+  const totalInv = ms.filter(m => ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0)
+  const totalExp = exps.reduce((s, e) => s + Number(e.amount), 0)
+  const monthlyPay = ws.reduce((s, w) => s + Number(w.basic_salary) + Number(w.social_allowance), 0)
+  const annualPayroll = monthlyPay * 12
+
+  const mExp = new Array(12).fill(0)
+  exps.forEach(e => {
+    const m = new Date(e.entry_date).getMonth()
+    mExp[m] += Number(e.amount)
+  })
+  const mPay = new Array(12).fill(monthlyPay)
+
+  const catMap: Record<string, number> = {}
+  exps.forEach(e => {
+    catMap[e.category] = (catMap[e.category] || 0) + Number(e.amount)
+  })
+  const cats = Object.entries(catMap).map(([category, total]) => ({ category, total }))
+    .sort((a, b) => b.total - a.total)
+
+  const projectReports: ProjectReport[] = ps.map(p => {
+    const pMilestones = ms.filter(m => m.project_id === p.id)
+    return {
+      id: p.id,
+      project_name: p.project_name,
+      contract_value: Number(p.contract_value),
+      invoiced: pMilestones.filter(m => ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0),
+      paid: pMilestones.filter(m => m.status === 'paid').reduce((s, m) => s + Number(m.amount), 0),
+      status: p.status,
+    }
+  })
+
+  return {
+    totalContractValue: totalContracts,
+    totalInvoiced: totalInv,
+    totalExpenses: totalExp,
+    totalPayroll: annualPayroll,
+    monthlyExpenses: mExp,
+    monthlyPayroll: mPay,
+    categoryBreakdown: cats,
+    projects: projectReports,
+  }
+}
+
+export default function ReportsPage() {
   const navigate = useNavigate()
   const [year, setYear] = useState(new Date().getFullYear())
-  const [loading, setLoading] = useState(true)
 
-  const [totalContractValue, setTotalContractValue] = useState(0)
-  const [totalInvoiced, setTotalInvoiced] = useState(0)
-  const [totalExpenses, setTotalExpenses] = useState(0)
-  const [totalPayroll, setTotalPayroll] = useState(0)
-  const [monthlyExpenses, setMonthlyExpenses] = useState<number[]>(new Array(12).fill(0))
-  const [monthlyPayroll, setMonthlyPayroll] = useState<number[]>(new Array(12).fill(0))
-  const [categoryBreakdown, setCategoryBreakdown] = useState<{ category: string; total: number }[]>([])
-  const [projects, setProjects] = useState<ProjectReport[]>([])
-
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      const [projRes, milRes, expRes, wRes] = await Promise.all([
-        supabase.from('projects').select('id, project_name, contract_value, status'),
-        supabase.from('project_milestones').select('project_id, amount, status'),
-        supabase.from('accounts_payable').select('amount, entry_date, category').gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`),
-        supabase.from('workers').select('basic_salary, social_allowance, status').eq('status', 'active').eq('pay_type', 'monthly'),
-      ])
-
-      const ps = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
-      const ms = (milRes.data ?? []) as { project_id: string; amount: number; status: string }[]
-      const exps = (expRes.data ?? []) as { amount: number; entry_date: string; category: string }[]
-      const ws = (wRes.data ?? []) as { basic_salary: number; social_allowance: number }[]
-
-      const totalContracts = ps.reduce((s, p) => s + Number(p.contract_value), 0)
-      const totalInv = ms.filter(m => ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0)
-      const totalPaid = ms.filter(m => m.status === 'paid').reduce((s, m) => s + Number(m.amount), 0)
-      const totalExp = exps.reduce((s, e) => s + Number(e.amount), 0)
-      const monthlyPay = ws.reduce((s, w) => s + Number(w.basic_salary) + Number(w.social_allowance), 0)
-      const annualPayroll = monthlyPay * 12
-
-      const mExp = new Array(12).fill(0)
-      exps.forEach(e => {
-        const m = new Date(e.entry_date).getMonth()
-        mExp[m] += Number(e.amount)
-      })
-      const mPay = new Array(12).fill(monthlyPay)
-
-      const catMap: Record<string, number> = {}
-      exps.forEach(e => {
-        catMap[e.category] = (catMap[e.category] || 0) + Number(e.amount)
-      })
-      const cats = Object.entries(catMap).map(([category, total]) => ({ category, total }))
-        .sort((a, b) => b.total - a.total)
-
-      const projectReports: ProjectReport[] = ps.map(p => {
-        const pMilestones = ms.filter(m => m.project_id === p.id)
-        return {
-          id: p.id,
-          project_name: p.project_name,
-          contract_value: Number(p.contract_value),
-          invoiced: pMilestones.filter(m => ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0),
-          paid: pMilestones.filter(m => m.status === 'paid').reduce((s, m) => s + Number(m.amount), 0),
-          status: p.status,
-        }
-      })
-
-      setTotalContractValue(totalContracts)
-      setTotalInvoiced(totalInv)
-      setTotalExpenses(totalExp)
-      setTotalPayroll(annualPayroll)
-      setMonthlyExpenses(mExp)
-      setMonthlyPayroll(mPay)
-      setCategoryBreakdown(cats)
-      setProjects(projectReports)
-      setLoading(false)
-    }
-    load()
-  }, [year])
+  const { data = EMPTY_REPORTS, isLoading } = useQuery({ queryKey: ['reports-data', year], queryFn: () => fetchReportsData(year) })
+  const {
+    totalContractValue, totalInvoiced, totalExpenses, totalPayroll,
+    monthlyExpenses, monthlyPayroll, categoryBreakdown, projects,
+  } = data
 
   const maxBar = Math.max(...monthlyExpenses.map((e, i) => e + monthlyPayroll[i]), 1)
 
@@ -140,7 +152,7 @@ export default function ReportsPage() {
         {/* Monthly Chart */}
         <div className="md:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
           <h2 className="font-semibold text-slate-700 mb-4">المصاريف الشهرية — {year}</h2>
-          {loading ? <div className="h-40 flex items-center justify-center text-slate-400 text-sm">جاري التحميل...</div> : (
+          {isLoading ? <div className="h-40 flex items-center justify-center text-slate-400 text-sm">جاري التحميل...</div> : (
             <div className="flex items-end gap-1.5 h-40">
               {monthlyExpenses.map((exp, i) => {
                 const pay = monthlyPayroll[i]
@@ -172,7 +184,7 @@ export default function ReportsPage() {
         {/* Category Breakdown */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h2 className="font-semibold text-slate-700 mb-4">تحليل فئات الإنفاق</h2>
-          {loading ? <div className="flex items-center justify-center h-32 text-slate-400 text-sm">جاري التحميل...</div> :
+          {isLoading ? <div className="flex items-center justify-center h-32 text-slate-400 text-sm">جاري التحميل...</div> :
             categoryBreakdown.length === 0 ? (
               <div className="flex items-center justify-center h-32 text-slate-400 text-sm">لا توجد بيانات</div>
             ) : (
@@ -205,7 +217,7 @@ export default function ReportsPage() {
           <FileText size={16} className="text-amber-600" />
           <h2 className="font-semibold text-slate-700">تقرير الإيرادات والتقدم لكل مشروع</h2>
         </div>
-        {loading ? (
+        {isLoading ? (
           <div className="p-8 text-center text-slate-400">جاري التحميل...</div>
         ) : projects.length === 0 ? (
           <div className="p-8 text-center text-slate-400">لا توجد مشاريع</div>
