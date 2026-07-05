@@ -49,10 +49,40 @@ const invTax = (inv: InvoiceRow): number => invTotal(inv) - invSubtotal(inv)
 
 interface DocItem { label: string; data: string }
 
-// جلب فواتير الشراء مرتّبة حسب تاريخ الفاتورة الفعلي (مصدر React Query)
-async function fetchPurchaseInvoices(): Promise<InvoiceRow[]> {
-  const { data } = await supabase.from('purchase_invoices').select('*')
-  return ((data ?? []) as InvoiceRow[]).sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a)))
+// الأعمدة الخفيفة فقط للقائمة — نستبعد أعمدة الصور base64 الثقيلة
+// (check_image_data / invoice_copy_data / payment_proof_data) لأنها تُثقل التحميل جداً.
+const LIST_COLUMNS =
+  'id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, ' +
+  'vendor_invoice_number, amount, payment_method, check_due_date, notes, ' +
+  'created_at, updated_at, entry_date, tax_rate, subtotal'
+
+interface PurchaseListData {
+  invoices: InvoiceRow[]
+  attachmentCounts: Record<string, number>
+}
+const EMPTY_LIST: PurchaseListData = { invoices: [], attachmentCounts: {} }
+
+// جلب فواتير الشراء (خفيف) + خريطة عدد المرفقات لكل فاتورة (مصدر React Query)
+// عدّاد المرفقات يُجلب عبر استعلامات تُرجع أرقام الفواتير فقط (id) دون تنزيل الصور — سريع جداً.
+async function fetchPurchaseInvoices(): Promise<PurchaseListData> {
+  const [listRes, copyRes, proofRes, checkRes] = await Promise.all([
+    supabase.from('purchase_invoices').select(LIST_COLUMNS),
+    supabase.from('purchase_invoices').select('id').like('invoice_copy_data', 'data:%'),
+    supabase.from('purchase_invoices').select('id').like('payment_proof_data', 'data:%'),
+    supabase.from('purchase_invoices').select('id').like('check_image_data', 'data:%'),
+  ])
+
+  const invoices = ((listRes.data ?? []) as InvoiceRow[])
+    .sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a)))
+
+  const attachmentCounts: Record<string, number> = {}
+  for (const group of [copyRes.data, proofRes.data, checkRes.data]) {
+    for (const row of (group ?? []) as { id: string }[]) {
+      attachmentCounts[row.id] = (attachmentCounts[row.id] ?? 0) + 1
+    }
+  }
+
+  return { invoices, attachmentCounts }
 }
 
 export default function PurchaseInvoiceList() {
@@ -68,7 +98,9 @@ export default function PurchaseInvoiceList() {
   const [viewDeliveries, setViewDeliveries] = useState<PurchaseInvoiceDelivery[]>([])
   const [loadingView, setLoadingView] = useState(false)
 
-  const { data: invoices = [], isLoading } = useQuery({ queryKey: ['purchase-invoices-list'], queryFn: fetchPurchaseInvoices })
+  const { data = EMPTY_LIST, isLoading } = useQuery({ queryKey: ['purchase-invoices-list'], queryFn: fetchPurchaseInvoices })
+  const invoices = data.invoices
+  const attachmentCounts = data.attachmentCounts
   const reload = () => queryClient.invalidateQueries({ queryKey: ['purchase-invoices-list'] })
 
   const handleDelete = async () => {
@@ -80,20 +112,39 @@ export default function PurchaseInvoiceList() {
     reload()
   }
 
-  // فتح نافذة الاستعراض الكامل + جلب الديلفري نوت
+  // فتح نافذة الاستعراض الكامل: نعرض البيانات فوراً، ثم نجلب صور هذه الفاتورة والديلفري نوت عند الطلب فقط
   const openView = async (inv: InvoiceRow) => {
     setViewInv(inv)
     setViewDeliveries([])
     setLoadingView(true)
-    const { data } = await supabase.from('purchase_invoice_deliveries')
-      .select('*').eq('purchase_invoice_id', inv.id).order('created_at')
-    setViewDeliveries((data ?? []) as PurchaseInvoiceDelivery[])
+    const [fullRes, delRes] = await Promise.all([
+      supabase.from('purchase_invoices')
+        .select('invoice_copy_data, payment_proof_data, check_image_data')
+        .eq('id', inv.id).maybeSingle(),
+      supabase.from('purchase_invoice_deliveries')
+        .select('*').eq('purchase_invoice_id', inv.id).order('created_at'),
+    ])
+    // دمج الصور الثقيلة في الفاتورة المعروضة (كانت مستبعدة من جلب القائمة الخفيف)
+    if (fullRes.data) setViewInv(prev => (prev && prev.id === inv.id ? { ...prev, ...fullRes.data } : prev))
+    setViewDeliveries((delRes.data ?? []) as PurchaseInvoiceDelivery[])
     setLoadingView(false)
   }
 
   const openDoc = (data: string) => {
     if (isImageData(data)) setPreviewImg(data)
     else openStoredFile(data, isPdfData(data) ? 'application/pdf' : '')
+  }
+
+  // فتح مرفقات فاتورة من الجدول عند الطلب: نجلب صور هذه الفاتورة وحدها، ثم:
+  // - مرفق واحد → نفتحه مباشرةً (نفس السلوك القديم)
+  // - أكثر من مرفق → نفتح نافذة الفاتورة لعرضها كلها
+  const openAttachments = async (inv: InvoiceRow) => {
+    const { data } = await supabase.from('purchase_invoices')
+      .select('invoice_copy_data, payment_proof_data, check_image_data')
+      .eq('id', inv.id).maybeSingle()
+    const docs = getDocs({ ...inv, ...(data ?? {}) } as InvoiceRow)
+    if (docs.length === 1) openDoc(docs[0].data)
+    else openView(inv)
   }
 
   const getDocs = (inv: InvoiceRow): DocItem[] => {
@@ -230,7 +281,7 @@ export default function PurchaseInvoiceList() {
 
   // صف فاتورة (يُستخدم في وضع التجميع والوضع المسطّح)
   const InvoiceRowEl = ({ inv }: { inv: InvoiceRow }) => {
-    const docs = getDocs(inv)
+    const docCount = attachmentCounts[inv.id] ?? 0
     const isSoonCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today && daysUntil(inv.check_due_date) <= 7
     const isOverdueCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date <= today
     return (
@@ -258,10 +309,10 @@ export default function PurchaseInvoiceList() {
           )}
         </td>
         <td className="px-4 py-3">
-          {docs.length > 0 ? (
-            <button onClick={e => { e.stopPropagation(); docs.length === 1 ? openDoc(docs[0].data) : openView(inv) }}
+          {docCount > 0 ? (
+            <button onClick={e => { e.stopPropagation(); openAttachments(inv) }}
               className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2.5 py-1 rounded-lg transition-colors" title="عرض المستندات">
-              <Paperclip size={13} /> {docs.length}
+              <Paperclip size={13} /> {docCount}
             </button>
           ) : <span className="text-slate-300 text-xs">—</span>}
         </td>
