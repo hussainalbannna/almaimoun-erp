@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Plus, Search, Pencil, Trash2, Phone, Mail, MessageCircle, Users } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { openWhatsApp } from '../../lib/utils'
@@ -17,6 +17,7 @@ async function fetchCustomers(): Promise<Customer[]> {
 
 export default function CustomerList() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
@@ -76,7 +77,8 @@ export default function CustomerList() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map(customer => (
-            <div key={customer.id} className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md transition-shadow">
+            <div key={customer.id} onClick={() => navigate(`/customers/${customer.id}`)}
+              className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md hover:border-primary-200 transition-all cursor-pointer">
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <h3 className="font-semibold text-slate-800">{customer.name}</h3>
@@ -85,10 +87,10 @@ export default function CustomerList() {
                   )}
                 </div>
                 <div className="flex gap-1">
-                  <Link to={`/customers/${customer.id}/edit`} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-primary-600">
+                  <Link to={`/customers/${customer.id}/edit`} onClick={e => e.stopPropagation()} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-primary-600">
                     <Pencil size={15} />
                   </Link>
-                  <button onClick={() => setDeleteId(customer.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600">
+                  <button onClick={e => { e.stopPropagation(); setDeleteId(customer.id) }} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600">
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -97,7 +99,7 @@ export default function CustomerList() {
                 {customer.email && (
                   <div className="flex items-center gap-2">
                     <Mail size={13} className="text-slate-400 shrink-0" />
-                    <a href={`mailto:${customer.email}`} className="hover:text-primary-600 truncate">{customer.email}</a>
+                    <a href={`mailto:${customer.email}`} onClick={e => e.stopPropagation()} className="hover:text-primary-600 truncate">{customer.email}</a>
                   </div>
                 )}
                 {customer.phone && (
@@ -108,7 +110,7 @@ export default function CustomerList() {
                 )}
                 {customer.whatsapp && (
                   <button
-                    onClick={() => openWhatsApp(customer.whatsapp, `مرحباً ${customer.name}`)}
+                    onClick={e => { e.stopPropagation(); openWhatsApp(customer.whatsapp, `مرحباً ${customer.name}`) }}
                     className="flex items-center gap-2 text-green-600 hover:text-green-700"
                   >
                     <MessageCircle size={13} className="shrink-0" />
@@ -117,10 +119,11 @@ export default function CustomerList() {
                 )}
                 {customer.city && <div className="text-xs text-slate-400">{customer.city}, {customer.country}</div>}
               </div>
-              <div className="mt-3 pt-3 border-t border-slate-100">
-                <Link to={`/invoices/new?customer=${customer.id}`} className="text-xs text-primary-600 hover:underline">
+              <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
+                <Link to={`/invoices/new?customer=${customer.id}`} onClick={e => e.stopPropagation()} className="text-xs text-primary-600 hover:underline">
                   + إنشاء فاتورة
                 </Link>
+                <span className="text-xs text-slate-400">عرض القسم ←</span>
               </div>
             </div>
           ))}
