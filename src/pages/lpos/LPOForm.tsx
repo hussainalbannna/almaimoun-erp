@@ -51,7 +51,7 @@ export default function LPOForm() {
     issue_date: new Date().toISOString().slice(0, 10),
     delivery_date: '',
     status: 'draft',
-    tax_rate: 5,
+    tax_rate: 10, // ضريبة القيمة المضافة البحرينية الحالية للمشتريات (قابلة للتعديل يدوياً للحالات الاستثنائية)
     discount: 0,
     notes: '',
     payment_terms: 'صافي 30 يوم',
