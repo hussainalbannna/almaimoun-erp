@@ -7,24 +7,13 @@
     font-family: 'Noto Sans Arabic', 'Cairo', sans-serif;
   }
 
-  html {
-    -webkit-text-size-adjust: 100%;
-  }
-
   body {
     direction: rtl;
-    min-height: 100vh;
     @apply bg-slate-50 text-slate-900;
   }
 
   input, textarea, select {
     direction: rtl;
-  }
-
-  /* إبراز واضح لعنصر التركيز عند التنقّل بلوحة المفاتيح (إتاحة) */
-  :focus-visible {
-    outline: 2px solid #c4925a;
-    outline-offset: 2px;
   }
 }
 
@@ -45,26 +34,35 @@
   }
 }
 
+/*
+  إعدادات الطباعة
+  ملاحظة مهمة: لا نستخدم أي قاعدة تُعيد إظهار عناصر flex (مثل `.flex { display:block }`)،
+  لأنها كانت تتغلّب على `.no-print` و`print:hidden` فتُظهر الهيدر (الإيميل) والشريط الجانبي
+  وأشرطة الأزرار عند الطباعة. الاعتماد الآن على وسم العناصر بـ `no-print` فقط.
+*/
 @media print {
+  /* الحفاظ على الألوان والخلفيات المميّزة عند الطباعة (رأس الجدول البنيّ، الشارات) */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* إخفاء واجهة التطبيق بالكامل: الهيدر (الإيميل)، الشريط الجانبي، وأشرطة الأزرار العلوية */
   .no-print { display: none !important; }
+  aside, header { display: none !important; }
+
+  /* عناصر مخصّصة للطباعة فقط */
   .print-only { display: block !important; }
-  body { background: white !important; margin: 0 !important; padding: 0 !important; }
-  /* إخفاء هيكل التطبيق بالكامل: الشريط الجانبي والترويسة والتنقّل */
-  aside, nav, header,
-  [class*="Sidebar"], [class*="Header"],
-  button[aria-label], [role="navigation"] {
-    display: none !important;
-  }
-  /* إعادة ضبط التخطيط الرئيسي ليملأ عرض الصفحة */
-  main, [class*="AppLayout"], .flex {
-    display: block !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    padding: 0 !important;
+
+  /* ورقة بيضاء نظيفة بلا هوامش أو خلفية من واجهة التطبيق */
+  html, body {
+    background: #fff !important;
     margin: 0 !important;
+    padding: 0 !important;
   }
-  /* حاوية الفاتورة/المستند تملأ الصفحة بلا ظلال أو حدود */
-  .bg-white { box-shadow: none !important; border: none !important; border-radius: 0 !important; }
+
+  /* هوامش ورقة الطباعة */
+  @page { margin: 1.2cm; }
 }
 
 .print-only { display: none; }
