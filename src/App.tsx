@@ -66,6 +66,7 @@ const SubcontractorDetail = lazy(() => import('./pages/subcontractors/Subcontrac
 const SupplierList = lazy(() => import('./pages/suppliers/SupplierList'))
 const SupplierForm = lazy(() => import('./pages/suppliers/SupplierForm'))
 const CustomerList = lazy(() => import('./pages/customers/CustomerList'))
+const CustomerDetail = lazy(() => import('./pages/customers/CustomerDetail'))
 const CustomerForm = lazy(() => import('./pages/customers/CustomerForm'))
 const ClientStatement = lazy(() => import('./pages/statements/ClientStatement'))
 const ContactsDirectory = lazy(() => import('./pages/contacts/ContactsDirectory'))
@@ -182,6 +183,7 @@ export default function App() {
                 <Route path="suppliers/:id/edit" element={<SupplierForm />} />
                 <Route path="customers" element={<CustomerList />} />
                 <Route path="customers/new" element={<CustomerForm />} />
+                <Route path="customers/:id" element={<CustomerDetail />} />
                 <Route path="customers/:id/edit" element={<CustomerForm />} />
                 <Route path="customers/:customerId/statement" element={<ClientStatement />} />
                 <Route path="contacts" element={<ContactsDirectory />} />
