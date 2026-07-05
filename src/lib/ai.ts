@@ -1,109 +1,23 @@
 // ════════════════════════════════════════════════════════════════════
 //  مساعد الذكاء الاصطناعي — قراءة وفهم المستندات والصور
 //  يدعم: PDF، صور، مستندات ممسوحة ضوئياً (OCR)، خط اليد
-//  المفتاح يُحفظ في السحابة (قاعدة البيانات) ويعمل على كل الأجهزة
-//  ملاحظة أمنية: النداء يتم حالياً من المتصفح مباشرةً، وكل النداءات تمرّ
-//  عبر callAnthropic — فتحويلها لدالة Supabase طرفية لإخفاء المفتاح يصبح
-//  تعديلاً موضعياً في مكان واحد.
+//  أمان: النداء يمرّ عبر دالة Supabase الطرفية (anthropic-proxy) التي تحمل
+//  المفتاح كسرّ خادم. المفتاح لا يصل المتصفّح ولا قاعدة البيانات إطلاقاً.
+//  ضبط الخادم المطلوب: سرّ ANTHROPIC_API_KEY في Supabase Edge Functions.
 // ════════════════════════════════════════════════════════════════════
 
 import { supabase } from './supabase'
 
-const AI_MODEL = 'claude-sonnet-4-6'
-const API_URL = 'https://api.anthropic.com/v1/messages'
-const KEY_CACHE = 'anthropic_api_key' // نسخة محلية للسرعة فقط
+// اسم الدالة الطرفية الوسيطة (النموذج وسقف التوكنات مفروضان داخلها)
+const PROXY_FUNCTION = 'anthropic-proxy'
 
-// المصدر الرئيسي للمفتاح = قاعدة البيانات. هذا كاش في الذاكرة.
-// null = لم نحدد بعد | '' = محدد ولا يوجد مفتاح | 'sk-...' = يوجد
-let cachedKey: string | null = null
-
-// ─── قراءة المفتاح ─────────────────────────────────────────────────────
-function readLocalCache(): string {
-  try { return localStorage.getItem(KEY_CACHE) ?? '' } catch { return '' }
-}
-function writeLocalCache(key: string): void {
-  try {
-    if (key) localStorage.setItem(KEY_CACHE, key)
-    else localStorage.removeItem(KEY_CACHE)
-  } catch { /* ignore */ }
-}
-
-// تحميل المفتاح من قاعدة البيانات (السحابة)
-export async function loadApiKey(): Promise<string> {
-  try {
-    const { data: rows } = await supabase
-      .from('company_settings')
-      .select('anthropic_api_key')
-      .limit(1)
-    const key = (rows && rows.length > 0)
-      ? ((rows[0] as { anthropic_api_key?: string }).anthropic_api_key ?? '')
-      : ''
-    cachedKey = key
-    writeLocalCache(key)
-    return key
-  } catch {
-    return readLocalCache()
-  }
-}
-
-// حفظ المفتاح في قاعدة البيانات (يعمل على كل الأجهزة)
-export async function saveApiKey(key: string): Promise<boolean> {
-  const trimmed = key.trim()
-  cachedKey = trimmed
-  writeLocalCache(trimmed)
-  try {
-    // جلب أول صف موجود (بدون single لتفادي الأخطاء)
-    const { data: rows, error: selErr } = await supabase
-      .from('company_settings')
-      .select('id')
-      .limit(1)
-    if (selErr) { console.error('AI key select error:', selErr); return false }
-
-    if (rows && rows.length > 0) {
-      const rowId = (rows[0] as { id: string }).id
-      const { error: updErr } = await supabase
-        .from('company_settings')
-        .update({ anthropic_api_key: trimmed, updated_at: new Date().toISOString() })
-        .eq('id', rowId)
-      if (updErr) { console.error('AI key update error:', updErr); return false }
-      return true
-    } else {
-      const { error: insErr } = await supabase
-        .from('company_settings')
-        .insert({ anthropic_api_key: trimmed })
-      if (insErr) { console.error('AI key insert error:', insErr); return false }
-      return true
-    }
-  } catch (e) {
-    console.error('AI key save exception:', e)
-    return false
-  }
-}
-
-// قراءة سريعة (متزامنة) من الكاش
-export function getApiKey(): string {
-  if (cachedKey !== null) return cachedKey
-  return readLocalCache()
-}
-
-// هل يوجد مفتاح؟ (متفائلة عند عدم التحديد لتجنب الحظر الخاطئ على جهاز جديد)
+// ─── توفّر الخدمة ──────────────────────────────────────────────────────
+// المفتاح صار على الخادم؛ لا يملك العميل وسيلة أكيدة لفحصه، فنفترض التوفّر
+// ونترك الخطأ الحقيقي يظهر عند النداء إن لم يكن الخادم مهيأً.
+// (مُبقاة لتوافق الصفحات التي تستدعيها كحارس قبل ميزات الذكاء.)
 export function hasApiKey(): boolean {
-  if (cachedKey !== null) return cachedKey.length > 0
-  // لم نحدد بعد: حمّل من السحابة في الخلفية واسمح بالمحاولة
-  loadApiKey().catch(() => {})
-  const local = readLocalCache()
-  return local.length > 0 || cachedKey === null
+  return true
 }
-
-// التأكد من وجود المفتاح قبل الاستخدام (يحمّل من السحابة إن لزم)
-async function ensureApiKey(): Promise<string> {
-  const current = getApiKey()
-  if (current) return current
-  return loadApiKey()
-}
-
-// تحميل المفتاح تلقائياً عند بدء التطبيق (في الخلفية)
-loadApiKey().catch(() => {})
 
 // ─── تحويل الملفات ─────────────────────────────────────────────────────
 export function fileToBase64(file: File): Promise<string> {
@@ -173,43 +87,37 @@ function extractText(data: unknown): string {
   return blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim()
 }
 
-// تحويل خطأ HTTP إلى رسالة عربية واضحة
-async function toFriendlyError(response: Response): Promise<AIError> {
-  let msg = `خطأ في الخدمة (${response.status})`
-  if (response.status === 401) msg = 'مفتاح الذكاء الاصطناعي غير صحيح. تحقق منه في الإعدادات.'
-  else if (response.status === 429) msg = 'تم تجاوز حد الاستخدام. حاول بعد قليل.'
-  else if (response.status === 400) msg = 'الطلب غير مدعوم أو الحجم كبير جداً.'
-  try {
-    const err = await response.json()
-    if (err?.error?.message) msg = err.error.message
-  } catch { /* ignore */ }
-  return makeError(msg, String(response.status))
+// شكل رد الدالة الطرفية الوسيطة
+interface ProxyResponse {
+  ok?: boolean
+  data?: unknown        // رد Anthropic الخام عند النجاح
+  message?: string      // رسالة الخطأ عند الفشل
+  status?: string       // كود حالة Anthropic إن وُجد
 }
 
-// نقطة الاتصال الوحيدة بالخدمة — تتكفّل بالمفتاح والشبكة والأخطاء واستخراج النص
+// نقطة الاتصال الوحيدة بالخدمة — تمرّ عبر الدالة الطرفية وتتكفّل بالأخطاء واستخراج النص
 async function callAnthropic(body: Record<string, unknown>): Promise<string> {
-  const key = await ensureApiKey()
-  if (!key) throw makeError('لم يتم ضبط مفتاح الذكاء الاصطناعي. أضفه من صفحة الإعدادات.', 'NO_KEY')
-
-  let response: Response
+  let result: { data: ProxyResponse | null; error: unknown }
   try {
-    response = await fetch(API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({ model: AI_MODEL, ...body }),
-    })
+    result = await supabase.functions.invoke(PROXY_FUNCTION, { body }) as typeof result
   } catch {
     throw makeError('تعذّر الاتصال بخدمة الذكاء الاصطناعي. تحقق من الإنترنت.', 'NETWORK')
   }
 
-  if (!response.ok) throw await toFriendlyError(response)
+  if (result.error) {
+    // غالباً 401 (غير مصرّح/انتهت الجلسة) أو خطأ شبكة على مستوى الدالة
+    throw makeError('تعذّر الوصول لخدمة الذكاء الاصطناعي. تأكد من تسجيل الدخول والاتصال.', 'INVOKE')
+  }
 
-  return extractText(await response.json())
+  const payload = result.data
+  if (!payload || !payload.ok) {
+    let msg = payload?.message || 'حدث خطأ في خدمة الذكاء الاصطناعي'
+    if (payload?.status === '429') msg = 'تم تجاوز حد الاستخدام. حاول بعد قليل.'
+    else if (payload?.status === '401') msg = 'مفتاح الذكاء الاصطناعي على الخادم غير صحيح.'
+    throw makeError(msg, payload?.status)
+  }
+
+  return extractText(payload.data)
 }
 
 // ─── قراءة مستند/صورة وإرجاع النص ──────────────────────────────────────
