@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { nextSerial, formatCurrency } from '../../lib/utils'
@@ -12,7 +11,21 @@ import Textarea from '../../components/ui/Textarea'
 import DocumentUpload from '../../components/ui/DocumentUpload'
 import toast from 'react-hot-toast'
 
+// مُعرّف واجهة فريد وثابت لكل صف بند — مفتاح React عند الإضافة/الحذف، لا يُحفظ في قاعدة البيانات
+const makeUid = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+
+// أعمدة DATE في قاعدة البيانات ترفض السلسلة الفارغة "" — نحوّل التاريخ الفارغ إلى null
+const sanitizeDate = (v: string): string | null => (v && v.trim() ? v : null)
+
+const today = () => new Date().toISOString().slice(0, 10)
+
+type ItemRow = Omit<InvoiceItem, 'id' | 'invoice_id'> & { _uid: string }
+
 const EMPTY_ITEM: Omit<InvoiceItem, 'id' | 'invoice_id'> = { description: '', quantity: 1, unit_price: 0, total: 0, sort_order: 0 }
+const newItemRow = (sort_order = 0): ItemRow => ({ _uid: makeUid(), ...EMPTY_ITEM, sort_order })
 
 const STATUS_OPTIONS = [
   { value: 'draft', label: 'مسودة' },
@@ -26,7 +39,6 @@ export default function InvoiceForm() {
   const { id } = useParams()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -35,7 +47,7 @@ export default function InvoiceForm() {
   const [selectedCustomerId, setSelectedCustomerId] = useState(searchParams.get('customer') ?? '')
   const [selectedProjectId, setSelectedProjectId] = useState(searchParams.get('project') ?? '')
   const [selectedMilestoneId, setSelectedMilestoneId] = useState(searchParams.get('milestone') ?? '')
-  const [items, setItems] = useState<Array<Omit<InvoiceItem, 'id' | 'invoice_id'>>>([{ ...EMPTY_ITEM }])
+  const [items, setItems] = useState<ItemRow[]>([newItemRow(0)])
   const [form, setForm] = useState({
     invoice_number: '',
     customer_name: '',
@@ -43,10 +55,11 @@ export default function InvoiceForm() {
     customer_address: '',
     customer_tax_number: '',
     ship_to: '',
-    issue_date: new Date().toISOString().slice(0, 10),
+    issue_date: today(),
     due_date: '',
     status: 'draft',
-    tax_rate: 0, // البناء الجديد للفلل صفري الضريبة (رخصة بناء جديدة)؛ الصيانة 10% تُعدّل يدوياً عند الحاجة
+    // فلل البناء الجديد → ضريبة 0% افتراضياً (تبقى قابلة للتعديل يدوياً لأعمال الصيانة 10%)
+    tax_rate: 0,
     discount: 0,
     notes: '',
     payment_terms: 'صافي 30 يوم',
@@ -54,7 +67,7 @@ export default function InvoiceForm() {
   const [loading, setLoading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
 
-  // Load master data
+  // ─── تحميل البيانات الرئيسية ─────────────────────────────────────────
   useEffect(() => {
     Promise.all([
       supabase.from('customers').select('*').order('name'),
@@ -65,7 +78,7 @@ export default function InvoiceForm() {
     })
   }, [])
 
-  // Load milestones when project changes
+  // تحميل مراحل الدفع عند تغيّر المشروع
   useEffect(() => {
     if (!selectedProjectId) { setMilestones([]); return }
     supabase.from('project_milestones').select('*').eq('project_id', selectedProjectId)
@@ -74,7 +87,7 @@ export default function InvoiceForm() {
       .then(({ data }) => setMilestones((data ?? []) as ProjectMilestone[]))
   }, [selectedProjectId])
 
-  // Auto serial
+  // ترقيم تلقائي للفاتورة الجديدة
   useEffect(() => {
     if (isEdit) return
     supabase.from('invoices').select('invoice_number').then(({ data }) => {
@@ -83,7 +96,7 @@ export default function InvoiceForm() {
     })
   }, [isEdit])
 
-  // Load existing invoice for edit
+  // تحميل الفاتورة عند التعديل
   useEffect(() => {
     if (!isEdit) return
     supabase.from('invoices').select('*').eq('id', id).single().then(({ data }) => {
@@ -108,12 +121,19 @@ export default function InvoiceForm() {
       setSelectedProjectId(inv.project_id ?? '')
       setSelectedMilestoneId(inv.milestone_id ?? '')
       supabase.from('invoice_items').select('*').eq('invoice_id', id).order('sort_order').then(({ data: rows }) => {
-        if (rows?.length) setItems(rows as InvoiceItem[])
+        if (rows?.length) setItems((rows as InvoiceItem[]).map((r, i) => ({
+          _uid: makeUid(),
+          description: r.description,
+          quantity: Number(r.quantity),
+          unit_price: Number(r.unit_price),
+          total: Number(r.total),
+          sort_order: r.sort_order ?? i,
+        })))
       })
     })
   }, [id, isEdit])
 
-  // Auto-fill from selected project
+  // تعبئة تلقائية من المشروع المختار
   useEffect(() => {
     if (!selectedProjectId) return
     const p = projects.find(x => x.id === selectedProjectId)
@@ -125,11 +145,10 @@ export default function InvoiceForm() {
       customer_address: p.location || prev.customer_address,
       ship_to: p.location || prev.ship_to,
     }))
-    // Also try to match to a customer record
     if (p.client_id) setSelectedCustomerId(p.client_id)
   }, [selectedProjectId, projects])
 
-  // Auto-fill from selected customer
+  // تعبئة تلقائية من العميل المختار
   useEffect(() => {
     if (!selectedCustomerId) return
     const c = customers.find(x => x.id === selectedCustomerId)
@@ -143,18 +162,18 @@ export default function InvoiceForm() {
     }))
   }, [selectedCustomerId, customers])
 
-  // Auto-fill amount from milestone
+  // تعبئة المبلغ تلقائياً من مرحلة الدفع
   useEffect(() => {
     if (!selectedMilestoneId) return
     const m = milestones.find(x => x.id === selectedMilestoneId)
     if (!m) return
-    setItems([{ description: m.name || m.description, quantity: 1, unit_price: Number(m.amount), total: Number(m.amount), sort_order: 0 }])
+    setItems([{ _uid: makeUid(), description: m.name || m.description, quantity: 1, unit_price: Number(m.amount), total: Number(m.amount), sort_order: 0 }])
   }, [selectedMilestoneId, milestones])
 
   const setField = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }))
 
-  const updateItem = useCallback((idx: number, field: keyof typeof EMPTY_ITEM, value: string | number) => {
+  const updateItem = useCallback((idx: number, field: 'description' | 'quantity' | 'unit_price', value: string | number) => {
     setItems(prev => {
       const next = [...prev]
       const item = { ...next[idx], [field]: value }
@@ -164,16 +183,13 @@ export default function InvoiceForm() {
     })
   }, [])
 
-  const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM, sort_order: prev.length }])
-  const removeItem = (idx: number) => setItems(prev => prev.filter((_, i) => i !== idx))
+  const addItem = () => setItems(prev => [...prev, newItemRow(prev.length)])
+  const removeItem = (idx: number) => setItems(prev => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev))
 
-  // الحسابات المالية — تُعاد فقط عند تغيّر البنود أو نسبة الضريبة أو الخصم
-  const { subtotal, taxAmount, total } = useMemo(() => {
-    const subtotal = items.reduce((s, i) => s + Number(i.total), 0)
-    const taxAmount = (subtotal * Number(form.tax_rate)) / 100
-    const total = subtotal + taxAmount - Number(form.discount)
-    return { subtotal, taxAmount, total }
-  }, [items, form.tax_rate, form.discount])
+  // ─── الحسابات المشتقة ─────────────────────────────────────────────────
+  const subtotal = useMemo(() => items.reduce((s, i) => s + Number(i.total), 0), [items])
+  const taxAmount = useMemo(() => (subtotal * Number(form.tax_rate)) / 100, [subtotal, form.tax_rate])
+  const total = useMemo(() => subtotal + taxAmount - Number(form.discount), [subtotal, taxAmount, form.discount])
 
   const handleExtracted = (data: ExtractedDocumentData) => {
     if (data.invoice_number) setForm(prev => ({ ...prev, invoice_number: data.invoice_number! }))
@@ -186,77 +202,124 @@ export default function InvoiceForm() {
     if (data.address) setForm(prev => ({ ...prev, customer_address: data.address! }))
     if (data.tax_number) setForm(prev => ({ ...prev, customer_tax_number: data.tax_number! }))
     if (data.items?.length) {
-      setItems(data.items.map((item, i) => ({ ...item, sort_order: i })))
+      setItems(data.items.map((item, i) => ({
+        _uid: makeUid(),
+        description: item.description ?? '',
+        quantity: Number(item.quantity) || 0,
+        unit_price: Number(item.unit_price) || 0,
+        total: Number(item.total) || (Number(item.quantity) || 0) * (Number(item.unit_price) || 0),
+        sort_order: i,
+      })))
     }
     toast.success('تم استخراج بيانات الفاتورة تلقائياً')
     setShowUpload(false)
   }
 
+  // ─── الحفظ ───────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!form.invoice_number.trim()) { toast.error('رقم الفاتورة مطلوب'); return }
     if (!form.customer_name.trim()) { toast.error('اسم العميل مطلوب'); return }
-    if (items.length === 0 || !items.some(i => i.description.trim())) { toast.error('يجب إضافة بند واحد على الأقل'); return }
+    const validItems = items.filter(i => i.description.trim())
+    if (validItems.length === 0) { toast.error('يجب إضافة بند واحد على الأقل'); return }
+
     setLoading(true)
+    try {
+      // بناء الحمولة بشكل صريح لتفادي إرسال حقول غير موجودة، وتحويل التواريخ الفارغة إلى null
+      const payload = {
+        invoice_number: form.invoice_number.trim(),
+        customer_id: selectedCustomerId || null,
+        customer_name: form.customer_name.trim(),
+        customer_email: form.customer_email,
+        customer_address: form.customer_address,
+        customer_tax_number: form.customer_tax_number,
+        ship_to: form.ship_to,
+        project_id: selectedProjectId || null,
+        milestone_id: selectedMilestoneId || null,
+        issue_date: sanitizeDate(form.issue_date) ?? today(), // عمود NOT NULL — نضمن قيمة صالحة
+        due_date: sanitizeDate(form.due_date),                 // عمود DATE قابل للفراغ — null بدل ""
+        status: form.status,
+        subtotal,
+        tax_rate: Number(form.tax_rate) || 0,
+        tax_amount: taxAmount,
+        discount: Number(form.discount) || 0,
+        total,
+        notes: form.notes,
+        payment_terms: form.payment_terms,
+        updated_at: new Date().toISOString(),
+      }
 
-    const payload = {
-      ...form,
-      customer_id: selectedCustomerId || null,
-      project_id: selectedProjectId || null,
-      milestone_id: selectedMilestoneId || null,
-      tax_rate: Number(form.tax_rate),
-      discount: Number(form.discount),
-      subtotal,
-      tax_amount: taxAmount,
-      total,
-      updated_at: new Date().toISOString(),
+      let invoiceId = id
+      if (isEdit) {
+        const { error } = await supabase.from('invoices').update(payload).eq('id', id)
+        if (error) throw error
+        const { error: delErr } = await supabase.from('invoice_items').delete().eq('invoice_id', id)
+        if (delErr) throw delErr
+      } else {
+        const { data: newInv, error } = await supabase.from('invoices').insert(payload).select('id').single()
+        if (error) throw error
+        invoiceId = (newInv as { id: string }).id
+      }
+
+      // إدراج البنود بعد تجريد مُعرّفات الواجهة وإعادة ترقيمها
+      const itemsPayload = validItems.map((it, idx) => ({
+        invoice_id: invoiceId,
+        description: it.description.trim(),
+        quantity: Number(it.quantity) || 0,
+        unit_price: Number(it.unit_price) || 0,
+        total: Number(it.total) || 0,
+        sort_order: idx,
+      }))
+      const { error: itemsErr } = await supabase.from('invoice_items').insert(itemsPayload)
+      if (itemsErr) throw itemsErr
+
+      // ربط المرحلة: تحديث حالتها إلى "مفوترة"
+      if (selectedMilestoneId) {
+        await supabase.from('project_milestones').update({ status: 'invoiced', invoice_id: invoiceId }).eq('id', selectedMilestoneId)
+      }
+
+      toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم إنشاء الفاتورة')
+      navigate('/invoices')
+    } catch (err) {
+      const msg = (err as { message?: string })?.message ?? 'تعذّر حفظ الفاتورة'
+      toast.error('حدث خطأ: ' + msg)
+    } finally {
+      setLoading(false)
     }
-
-    let invoiceId = id
-    if (isEdit) {
-      const { error } = await supabase.from('invoices').update(payload).eq('id', id)
-      if (error) { toast.error('حدث خطأ'); setLoading(false); return }
-      await supabase.from('invoice_items').delete().eq('invoice_id', id)
-      await supabase.from('invoice_items').insert(
-        items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, invoice_id: id, sort_order: idx }))
-      )
-    } else {
-      const { data: newInv, error } = await supabase.from('invoices').insert(payload).select().single()
-      if (error || !newInv) { toast.error('حدث خطأ'); setLoading(false); return }
-      invoiceId = (newInv as Invoice).id
-      await supabase.from('invoice_items').insert(
-        items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, invoice_id: invoiceId, sort_order: idx }))
-      )
-    }
-
-    // Update milestone status to 'invoiced' if linked
-    if (selectedMilestoneId) {
-      await supabase.from('project_milestones').update({ status: 'invoiced', invoice_id: invoiceId }).eq('id', selectedMilestoneId)
-    }
-
-    setLoading(false)
-    queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
-    toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم إنشاء الفاتورة')
-    navigate('/invoices')
   }
 
-  // قوائم الخيارات — تُبنى فقط عند تغيّر مصادرها
-  const projectOptions = useMemo(() => [
-    { value: '', label: '-- اختر مشروعاً --' },
-    ...projects.map(p => ({ value: p.id, label: `${p.project_name} — ${p.client_name}` }))
-  ], [projects])
+  // ─── قوائم الاختيار ───────────────────────────────────────────────────
+  const projectOptions = useMemo(
+    () => [
+      { value: '', label: '-- اختر مشروعاً --' },
+      ...projects.map(p => ({ value: p.id, label: `${p.project_name} — ${p.client_name}` })),
+    ],
+    [projects]
+  )
 
-  const milestoneOptions = useMemo(() => [
-    { value: '', label: '-- اختر مرحلة دفع --' },
-    ...milestones.map(m => ({ value: m.id, label: `${m.name} — ${formatCurrency(Number(m.amount))}` }))
-  ], [milestones])
+  const milestoneOptions = useMemo(
+    () => [
+      { value: '', label: '-- اختر مرحلة دفع --' },
+      ...milestones.map(m => ({ value: m.id, label: `${m.name} — ${formatCurrency(Number(m.amount))}` })),
+    ],
+    [milestones]
+  )
 
-  const customerOptions = useMemo(() => [
-    { value: '', label: '-- اختر عميلاً --' },
-    ...customers.map(c => ({ value: c.id, label: c.name + (c.company_name ? ` (${c.company_name})` : '') }))
-  ], [customers])
+  const customerOptions = useMemo(
+    () => [
+      { value: '', label: '-- اختر عميلاً --' },
+      ...customers.map(c => ({ value: c.id, label: c.name + (c.company_name ? ` (${c.company_name})` : '') })),
+    ],
+    [customers]
+  )
+
+  const selectedMilestone = useMemo(
+    () => milestones.find(m => m.id === selectedMilestoneId),
+    [milestones, selectedMilestoneId]
+  )
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto" dir="rtl">
       <div className="flex items-center gap-3 mb-6">
         <button onClick={() => navigate('/invoices')} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-600">
           <ArrowLeft size={20} />
@@ -264,7 +327,7 @@ export default function InvoiceForm() {
         <h2 className="text-lg font-semibold text-slate-800">{isEdit ? 'تعديل الفاتورة' : 'فاتورة جديدة'}</h2>
       </div>
 
-      {/* Auto-fill from document */}
+      {/* استخراج البيانات من ملف */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-5">
         <button
           type="button"
@@ -278,7 +341,7 @@ export default function InvoiceForm() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
-        {/* Header info */}
+        {/* معلومات الفاتورة */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h3 className="font-semibold text-slate-700 mb-4 text-sm">معلومات الفاتورة</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -290,7 +353,7 @@ export default function InvoiceForm() {
           </div>
         </div>
 
-        {/* Project & Milestone Linking */}
+        {/* ربط المشروع والمرحلة */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h3 className="font-semibold text-slate-700 mb-4 text-sm">ربط المشروع والمرحلة</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -307,17 +370,17 @@ export default function InvoiceForm() {
               options={milestoneOptions}
             />
           </div>
-          {selectedMilestoneId && milestones.find(m => m.id === selectedMilestoneId) && (
+          {selectedMilestone && (
             <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg text-sm">
               <span className="text-green-700 font-medium">
-                المرحلة: {milestones.find(m => m.id === selectedMilestoneId)?.name} —
-                المبلغ: {formatCurrency(Number(milestones.find(m => m.id === selectedMilestoneId)?.amount ?? 0))}
+                المرحلة: {selectedMilestone.name} —
+                المبلغ: {formatCurrency(Number(selectedMilestone.amount ?? 0))}
               </span>
             </div>
           )}
         </div>
 
-        {/* Customer info */}
+        {/* بيانات العميل */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h3 className="font-semibold text-slate-700 mb-4 text-sm">بيانات العميل</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -336,7 +399,7 @@ export default function InvoiceForm() {
           </div>
         </div>
 
-        {/* Items */}
+        {/* البنود */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-slate-700 text-sm">البنود</h3>
@@ -355,7 +418,7 @@ export default function InvoiceForm() {
             </div>
 
             {items.map((item, idx) => (
-              <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+              <div key={item._uid} className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-12 sm:col-span-5">
                   <input type="text" placeholder="وصف الخدمة / المنتج" value={item.description}
                     onChange={e => updateItem(idx, 'description', e.target.value)}
@@ -385,7 +448,7 @@ export default function InvoiceForm() {
             ))}
           </div>
 
-          {/* Totals */}
+          {/* الإجماليات */}
           <div className="mt-6 flex justify-end">
             <div className="w-full sm:w-72 space-y-2 text-sm">
               <div className="flex justify-between">
@@ -414,7 +477,7 @@ export default function InvoiceForm() {
           </div>
         </div>
 
-        {/* Notes */}
+        {/* ملاحظات */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <Textarea label="ملاحظات" value={form.notes} onChange={setField('notes')} rows={3} placeholder="شروط، ملاحظات، تعليمات الدفع..." />
         </div>
