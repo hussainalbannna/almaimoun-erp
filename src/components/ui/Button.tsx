@@ -28,11 +28,12 @@ const SIZE_STYLES: Record<ButtonSize, string> = {
 }
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'primary', size = 'md', loading = false, icon, children, className, disabled, ...props }, ref) => {
+  ({ variant = 'primary', size = 'md', loading = false, icon, children, className, disabled, type = 'button', ...props }, ref) => {
     return (
       <button
         {...props}
         ref={ref}
+        type={type}
         disabled={disabled || loading}
         aria-busy={loading}
         className={clsx(
