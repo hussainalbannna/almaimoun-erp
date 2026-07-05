@@ -6,8 +6,7 @@ import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Textarea from '../../components/ui/Textarea'
 import toast from 'react-hot-toast'
-import { Building2, Mail, Phone, CreditCard, Settings2, Hash, Sparkles, Loader2, CheckCircle, ExternalLink } from 'lucide-react'
-import { loadApiKey, saveApiKey, readDocumentText } from '../../lib/ai'
+import { Building2, Mail, Phone, CreditCard, Settings2, Hash, Sparkles, ShieldCheck, ExternalLink } from 'lucide-react'
 
 type Tab = 'company' | 'banking' | 'numbering' | 'ai'
 
@@ -41,20 +40,10 @@ export default function Settings() {
   const [settingsId, setSettingsId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  // الذكاء الاصطناعي
-  const [aiKey, setAiKey] = useState('')
-  const [testing, setTesting] = useState(false)
-  const [keyValid, setKeyValid] = useState<boolean | null>(null)
-  const [savingKey, setSavingKey] = useState(false)
-
-  useEffect(() => {
-    loadApiKey().then(k => setAiKey(k)).catch(() => {})
-  }, [])
-
   const queryClient = useQueryClient()
   const { data: settingsData } = useQuery({ queryKey: ['company-settings'], queryFn: fetchCompanySettings })
   // تعبئة النموذج عند وصول الإعدادات — مع استبعاد مفتاح الذكاء الاصطناعي حتى لا يُكتب فوقه أبداً.
-  // المفتاح يُدار حصرياً من تبويب الذكاء الاصطناعي عبر حقل aiKey.
+  // المفتاح صار سرّ خادم ولا يُدار من هنا إطلاقاً.
   useEffect(() => {
     if (!settingsData) return
     const { anthropic_api_key: _omit, ...rest } = settingsData as CompanySettings & { anthropic_api_key?: string }
@@ -68,8 +57,8 @@ export default function Settings() {
 
   const handleSave = async () => {
     setLoading(true)
-    // مهم: لا نلمس مفتاح الذكاء الاصطناعي هنا أبداً — يُحفظ فقط من تبويب الذكاء الاصطناعي.
-    // نحذفه من الحمولة حتى لا نكتب فوقه بقيمة قديمة بالخطأ.
+    // مهم: لا نلمس مفتاح الذكاء الاصطناعي هنا أبداً — يُدار كسرّ خادم.
+    // نحذفه من الحمولة حتى لا نكتب فوقه بالخطأ لو كان العمود لا يزال موجوداً.
     const cleanForm = { ...form } as Partial<CompanySettings> & { anthropic_api_key?: string }
     delete cleanForm.anthropic_api_key
     const payload = { ...cleanForm, updated_at: new Date().toISOString() }
@@ -80,42 +69,6 @@ export default function Settings() {
     if (error) { toast.error('حدث خطأ أثناء الحفظ'); return }
     queryClient.invalidateQueries({ queryKey: ['company-settings'] })
     toast.success('تم حفظ الإعدادات')
-  }
-
-  // ─── حفظ واختبار مفتاح الذكاء الاصطناعي (في السحابة) ─────────────────
-  const handleSaveKey = async () => {
-    setSavingKey(true)
-    const ok = await saveApiKey(aiKey)
-    setSavingKey(false)
-    setKeyValid(null)
-    if (!ok) { toast.error('تعذّر حفظ المفتاح في قاعدة البيانات'); return }
-    toast.success(aiKey.trim() ? 'تم حفظ المفتاح — يعمل الآن على كل أجهزتك' : 'تم مسح المفتاح')
-  }
-
-  const handleTestKey = async () => {
-    if (!aiKey.trim()) { toast.error('أدخل المفتاح أولاً'); return }
-    setTesting(true)
-    setKeyValid(null)
-    toast.loading('جاري حفظ واختبار المفتاح...', { id: 'test' })
-    try {
-      await saveApiKey(aiKey) // حفظ في السحابة قبل الاختبار
-      // صورة صغيرة لاختبار الاتصال
-      const canvas = document.createElement('canvas')
-      canvas.width = 60; canvas.height = 20
-      const ctx = canvas.getContext('2d')!
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 60, 20)
-      ctx.fillStyle = '#000'; ctx.font = '14px sans-serif'; ctx.fillText('123', 5, 15)
-      const blob = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/jpeg'))
-      const file = new File([blob], 'test.jpg', { type: 'image/jpeg' })
-      await readDocumentText(file, 'ما الرقم المكتوب في الصورة؟ أجب برقم واحد فقط.')
-      setKeyValid(true)
-      toast.success('المفتاح يعمل بنجاح ✓', { id: 'test' })
-    } catch (e) {
-      setKeyValid(false)
-      toast.error((e as Error)?.message ?? 'فشل الاختبار', { id: 'test' })
-    } finally {
-      setTesting(false)
-    }
   }
 
   const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
@@ -209,52 +162,27 @@ export default function Settings() {
           <>
             <h3 className="font-semibold text-slate-800 flex items-center gap-2"><Sparkles size={18} style={{ color: GOLD }} /> الذكاء الاصطناعي</h3>
             <p className="text-sm text-slate-500">
-              يُستخدم لقراءة العقود والهويات والمستندات تلقائياً (حتى الممسوحة ضوئياً) وملء الحقول. المفتاح يُحفظ في قاعدة البيانات بشكل آمن ويعمل تلقائياً على جميع أجهزتك (كمبيوتر وجوال).
+              يُستخدم لقراءة العقود والهويات والمستندات تلقائياً (حتى الممسوحة ضوئياً) وملء الحقول. كل النداءات تمرّ عبر خادم آمن، والمفتاح لا يصل المتصفّح أبداً.
             </p>
 
-            <div className="space-y-3">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex gap-3">
+              <ShieldCheck size={20} className="text-green-700 shrink-0 mt-0.5" />
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">مفتاح Anthropic API</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="password"
-                    value={aiKey}
-                    onChange={e => { setAiKey(e.target.value); setKeyValid(null) }}
-                    placeholder="sk-ant-..."
-                    className="flex-1 h-10 px-3 rounded-lg border border-slate-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
-                    dir="ltr"
-                  />
-                  {keyValid === true && <CheckCircle size={20} className="text-green-600 shrink-0" />}
-                </div>
+                <h4 className="font-medium text-green-900 text-sm mb-1">المفتاح محفوظ بأمان على الخادم</h4>
+                <p className="text-xs text-green-800 leading-relaxed">
+                  مفتاح Anthropic لم يعد يُخزَّن في قاعدة البيانات ولا يُرسَل إلى المتصفّح. يُدار حصرياً كسرّ خادم
+                  (Supabase Secret) باسم <span className="font-mono">ANTHROPIC_API_KEY</span>، وتُجرى كل الطلبات عبر دالة طرفية
+                  محمية تتحقق من هوية المستخدم.
+                </p>
               </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={handleSaveKey} loading={savingKey}>حفظ المفتاح</Button>
-                <Button variant="outline" onClick={handleTestKey} disabled={testing}
-                  icon={testing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}>
-                  {testing ? 'جاري الاختبار...' : 'اختبار المفتاح'}
-                </Button>
-              </div>
-
-              {keyValid === true && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800 flex items-center gap-2">
-                  <CheckCircle size={16} /> المفتاح يعمل بنجاح. كل ميزات الذكاء الاصطناعي مفعّلة الآن.
-                </div>
-              )}
-              {keyValid === false && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
-                  المفتاح لم يعمل. تأكد من نسخه كاملاً ومن وجود رصيد في حسابك.
-                </div>
-              )}
             </div>
 
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-2 space-y-2">
-              <h4 className="font-medium text-amber-900 text-sm">كيف تحصل على المفتاح؟</h4>
+              <h4 className="font-medium text-amber-900 text-sm">ضبط المفتاح (لمرّة واحدة، من لوحة Supabase)</h4>
               <ol className="text-xs text-amber-800 space-y-1.5 list-decimal pr-4">
-                <li>ادخل على <span className="font-mono">console.anthropic.com</span> وسجّل حساب</li>
-                <li>اشحن رصيد بسيط (يبدأ من 5 دولار) من Billing</li>
-                <li>من API Keys اضغط Create Key وانسخ المفتاح (يبدأ بـ sk-ant)</li>
-                <li>الصقه هنا واضغط حفظ ثم اختبار</li>
+                <li>افتح مشروعك في Supabase ← Edge Functions ← Secrets (أو عبر الأمر <span className="font-mono">supabase secrets set</span>)</li>
+                <li>أضف سرّاً باسم <span className="font-mono">ANTHROPIC_API_KEY</span> وقيمته مفتاحك (يبدأ بـ sk-ant)</li>
+                <li>احصل على المفتاح من <span className="font-mono">console.anthropic.com</span> بعد شحن رصيد بسيط (يبدأ من 5 دولار)</li>
               </ol>
               <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 hover:text-amber-900 mt-1">
