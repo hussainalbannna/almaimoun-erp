@@ -208,3 +208,6 @@ export default function App() {
     </QueryClientProvider>
   )
 }
+import MigrateAttachments from './pages/admin/MigrateAttachments'
+// وداخل <Routes> (ضمن المسارات المحمية بتسجيل الدخول):
+<Route path="/migrate" element={<MigrateAttachments />} />
