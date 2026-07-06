@@ -300,16 +300,23 @@ export function calcAccruedLeave(annualDays: number, joinDate: string): number {
 // ═══════════════════════════════════════════
 //  الأيام المتبقية حتى تاريخ معيّن (للتنبيهات)
 // ═══════════════════════════════════════════
-export function daysUntil(dateStr: string | null | undefined): number {
-  if (!dateStr) return 9999
+// المصدر الموحّد لحساب عدد الأيام حتى تاريخ (سالب = مضى). يُرجع null لتاريخ غائب/غير صالح.
+export function daysUntilOrNull(dateStr: string | null | undefined): number | null {
+  if (!dateStr) return null
   try {
     const target = parseISO(dateStr)
+    if (isNaN(target.getTime())) return null
     const today = new Date()
     today.setHours(0, 0, 0, 0)
     return differenceInDays(target, today)
   } catch {
-    return 9999
+    return null
   }
+}
+
+// نسخة تُرجع 9999 للتاريخ الغائب (مريحة للفرز والعرض في الصفحات) — مشتقّة من المصدر الموحّد أعلاه
+export function daysUntil(dateStr: string | null | undefined): number {
+  return daysUntilOrNull(dateStr) ?? 9999
 }
 
 export type AlertLevel = 'critical' | 'warning' | 'notice' | 'ok'
