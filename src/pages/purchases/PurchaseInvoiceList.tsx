@@ -33,7 +33,7 @@ const daysUntil = (date: string): number =>
 
 // تاريخ الفاتورة الفعلي (entry_date) مع تراجع لتاريخ الإنشاء للفواتير القديمة
 type InvoiceRow = PurchaseInvoice & { entry_date?: string | null; tax_rate?: number; subtotal?: number }
-const invoiceDate = (inv: InvoiceRow): string => inv.entry_date || inv.created_at
+const invoiceDate = (inv: InvoiceRow): string => inv.entry_date || inv.created_at || ''
 
 // ── حساب تفصيل الضريبة لكل فاتورة (amount = المجموع الشامل) ──
 // إن كان subtotal مخزّناً نستخدمه؛ وإلا نحسب من amount والنسبة (افتراض 10% للقديمة)
@@ -57,6 +57,8 @@ export default function PurchaseInvoiceList() {
   const [previewImg, setPreviewImg] = useState<string | null>(null)
   const [groupBy, setGroupBy] = useState<'project' | 'flat'>('project')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  // عدد المرفقات لكل فاتورة (مؤشّر خفيف من أعمدة محسوبة — بلا تحميل بيانات base64 في القائمة)
+  const [docCounts, setDocCounts] = useState<Record<string, number>>({})
   // فاتورة قيد الاستعراض الكامل
   const [viewInv, setViewInv] = useState<InvoiceRow | null>(null)
   const [viewDeliveries, setViewDeliveries] = useState<PurchaseInvoiceDelivery[]>([])
@@ -64,15 +66,37 @@ export default function PurchaseInvoiceList() {
 
   const load = async () => {
     setLoading(true)
-    const { data } = await supabase
-      .from('purchase_invoices')
-      .select('*')
-    // الترتيب يدوياً حسب تاريخ الفاتورة الفعلي (entry_date)
-    const rows = ((data ?? []) as InvoiceRow[]).sort((a, b) =>
-      invoiceDate(b).localeCompare(invoiceDate(a))
-    )
-    setInvoices(rows)
-    setLoading(false)
+    try {
+      // استعلام خفيف: بدون أعمدة الصور/الملفات (base64) الضخمة —
+      // جلبها عبر select('*') كان يضخّم حجم الرد ويتسبب في خطأ 500 من الخادم
+      const { data, error } = await supabase
+        .from('purchase_invoices')
+        .select('id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, vendor_invoice_number, amount, payment_method, check_due_date, notes, created_at, updated_at')
+      if (error) throw error
+      // ترتيب آمن حسب تاريخ الفاتورة الفعلي (يتحمّل القيم الفارغة دون أن ينهار)
+      const rows = ((data ?? []) as InvoiceRow[]).slice().sort((a, b) =>
+        (invoiceDate(b) || '').localeCompare(invoiceDate(a) || '')
+      )
+      setInvoices(rows)
+
+      // مؤشّر وجود المرفقات (خفيف) من أعمدة محسوبة اختيارية — يُتجاهل بأمان إن لم تكن موجودة بعد
+      const { data: flags } = await supabase
+        .from('purchase_invoices')
+        .select('id, has_invoice_copy, has_payment_proof, has_check_image')
+      if (flags) {
+        const counts: Record<string, number> = {}
+        for (const f of flags as Array<{ id: string; has_invoice_copy?: boolean; has_payment_proof?: boolean; has_check_image?: boolean }>) {
+          counts[f.id] = (f.has_invoice_copy ? 1 : 0) + (f.has_payment_proof ? 1 : 0) + (f.has_check_image ? 1 : 0)
+        }
+        setDocCounts(counts)
+      }
+    } catch (e) {
+      // إظهار الخطأ الحقيقي بدل بقاء الصفحة عالقة على "جاري التحميل"
+      toast.error('تعذّر تحميل فواتير الشراء: ' + ((e as Error)?.message ?? 'خطأ غير معروف'))
+      setInvoices([])
+    } finally {
+      setLoading(false) // يضمن اختفاء "جاري التحميل" في كل الحالات
+    }
   }
 
   useEffect(() => { load() }, [])
@@ -86,14 +110,17 @@ export default function PurchaseInvoiceList() {
     load()
   }
 
-  // فتح نافذة الاستعراض الكامل + جلب الديلفري نوت
+  // فتح نافذة الاستعراض: جلب النسخة الكاملة (مع الصور/الملفات) + بيانات التوصيل لهذه الفاتورة فقط
   const openView = async (inv: InvoiceRow) => {
-    setViewInv(inv)
+    setViewInv(inv)            // عرض فوري بالبيانات الخفيفة المتوفّرة
     setViewDeliveries([])
     setLoadingView(true)
-    const { data } = await supabase.from('purchase_invoice_deliveries')
-      .select('*').eq('purchase_invoice_id', inv.id).order('created_at')
-    setViewDeliveries((data ?? []) as PurchaseInvoiceDelivery[])
+    const [fullRes, delRes] = await Promise.all([
+      supabase.from('purchase_invoices').select('*').eq('id', inv.id).single(),
+      supabase.from('purchase_invoice_deliveries').select('*').eq('purchase_invoice_id', inv.id).order('created_at'),
+    ])
+    if (fullRes.data) setViewInv(fullRes.data as InvoiceRow) // استبدال بالنسخة الكاملة لتظهر المرفقات
+    setViewDeliveries((delRes.data ?? []) as PurchaseInvoiceDelivery[])
     setLoadingView(false)
   }
 
@@ -233,7 +260,7 @@ export default function PurchaseInvoiceList() {
 
   // صف فاتورة (يُستخدم في وضع التجميع والوضع المسطّح)
   const InvoiceRowEl = ({ inv }: { inv: InvoiceRow }) => {
-    const docs = getDocs(inv)
+    const docCount = docCounts[inv.id] ?? 0
     const isSoonCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today && daysUntil(inv.check_due_date) <= 7
     const isOverdueCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date <= today
     return (
@@ -261,10 +288,10 @@ export default function PurchaseInvoiceList() {
           )}
         </td>
         <td className="px-4 py-3">
-          {docs.length > 0 ? (
-            <button onClick={e => { e.stopPropagation(); docs.length === 1 ? openDoc(docs[0].data) : openView(inv) }}
+          {docCount > 0 ? (
+            <button onClick={e => { e.stopPropagation(); openView(inv) }}
               className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2.5 py-1 rounded-lg transition-colors" title="عرض المستندات">
-              <Paperclip size={13} /> {docs.length}
+              <Paperclip size={13} /> {docCount}
             </button>
           ) : <span className="text-slate-300 text-xs">—</span>}
         </td>
