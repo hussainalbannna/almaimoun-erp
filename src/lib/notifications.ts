@@ -1,327 +1,143 @@
-import { safeSelect } from './supabase'
-// نستخدم المصدر الموحّد لحساب الأيام (النسخة nullable) بدل تكرار المنطق هنا
-import { daysUntilOrNull as daysUntil } from './utils'
+import type { LucideIcon } from 'lucide-react'
+import {
+  LayoutDashboard, FileText, ShoppingCart, Users, Building2,
+  Settings, FileArchive, HardHat, Receipt, UserCog,
+  ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
+  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound, Banknote,
+} from 'lucide-react'
 
-export type AlertLevel = 'overdue' | 'danger' | 'warning' | 'info'
-export type AlertKind = 'cheque' | 'installment' | 'worker_doc' | 'asset_doc' | 'invoice' | 'task' | 'quote'
-
-export interface AppAlert {
-  id: string
-  kind: AlertKind
-  level: AlertLevel
-  urgent: boolean        // نبضة: اليوم أو باقي يوم واحد
-  title: string
-  subtitle: string
-  date: string | null
-  daysLeft: number | null
-  amount?: number
-  link?: string
+export interface NavItem {
+  to: string
+  label: string          // نص عنصر القائمة الجانبية
+  icon: LucideIcon
+  end?: boolean          // مطابقة تامّة للمسار (للوحة التحكم فقط حتى لا تبقى نشطة في كل الصفحات)
+  title?: string         // عنوان الترويسة إن اختلف عن label (وإلا يُستخدم label)
 }
 
-// ═══ منطق المستوى الموحّد حسب نوع الإشعار ═══
-// مالي (أقساط/شيكات/فواتير/عروض): عتبات قصيرة (أكثر إلحاحاً)
-//   أحمر ≤ 3 | برتقالي ≤ 5 | أصفر ≤ 7
-// وثائق (إقامة/بطاقة/جواز/تأمين/استمارة): عتبات أطول (التجديد يحتاج وقت)
-//   أحمر ≤ 7 | برتقالي ≤ 15 | أصفر ≤ 30
-// فات الموعد = overdue (رمادي حزين) | اليوم أو باقي يوم = urgent (نبضة)
-
-type Track = 'financial' | 'document'
-
-function classify(days: number | null, track: Track): { level: AlertLevel; urgent: boolean } {
-  if (days === null) return { level: 'info', urgent: false }
-  if (days < 0) return { level: 'overdue', urgent: false }   // فات الموعد
-  const urgent = days <= 1                                     // اليوم أو باقي يوم → نبضة
-  if (track === 'financial') {
-    if (days <= 3) return { level: 'danger', urgent }
-    if (days <= 5) return { level: 'warning', urgent }
-    return { level: 'info', urgent }                           // ≤ 7
-  } else {
-    if (days <= 7) return { level: 'danger', urgent }
-    if (days <= 15) return { level: 'warning', urgent }
-    return { level: 'info', urgent }                           // ≤ 30
-  }
+export interface NavGroup {
+  label: string
+  items: NavItem[]
 }
 
-// عتبة الظهور القصوى لكل مسار
-const MAX_FINANCIAL = 7
-const MAX_DOCUMENT = 30
+// ═══════════════════════════════════════════════════════════════════
+//  المصدر الموحّد الوحيد لكل بيانات المسارات:
+//  تقرأ منه القائمة الجانبية (Sidebar) وعناوين الترويسة (AppLayout).
+//  أي إضافة/تعديل صفحة تتم هنا فقط — لا تكرار.
+// ═══════════════════════════════════════════════════════════════════
+export const navGroups: NavGroup[] = [
+  {
+    label: 'الرئيسية',
+    items: [
+      { to: '/', label: 'لوحة التحكم', icon: LayoutDashboard, end: true },
+      { to: '/assistant', label: 'المساعد الذكي', icon: Bot },
+      { to: '/calendar', label: 'التقويم', icon: Calendar },
+      { to: '/notifications', label: 'مركز الإشعارات', icon: Bell },
+    ],
+  },
+  {
+    label: 'المبيعات والعروض',
+    items: [
+      { to: '/quotations', label: 'عروض الأسعار', icon: Calculator },
+    ],
+  },
+  {
+    label: 'إدارة المشاريع',
+    items: [
+      { to: '/projects', label: 'المشاريع والمراحل', icon: HardHat, title: 'المشاريع' },
+      { to: '/daily-logs', label: 'تقارير الموقع وأوامر التغيير', icon: ClipboardList, title: 'تقارير الموقع' },
+      { to: '/assets', label: 'الأصول والمعدات', icon: Package },
+      { to: '/rentals', label: 'الإيجارات والمصاريف', icon: KeyRound },
+    ],
+  },
+  {
+    label: 'الموارد البشرية',
+    items: [
+      { to: '/workers', label: 'العمالة والسجلات', icon: Users, title: 'العمالة' },
+      { to: '/payroll', label: 'كشف الرواتب', icon: UserCog },
+      { to: '/subcontractors', label: 'مقاولو الباطن', icon: Wrench },
+      { to: '/tasks', label: 'المهام والتذكيرات', icon: ListTodo },
+    ],
+  },
+  {
+    label: 'المالية والمحاسبة',
+    items: [
+      { to: '/finance', label: 'اللوحة المالية', icon: PieChart },
+      { to: '/cheques', label: 'مركز الشيكات', icon: Banknote },
+      { to: '/invoices', label: 'الفواتير', icon: FileText },
+      { to: '/receipts', label: 'الإيصالات', icon: Receipt },
+      { to: '/cashbook', label: 'دفتر الصندوق', icon: BookOpen },
+    ],
+  },
+  {
+    label: 'المشتريات',
+    items: [
+      { to: '/purchases', label: 'الفواتير والمدفوعات', icon: CreditCard, title: 'فواتير الشراء' },
+      { to: '/lpos', label: 'أوامر الشراء (LPO)', icon: ShoppingCart, title: 'أوامر الشراء' },
+      { to: '/suppliers', label: 'الموردون', icon: Truck },
+    ],
+  },
+  {
+    label: 'الدليل',
+    items: [
+      { to: '/contacts', label: 'جهات الاتصال', icon: Phone },
+      { to: '/customers', label: 'العملاء', icon: Building2 },
+    ],
+  },
+  {
+    label: '',
+    items: [
+      { to: '/reports', label: 'التقارير والإحصائيات', icon: BarChart2 },
+      { to: '/documents', label: 'المستندات', icon: FileArchive },
+      { to: '/settings', label: 'الإعدادات', icon: Settings },
+    ],
+  },
+]
 
-// ─── أنواع صفوف الاستعلامات (تحلّ محل الكاست وتلتقط أخطاء أسماء الحقول وقت البناء) ───
-interface WorkerRow {
-  id: string
-  name: string
-  name_en: string | null
-  visa_expiry: string | null
-  cpr_expiry: string | null
-  passport_expiry: string | null
-  status: string | null
-}
-interface AssetRow {
-  id: string
-  name: string
-  insurance_expiry: string | null
-  registration_expiry: string | null
-  payment_method: string | null
-  bank_name: string | null
-  monthly_installment: number | null
-  total_installments: number | null
-  paid_installments: number | null
-  next_installment_date: string | null
-}
-interface InvoiceRow {
-  id: string
-  invoice_number: string
-  customer_name: string
-  total: number | null
-  status: string
-  due_date: string | null
-}
-interface PurchaseInvoiceRow {
-  id: string
-  supplier_name: string
-  amount: number | null
-  payment_method: string | null
-  check_due_date: string | null
-}
-interface SubPaymentRow {
-  id: string
-  amount: number | null
-  payment_method: string | null
-  check_due_date: string | null
-}
-interface TaskRow {
-  id: string
-  title: string
-  due_date: string | null
-  status: string
-}
-interface QuoteRow {
-  id: string
-  quote_number: string
-  customer_name: string
-  valid_until: string | null
-  status: string
-  total: number | null
+// عناوين ثابتة لصفحات لا تظهر في القائمة الجانبية (صفحات الإنشاء)
+const EXTRA_TITLES: Record<string, string> = {
+  '/quotations/new': 'عرض سعر جديد',
+  '/projects/new': 'مشروع جديد',
+  '/invoices/new': 'فاتورة جديدة',
+  '/receipts/new': 'إيصال جديد',
+  '/lpos/new': 'أمر شراء جديد',
+  '/purchases/new': 'فاتورة شراء جديدة',
+  '/workers/new': 'عامل جديد',
+  '/subcontractors/new': 'مقاول باطن جديد',
+  '/suppliers/new': 'مورد جديد',
+  '/customers/new': 'عميل جديد',
 }
 
-// جلب كل التنبيهات من قاعدة البيانات
-// كل استعلام يفشل بأمان عبر safeSelect ويعيد [] دون إسقاط بقية التنبيهات
-export async function fetchAllAlerts(): Promise<AppAlert[]> {
-  const alerts: AppAlert[] = []
+// عناوين المسارات الفرعية الديناميكية — تُطابَق بالتضمين (الترتيب مقصود من الأخص للأعم)
+const DYNAMIC_TITLES: ReadonlyArray<readonly [string, string]> = [
+  ['/statement', 'كشف حساب'],
+  ['/edit', 'تعديل'],
+  ['/view', 'عرض'],
+  ['/profile', 'ملف العامل'],
+  ['/deliveries', 'الاستلامات'],
+  ['/vos/new', 'أمر تغيير جديد'],
+]
 
-  const [workers, assets, invoices, purchaseInvoices, subPayments, tasks, quotes] = await Promise.all([
-    safeSelect<WorkerRow>('workers', 'id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status'),
-    safeSelect<AssetRow>('assets', 'id,name,insurance_expiry,registration_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date'),
-    safeSelect<InvoiceRow>('invoices', 'id,invoice_number,customer_name,total,status,due_date'),
-    safeSelect<PurchaseInvoiceRow>('purchase_invoices', 'id,supplier_name,amount,payment_method,check_due_date'),
-    safeSelect<SubPaymentRow>('subcontractor_payments', 'id,amount,payment_method,check_due_date'),
-    safeSelect<TaskRow>('tasks', 'id,title,due_date,status'),
-    safeSelect<QuoteRow>('quotations', 'id,quote_number,customer_name,valid_until,status,total'),
-  ])
-
-  const subtitleDays = (d: number, verb: { past: string; today: string; future: string }) =>
-    d < 0 ? `${verb.past} ${Math.abs(d)} يوم` : d === 0 ? verb.today : `${verb.future} ${d} يوم`
-
-  // وثائق العمال
-  for (const w of workers) {
-    if (w.status === 'inactive') continue
-    for (const [label, value, field] of [
-      ['الإقامة/التأشيرة', w.visa_expiry, 'visa_expiry'],
-      ['البطاقة الذكية', w.cpr_expiry, 'cpr_expiry'],
-      ['جواز السفر', w.passport_expiry, 'passport_expiry'],
-    ] as const) {
-      const d = daysUntil(value)
-      if (d !== null && d <= MAX_DOCUMENT) {
-        const { level, urgent } = classify(d, 'document')
-        alerts.push({
-          id: `worker-${w.id}-${field}`,
-          kind: 'worker_doc',
-          level, urgent,
-          title: `${label} — ${w.name}`,
-          subtitle: subtitleDays(d, { past: 'منتهية منذ', today: 'تنتهي اليوم', future: 'تنتهي بعد' }),
-          date: value,
-          daysLeft: d,
-          link: `/workers/${w.id}/edit`,
-        })
-      }
+// خريطة العنوان المباشر لكل مسار — مبنية آلياً من navGroups (مع تجاوز title) + العناوين الإضافية
+const PAGE_TITLES: Record<string, string> = (() => {
+  const map: Record<string, string> = {}
+  for (const group of navGroups) {
+    for (const item of group.items) {
+      map[item.to] = item.title ?? item.label
     }
   }
+  return { ...map, ...EXTRA_TITLES }
+})()
 
-  // وثائق المعدات
-  for (const a of assets) {
-    for (const [label, value, field] of [
-      ['تأمين', a.insurance_expiry, 'insurance_expiry'],
-      ['استمارة', a.registration_expiry, 'registration_expiry'],
-    ] as const) {
-      const d = daysUntil(value)
-      if (d !== null && d <= MAX_DOCUMENT) {
-        const { level, urgent } = classify(d, 'document')
-        alerts.push({
-          id: `asset-${a.id}-${field}`,
-          kind: 'asset_doc',
-          level, urgent,
-          title: `${label} ${a.name}`,
-          subtitle: subtitleDays(d, { past: 'منتهية منذ', today: 'تنتهي اليوم', future: 'تنتهي بعد' }),
-          date: value,
-          daysLeft: d,
-          link: '/assets',
-        })
-      }
-    }
+// حلّ عنوان الصفحة الحالية: مطابقة مباشرة ← مسار فرعي ديناميكي ← مطابقة المسار الأب
+export function resolvePageTitle(pathname: string): string {
+  const exact = PAGE_TITLES[pathname]
+  if (exact) return exact
+
+  for (const [fragment, label] of DYNAMIC_TITLES) {
+    if (pathname.includes(fragment)) return label
   }
 
-  // أقساط الأصول (البيكاب والمعدات الممولة بنكياً)
-  for (const a of assets) {
-    if (a.payment_method === 'installment' && a.next_installment_date) {
-      const paid = Number(a.paid_installments) || 0
-      const total = Number(a.total_installments) || 0
-      const notFullyPaid = total === 0 || paid < total
-      if (notFullyPaid) {
-        const d = daysUntil(a.next_installment_date)
-        if (d !== null && d <= MAX_FINANCIAL) {
-          const { level, urgent } = classify(d, 'financial')
-          const monthly = Number(a.monthly_installment) || 0
-          const bank = a.bank_name || ''
-          const remaining = total > 0 ? (total - paid) * monthly : 0
-          alerts.push({
-            id: `installment-${a.id}`,
-            kind: 'installment',
-            level, urgent,
-            title: `قسط ${a.name}${bank ? ` — ${bank}` : ''}`,
-            subtitle: `${subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' })}${remaining > 0 ? ` • المتبقي ${remaining.toLocaleString('en-US')} د.ب` : ''}`,
-            date: a.next_installment_date,
-            daysLeft: d,
-            amount: monthly,
-            link: '/assets',
-          })
-        }
-      }
-    }
-  }
-
-  // الشيكات الآجلة (موردين)
-  for (const p of purchaseInvoices) {
-    if (p.payment_method === 'deferred_cheque' && p.check_due_date) {
-      const d = daysUntil(p.check_due_date)
-      if (d !== null && d <= MAX_FINANCIAL) {
-        const { level, urgent } = classify(d, 'financial')
-        alerts.push({
-          id: `pcheque-${p.id}`,
-          kind: 'cheque',
-          level, urgent,
-          title: `شيك مستحق — ${p.supplier_name}`,
-          subtitle: subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' }),
-          date: p.check_due_date,
-          daysLeft: d,
-          amount: Number(p.amount) || 0,
-          link: '/purchases',
-        })
-      }
-    }
-  }
-
-  // الشيكات الآجلة (مقاولو الباطن)
-  for (const s of subPayments) {
-    if (s.payment_method === 'cheque' && s.check_due_date) {
-      const d = daysUntil(s.check_due_date)
-      if (d !== null && d <= MAX_FINANCIAL) {
-        const { level, urgent } = classify(d, 'financial')
-        alerts.push({
-          id: `scheque-${s.id}`,
-          kind: 'cheque',
-          level, urgent,
-          title: 'شيك مقاول باطن مستحق',
-          subtitle: subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' }),
-          date: s.check_due_date,
-          daysLeft: d,
-          amount: Number(s.amount) || 0,
-          link: '/subcontractors',
-        })
-      }
-    }
-  }
-
-  // الفواتير غير المدفوعة المتأخرة
-  for (const inv of invoices) {
-    if (inv.status !== 'paid' && inv.due_date) {
-      const d = daysUntil(inv.due_date)
-      if (d !== null && d <= MAX_FINANCIAL) {
-        const { level, urgent } = classify(d, 'financial')
-        alerts.push({
-          id: `invoice-${inv.id}`,
-          kind: 'invoice',
-          level, urgent,
-          title: `فاتورة ${inv.invoice_number} — ${inv.customer_name}`,
-          subtitle: subtitleDays(d, { past: 'متأخرة', today: 'تستحق اليوم', future: 'تستحق بعد' }),
-          date: inv.due_date,
-          daysLeft: d,
-          amount: Number(inv.total) || 0,
-          link: `/invoices/${inv.id}/view`,
-        })
-      }
-    }
-  }
-
-  // المهام المتأخرة أو القريبة
-  for (const t of tasks) {
-    if (t.status !== 'done' && t.due_date) {
-      const d = daysUntil(t.due_date)
-      if (d !== null && d <= MAX_FINANCIAL) {
-        const { level, urgent } = classify(d, 'financial')
-        alerts.push({
-          id: `task-${t.id}`,
-          kind: 'task',
-          level, urgent,
-          title: `مهمة: ${t.title}`,
-          subtitle: subtitleDays(d, { past: 'متأخرة', today: 'مستحقة اليوم', future: 'بعد' }),
-          date: t.due_date,
-          daysLeft: d,
-          link: '/tasks',
-        })
-      }
-    }
-  }
-
-  // عروض الأسعار القريبة من الانتهاء (مُرسلة ولم يُرد عليها)
-  for (const q of quotes) {
-    if (q.status === 'sent' && q.valid_until) {
-      const d = daysUntil(q.valid_until)
-      if (d !== null && d <= MAX_FINANCIAL) {
-        const { level, urgent } = classify(d, 'financial')
-        alerts.push({
-          id: `quote-${q.id}`,
-          kind: 'quote',
-          level, urgent,
-          title: `عرض ${q.quote_number} — ${q.customer_name}`,
-          subtitle: subtitleDays(d, { past: 'انتهت صلاحيته منذ', today: 'ينتهي اليوم', future: 'ينتهي بعد' }),
-          date: q.valid_until,
-          daysLeft: d,
-          amount: Number(q.total) || 0,
-          link: `/quotations/${q.id}`,
-        })
-      }
-    }
-  }
-
-  // ═══ الترتيب حسب درجة اللون والإلحاح ═══
-  // 1. متأخر (overdue) أولاً — مشكلة قائمة تحتاج حل فوري
-  // 2. أحمر نابض (urgent) — اليوم/باقي يوم
-  // 3. أحمر (danger)
-  // 4. برتقالي (warning)
-  // 5. أصفر (info)
-  // داخل كل فئة: الأقرب موعداً أولاً
-  const rank = (a: AppAlert): number => {
-    if (a.level === 'overdue') return 0
-    if (a.urgent) return 1
-    if (a.level === 'danger') return 2
-    if (a.level === 'warning') return 3
-    return 4
-  }
-  alerts.sort((a, b) => {
-    const ra = rank(a), rb = rank(b)
-    if (ra !== rb) return ra - rb
-    return (a.daysLeft ?? 999) - (b.daysLeft ?? 999)
-  })
-
-  return alerts
+  // مثال: /quotations/123 → عروض الأسعار
+  const parent = '/' + pathname.split('/')[1]
+  return PAGE_TITLES[parent] ?? ''
 }
