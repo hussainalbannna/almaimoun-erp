@@ -16,6 +16,11 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [resetMode, setResetMode] = useState(false)
 
+  // وضع تعيين كلمة مرور جديدة — يُفعّل عند وصول المستخدم عبر رابط الاستعادة
+  const [recoveryMode, setRecoveryMode] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+
   // استرجاع آخر بريد مستخدم
   useEffect(() => {
     try {
@@ -24,8 +29,17 @@ export default function LoginPage() {
     } catch { /* ignore */ }
   }, [])
 
-  // إذا كان مسجلاً، حوّله للوجهة الأصلية التي جاء منها (أو اللوحة افتراضياً)
-  if (session) {
+  // الاستماع لحدث استعادة كلمة المرور: عند فتح رابط البريد يُنشئ Supabase جلسة استعادة
+  // ويُطلق الحدث PASSWORD_RECOVERY، فنعرض نموذج تعيين كلمة مرور جديدة بدل تحويل المستخدم.
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // إذا كان مسجلاً (وليس في وضع الاستعادة)، حوّله للوجهة الأصلية (أو اللوحة افتراضياً)
+  if (session && !recoveryMode) {
     const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/'
     return <Navigate to={from} replace />
   }
@@ -93,6 +107,34 @@ export default function LoginPage() {
     }
   }
 
+  // تعيين كلمة المرور الجديدة (بعد فتح رابط الاستعادة)
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPassword.length < 6) {
+      toast.error('كلمة المرور يجب ألا تقل عن 6 أحرف')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error('كلمتا المرور غير متطابقتين')
+      return
+    }
+    setLoading(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      if (error) {
+        toast.error('تعذّر تحديث كلمة المرور: ' + error.message)
+        setLoading(false)
+        return
+      }
+      toast.success('تم تحديث كلمة المرور بنجاح')
+      setRecoveryMode(false)
+      // الجلسة صالحة الآن → إعادة التوجيه التلقائية إلى النظام
+    } catch {
+      toast.error('خطأ في الاتصال — حاول مجدداً')
+      setLoading(false)
+    }
+  }
+
   // شاشة التحميل أثناء التهيئة
   if (authLoading) {
     return (
@@ -101,6 +143,17 @@ export default function LoginPage() {
       </div>
     )
   }
+
+  const onSubmit = recoveryMode ? handleUpdatePassword : resetMode ? handleReset : handleLogin
+  const heading = recoveryMode ? 'تعيين كلمة مرور جديدة' : resetMode ? 'استعادة كلمة المرور' : 'تسجيل الدخول'
+  const subheading = recoveryMode
+    ? 'أدخل كلمة المرور الجديدة لحسابك'
+    : resetMode ? 'سنرسل رابط الاستعادة إلى بريدك' : 'أدخل بياناتك للوصول إلى النظام'
+  const submitLabel = recoveryMode ? 'تحديث كلمة المرور' : resetMode ? 'إرسال رابط الاستعادة' : 'دخول إلى النظام'
+  const loadingLabel = recoveryMode ? 'جاري التحديث...' : resetMode ? 'جاري الإرسال...' : 'جاري التحقق...'
+
+  const passwordInputClass =
+    'w-full px-4 py-3 pl-11 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition-all'
 
   return (
     <div
@@ -123,51 +176,94 @@ export default function LoginPage() {
           {/* النموذج */}
           <div className="px-8 py-8">
             <div className="text-center mb-6">
-              <h2 className="text-xl font-bold text-slate-800">{resetMode ? 'استعادة كلمة المرور' : 'تسجيل الدخول'}</h2>
-              <p className="text-slate-500 text-sm mt-1">
-                {resetMode ? 'سنرسل رابط الاستعادة إلى بريدك' : 'أدخل بياناتك للوصول إلى النظام'}
-              </p>
+              <h2 className="text-xl font-bold text-slate-800">{heading}</h2>
+              <p className="text-slate-500 text-sm mt-1">{subheading}</p>
             </div>
 
-            <form onSubmit={resetMode ? handleReset : handleLogin} className="space-y-4">
-              <div>
-                <label htmlFor="login-email" className="block text-sm font-semibold text-slate-700 mb-1.5">البريد الإلكتروني</label>
-                <input
-                  id="login-email"
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="example@almaimoun.com"
-                  autoComplete="email"
-                  className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition-all"
-                  dir="ltr"
-                />
-              </div>
-
-              {!resetMode && (
-                <div>
-                  <label htmlFor="login-password" className="block text-sm font-semibold text-slate-700 mb-1.5">كلمة المرور</label>
-                  <div className="relative">
+            <form onSubmit={onSubmit} className="space-y-4">
+              {recoveryMode ? (
+                <>
+                  {/* كلمة المرور الجديدة */}
+                  <div>
+                    <label htmlFor="new-password" className="block text-sm font-semibold text-slate-700 mb-1.5">كلمة المرور الجديدة</label>
+                    <div className="relative">
+                      <input
+                        id="new-password"
+                        type={showPassword ? 'text' : 'password'}
+                        value={newPassword}
+                        onChange={e => setNewPassword(e.target.value)}
+                        placeholder="••••••••"
+                        autoComplete="new-password"
+                        className={passwordInputClass}
+                        dir="ltr"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(v => !v)}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                        title={showPassword ? 'إخفاء' : 'إظهار'}
+                      >
+                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+                  {/* تأكيد كلمة المرور */}
+                  <div>
+                    <label htmlFor="confirm-password" className="block text-sm font-semibold text-slate-700 mb-1.5">تأكيد كلمة المرور</label>
                     <input
-                      id="login-password"
+                      id="confirm-password"
                       type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
+                      value={confirmPassword}
+                      onChange={e => setConfirmPassword(e.target.value)}
                       placeholder="••••••••"
-                      autoComplete="current-password"
-                      className="w-full px-4 py-3 pl-11 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition-all"
+                      autoComplete="new-password"
+                      className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition-all"
                       dir="ltr"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(v => !v)}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                      title={showPassword ? 'إخفاء' : 'إظهار'}
-                    >
-                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
                   </div>
-                </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label htmlFor="login-email" className="block text-sm font-semibold text-slate-700 mb-1.5">البريد الإلكتروني</label>
+                    <input
+                      id="login-email"
+                      type="email"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      placeholder="example@almaimoun.com"
+                      autoComplete="email"
+                      className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition-all"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  {!resetMode && (
+                    <div>
+                      <label htmlFor="login-password" className="block text-sm font-semibold text-slate-700 mb-1.5">كلمة المرور</label>
+                      <div className="relative">
+                        <input
+                          id="login-password"
+                          type={showPassword ? 'text' : 'password'}
+                          value={password}
+                          onChange={e => setPassword(e.target.value)}
+                          placeholder="••••••••"
+                          autoComplete="current-password"
+                          className={passwordInputClass}
+                          dir="ltr"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(v => !v)}
+                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          title={showPassword ? 'إخفاء' : 'إظهار'}
+                        >
+                          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               <button
@@ -179,21 +275,23 @@ export default function LoginPage() {
                 {loading ? (
                   <span className="flex items-center justify-center gap-2">
                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    {resetMode ? 'جاري الإرسال...' : 'جاري التحقق...'}
+                    {loadingLabel}
                   </span>
-                ) : (resetMode ? 'إرسال رابط الاستعادة' : 'دخول إلى النظام')}
+                ) : submitLabel}
               </button>
             </form>
 
-            {/* تبديل بين الدخول والاستعادة */}
-            <div className="text-center mt-4">
-              <button
-                onClick={() => setResetMode(v => !v)}
-                className="text-sm text-amber-700 hover:text-amber-800 hover:underline"
-              >
-                {resetMode ? '← العودة لتسجيل الدخول' : 'نسيت كلمة المرور؟'}
-              </button>
-            </div>
+            {/* تبديل بين الدخول والاستعادة (يُخفى في وضع تعيين كلمة المرور) */}
+            {!recoveryMode && (
+              <div className="text-center mt-4">
+                <button
+                  onClick={() => setResetMode(v => !v)}
+                  className="text-sm text-amber-700 hover:text-amber-800 hover:underline"
+                >
+                  {resetMode ? '← العودة لتسجيل الدخول' : 'نسيت كلمة المرور؟'}
+                </button>
+              </div>
+            )}
 
             <p className="text-center text-xs text-slate-400 mt-6">
               للحصول على بيانات الدخول، تواصل مع مدير النظام
