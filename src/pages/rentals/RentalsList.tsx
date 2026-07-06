@@ -135,7 +135,7 @@ export default function RentalsList() {
     // المستحق هذا الشهر (الدوري الذي لم تُسجّل له دفعة بهذا الشهر)
     const thisMonthPrefix = todayStr().slice(0, 7) // YYYY-MM
     const dueThisMonth = recurringActive.filter(r => {
-      const paidThisMonth = paymentsOfLocal(r.id).some(p => (p.payment_date || '').slice(0, 7) === thisMonthPrefix)
+      const paidThisMonth = paymentsOfLocal(r.id).some(p => (p.payment_date || '').slice(0, 7) === todayStr().slice(0, 7))
       return !paidThisMonth
     })
     const dueThisMonthTotal = dueThisMonth.reduce((s, r) => s + monthlyEquivalent(r), 0)
@@ -290,7 +290,7 @@ export default function RentalsList() {
                     const paid = paidTotal(r.id)
                     const isEnded = r.status !== 'active'
                     const isEndingSoon = r.rental_type === 'temporary' && r.end_date && r.end_date >= todayStr() && daysUntil(r.end_date) <= 7
-                    const paidThisMonth = paymentsOf(r.id).some(p => (p.payment_date || '').slice(0, 7) === thisMonthPrefix)
+                    const paidThisMonth = paymentsOf(r.id).some(p => (p.payment_date || '').slice(0, 7) === todayStr().slice(0, 7))
                     return (
                       <div key={r.id} className={`bg-white rounded-xl border p-4 transition-shadow hover:shadow-md ${isEnded ? 'border-slate-200 opacity-70' : isEndingSoon ? 'border-orange-200' : 'border-slate-200'}`}>
                         <div className="flex items-start justify-between gap-2 mb-3">
