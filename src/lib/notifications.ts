@@ -1,6 +1,4 @@
-import { safeSelect } from './supabase'
-// نستخدم المصدر الموحّد لحساب الأيام (النسخة nullable) بدل تكرار المنطق هنا
-import { daysUntilOrNull as daysUntil } from './utils'
+import { supabase } from './supabase'
 
 export type AlertLevel = 'overdue' | 'danger' | 'warning' | 'info'
 export type AlertKind = 'cheque' | 'installment' | 'worker_doc' | 'asset_doc' | 'invoice' | 'task' | 'quote'
@@ -16,6 +14,17 @@ export interface AppAlert {
   daysLeft: number | null
   amount?: number
   link?: string
+}
+
+// عدد الأيام حتى تاريخ (سالب = منتهٍ/متأخر)
+export function daysUntil(dateStr: string | null | undefined): number | null {
+  if (!dateStr) return null
+  const target = new Date(dateStr)
+  if (isNaN(target.getTime())) return null
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  target.setHours(0, 0, 0, 0)
+  return Math.round((target.getTime() - today.getTime()) / 86400000)
 }
 
 // ═══ منطق المستوى الموحّد حسب نوع الإشعار ═══
@@ -46,91 +55,33 @@ function classify(days: number | null, track: Track): { level: AlertLevel; urgen
 const MAX_FINANCIAL = 7
 const MAX_DOCUMENT = 30
 
-// ─── أنواع صفوف الاستعلامات (تحلّ محل الكاست وتلتقط أخطاء أسماء الحقول وقت البناء) ───
-interface WorkerRow {
-  id: string
-  name: string
-  name_en: string | null
-  visa_expiry: string | null
-  cpr_expiry: string | null
-  passport_expiry: string | null
-  status: string | null
-}
-interface AssetRow {
-  id: string
-  name: string
-  insurance_expiry: string | null
-  registration_expiry: string | null
-  payment_method: string | null
-  bank_name: string | null
-  monthly_installment: number | null
-  total_installments: number | null
-  paid_installments: number | null
-  next_installment_date: string | null
-}
-interface InvoiceRow {
-  id: string
-  invoice_number: string
-  customer_name: string
-  total: number | null
-  status: string
-  due_date: string | null
-}
-interface PurchaseInvoiceRow {
-  id: string
-  supplier_name: string
-  amount: number | null
-  payment_method: string | null
-  check_due_date: string | null
-}
-interface SubPaymentRow {
-  id: string
-  amount: number | null
-  payment_method: string | null
-  check_due_date: string | null
-}
-interface TaskRow {
-  id: string
-  title: string
-  due_date: string | null
-  status: string
-}
-interface QuoteRow {
-  id: string
-  quote_number: string
-  customer_name: string
-  valid_until: string | null
-  status: string
-  total: number | null
-}
-
 // جلب كل التنبيهات من قاعدة البيانات
-// كل استعلام يفشل بأمان عبر safeSelect ويعيد [] دون إسقاط بقية التنبيهات
 export async function fetchAllAlerts(): Promise<AppAlert[]> {
   const alerts: AppAlert[] = []
 
-  const [workers, assets, invoices, purchaseInvoices, subPayments, tasks, quotes] = await Promise.all([
-    safeSelect<WorkerRow>('workers', 'id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status'),
-    safeSelect<AssetRow>('assets', 'id,name,insurance_expiry,registration_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date'),
-    safeSelect<InvoiceRow>('invoices', 'id,invoice_number,customer_name,total,status,due_date'),
-    safeSelect<PurchaseInvoiceRow>('purchase_invoices', 'id,supplier_name,amount,payment_method,check_due_date'),
-    safeSelect<SubPaymentRow>('subcontractor_payments', 'id,amount,payment_method,check_due_date'),
-    safeSelect<TaskRow>('tasks', 'id,title,due_date,status'),
-    safeSelect<QuoteRow>('quotations', 'id,quote_number,customer_name,valid_until,status,total'),
+  // دالة معرّفة (لا سهمية) لتفادي أي التباس بين <T> وJSX في أي سياق
+  async function safe<T>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> {
+    try { const { data } = await p; return data ?? [] } catch { return [] }
+  }
+
+  const [workers, assets, invoices, cheques, tasks, quotes] = await Promise.all([
+    safe(supabase.from('workers').select('id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status')),
+    safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
+    safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
+    // الشيكات من مصدرها الرسمي (جدول cheques) — حالتها تُحدَّث عند الصرف في مركز الشيكات
+    safe(supabase.from('cheques').select('id,party_name,amount,due_date,status,cheque_type,direction')),
+    safe(supabase.from('tasks').select('id,title,due_date,status')),
+    safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status,total')),
   ])
 
   const subtitleDays = (d: number, verb: { past: string; today: string; future: string }) =>
     d < 0 ? `${verb.past} ${Math.abs(d)} يوم` : d === 0 ? verb.today : `${verb.future} ${d} يوم`
 
   // وثائق العمال
-  for (const w of workers) {
+  for (const w of workers as Record<string, unknown>[]) {
     if (w.status === 'inactive') continue
-    for (const [label, value, field] of [
-      ['الإقامة/التأشيرة', w.visa_expiry, 'visa_expiry'],
-      ['البطاقة الذكية', w.cpr_expiry, 'cpr_expiry'],
-      ['جواز السفر', w.passport_expiry, 'passport_expiry'],
-    ] as const) {
-      const d = daysUntil(value)
+    for (const [label, field] of [['الإقامة/التأشيرة', 'visa_expiry'], ['البطاقة الذكية', 'cpr_expiry'], ['جواز السفر', 'passport_expiry']] as const) {
+      const d = daysUntil(w[field] as string)
       if (d !== null && d <= MAX_DOCUMENT) {
         const { level, urgent } = classify(d, 'document')
         alerts.push({
@@ -139,7 +90,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
           level, urgent,
           title: `${label} — ${w.name}`,
           subtitle: subtitleDays(d, { past: 'منتهية منذ', today: 'تنتهي اليوم', future: 'تنتهي بعد' }),
-          date: value,
+          date: w[field] as string,
           daysLeft: d,
           link: `/workers/${w.id}/edit`,
         })
@@ -148,12 +99,9 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   }
 
   // وثائق المعدات
-  for (const a of assets) {
-    for (const [label, value, field] of [
-      ['تأمين', a.insurance_expiry, 'insurance_expiry'],
-      ['استمارة', a.registration_expiry, 'registration_expiry'],
-    ] as const) {
-      const d = daysUntil(value)
+  for (const a of assets as Record<string, unknown>[]) {
+    for (const [label, field] of [['تأمين', 'insurance_expiry'], ['استمارة', 'registration_expiry']] as const) {
+      const d = daysUntil(a[field] as string)
       if (d !== null && d <= MAX_DOCUMENT) {
         const { level, urgent } = classify(d, 'document')
         alerts.push({
@@ -162,7 +110,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
           level, urgent,
           title: `${label} ${a.name}`,
           subtitle: subtitleDays(d, { past: 'منتهية منذ', today: 'تنتهي اليوم', future: 'تنتهي بعد' }),
-          date: value,
+          date: a[field] as string,
           daysLeft: d,
           link: '/assets',
         })
@@ -171,17 +119,17 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   }
 
   // أقساط الأصول (البيكاب والمعدات الممولة بنكياً)
-  for (const a of assets) {
+  for (const a of assets as Record<string, unknown>[]) {
     if (a.payment_method === 'installment' && a.next_installment_date) {
       const paid = Number(a.paid_installments) || 0
       const total = Number(a.total_installments) || 0
       const notFullyPaid = total === 0 || paid < total
       if (notFullyPaid) {
-        const d = daysUntil(a.next_installment_date)
+        const d = daysUntil(a.next_installment_date as string)
         if (d !== null && d <= MAX_FINANCIAL) {
           const { level, urgent } = classify(d, 'financial')
           const monthly = Number(a.monthly_installment) || 0
-          const bank = a.bank_name || ''
+          const bank = (a.bank_name as string) || ''
           const remaining = total > 0 ? (total - paid) * monthly : 0
           alerts.push({
             id: `installment-${a.id}`,
@@ -189,7 +137,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
             level, urgent,
             title: `قسط ${a.name}${bank ? ` — ${bank}` : ''}`,
             subtitle: `${subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' })}${remaining > 0 ? ` • المتبقي ${remaining.toLocaleString('en-US')} د.ب` : ''}`,
-            date: a.next_installment_date,
+            date: a.next_installment_date as string,
             daysLeft: d,
             amount: monthly,
             link: '/assets',
@@ -199,52 +147,37 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     }
   }
 
-  // الشيكات الآجلة (موردين)
-  for (const p of purchaseInvoices) {
-    if (p.payment_method === 'deferred_cheque' && p.check_due_date) {
-      const d = daysUntil(p.check_due_date)
-      if (d !== null && d <= MAX_FINANCIAL) {
-        const { level, urgent } = classify(d, 'financial')
-        alerts.push({
-          id: `pcheque-${p.id}`,
-          kind: 'cheque',
-          level, urgent,
-          title: `شيك مستحق — ${p.supplier_name}`,
-          subtitle: subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' }),
-          date: p.check_due_date,
-          daysLeft: d,
-          amount: Number(p.amount) || 0,
-          link: '/purchases',
-        })
-      }
-    }
-  }
-
-  // الشيكات الآجلة (مقاولو الباطن)
-  for (const s of subPayments) {
-    if (s.payment_method === 'cheque' && s.check_due_date) {
-      const d = daysUntil(s.check_due_date)
-      if (d !== null && d <= MAX_FINANCIAL) {
-        const { level, urgent } = classify(d, 'financial')
-        alerts.push({
-          id: `scheque-${s.id}`,
-          kind: 'cheque',
-          level, urgent,
-          title: 'شيك مقاول باطن مستحق',
-          subtitle: subtitleDays(d, { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' }),
-          date: s.check_due_date,
-          daysLeft: d,
-          amount: Number(s.amount) || 0,
-          link: '/subcontractors',
-        })
-      }
-    }
+  // ═══ الشيكات — من جدول cheques (المصدر الرسمي للحالة) ═══
+  // المعلّقة فقط (pending). المصروف (cleared) والمرتد (bounced) لا يظهر.
+  // شيكات الضمان مستبعدة لأنها ليست دفعة مستحقة على موعد.
+  for (const c of cheques as Record<string, unknown>[]) {
+    if (c.status !== 'pending') continue
+    if (c.cheque_type === 'guarantee') continue
+    if (!c.due_date) continue
+    const d = daysUntil(c.due_date as string)
+    if (d === null || d > MAX_FINANCIAL) continue
+    const { level, urgent } = classify(d, 'financial')
+    const incoming = c.direction === 'incoming'
+    const party = (c.party_name as string) || ''
+    alerts.push({
+      id: `cheque-${c.id}`,
+      kind: 'cheque',
+      level, urgent,
+      title: incoming ? `شيك وارد${party ? ` — ${party}` : ''}` : `شيك مستحق${party ? ` — ${party}` : ''}`,
+      subtitle: subtitleDays(d, incoming
+        ? { past: 'تأخر إيداعه', today: 'يُودع اليوم', future: 'يُودع بعد' }
+        : { past: 'تأخر', today: 'مستحق اليوم', future: 'بعد' }),
+      date: c.due_date as string,
+      daysLeft: d,
+      amount: Number(c.amount) || 0,
+      link: '/cheques',
+    })
   }
 
   // الفواتير غير المدفوعة المتأخرة
-  for (const inv of invoices) {
+  for (const inv of invoices as Record<string, unknown>[]) {
     if (inv.status !== 'paid' && inv.due_date) {
-      const d = daysUntil(inv.due_date)
+      const d = daysUntil(inv.due_date as string)
       if (d !== null && d <= MAX_FINANCIAL) {
         const { level, urgent } = classify(d, 'financial')
         alerts.push({
@@ -253,7 +186,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
           level, urgent,
           title: `فاتورة ${inv.invoice_number} — ${inv.customer_name}`,
           subtitle: subtitleDays(d, { past: 'متأخرة', today: 'تستحق اليوم', future: 'تستحق بعد' }),
-          date: inv.due_date,
+          date: inv.due_date as string,
           daysLeft: d,
           amount: Number(inv.total) || 0,
           link: `/invoices/${inv.id}/view`,
@@ -263,9 +196,9 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   }
 
   // المهام المتأخرة أو القريبة
-  for (const t of tasks) {
+  for (const t of tasks as Record<string, unknown>[]) {
     if (t.status !== 'done' && t.due_date) {
-      const d = daysUntil(t.due_date)
+      const d = daysUntil(t.due_date as string)
       if (d !== null && d <= MAX_FINANCIAL) {
         const { level, urgent } = classify(d, 'financial')
         alerts.push({
@@ -274,7 +207,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
           level, urgent,
           title: `مهمة: ${t.title}`,
           subtitle: subtitleDays(d, { past: 'متأخرة', today: 'مستحقة اليوم', future: 'بعد' }),
-          date: t.due_date,
+          date: t.due_date as string,
           daysLeft: d,
           link: '/tasks',
         })
@@ -283,9 +216,9 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
   }
 
   // عروض الأسعار القريبة من الانتهاء (مُرسلة ولم يُرد عليها)
-  for (const q of quotes) {
+  for (const q of quotes as Record<string, unknown>[]) {
     if (q.status === 'sent' && q.valid_until) {
-      const d = daysUntil(q.valid_until)
+      const d = daysUntil(q.valid_until as string)
       if (d !== null && d <= MAX_FINANCIAL) {
         const { level, urgent } = classify(d, 'financial')
         alerts.push({
@@ -294,7 +227,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
           level, urgent,
           title: `عرض ${q.quote_number} — ${q.customer_name}`,
           subtitle: subtitleDays(d, { past: 'انتهت صلاحيته منذ', today: 'ينتهي اليوم', future: 'ينتهي بعد' }),
-          date: q.valid_until,
+          date: q.valid_until as string,
           daysLeft: d,
           amount: Number(q.total) || 0,
           link: `/quotations/${q.id}`,
