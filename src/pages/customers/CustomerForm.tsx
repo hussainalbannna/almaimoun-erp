@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Sparkles, Loader2, Copy, Paperclip, FileText, Trash2, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Customer } from '../../types'
-import { readDocumentText, extractJSON, hasApiKey, compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { readDocumentText, extractJSON, hasApiKey, compressImage, openStoredFile } from '../../lib/ai'
+import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Textarea from '../../components/ui/Textarea'
@@ -20,46 +20,41 @@ interface CustomerDoc {
   id: string
   name: string
   doc_type: string
-  file_url: string
+  file_url: string  // مسار Storage للمستندات الجديدة، أو Data URL قديم (base64) للسجلّات السابقة
   file_type: string
   created_at: string
 }
 
-// جلب بيانات العميل ومستنداته (مصادر React Query)
-async function fetchCustomer(id: string): Promise<Customer | null> {
-  const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle()
-  return (data as Customer) ?? null
-}
-async function fetchCustomerDocs(id: string): Promise<CustomerDoc[]> {
-  const { data } = await supabase.from('documents')
-    .select('id,name,doc_type,file_url,file_type,created_at')
-    .eq('related_id', id).eq('related_type', 'customer')
-    .order('created_at', { ascending: false })
-  return (data ?? []) as CustomerDoc[]
-}
+const DOC_FOLDER = 'documents'
 
 export default function CustomerForm() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const isEdit = !!id
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [docs, setDocs] = useState<CustomerDoc[]>([])
   const [uploadingDoc, setUploadingDoc] = useState(false)
   const [previewImg, setPreviewImg] = useState<string | null>(null)
   const scanRef = useRef<HTMLInputElement>(null)
   const docRef = useRef<HTMLInputElement>(null)
 
-  // بيانات العميل ومستنداته عبر React Query (عند التعديل فقط)
-  const { data: customerData } = useQuery({ queryKey: ['customer', id], queryFn: () => fetchCustomer(id!), enabled: isEdit })
-  const { data: docs = [] } = useQuery({ queryKey: ['customer-docs', id], queryFn: () => fetchCustomerDocs(id!), enabled: isEdit })
-  const reloadDocs = () => queryClient.invalidateQueries({ queryKey: ['customer-docs', id] })
+  // جلب مستندات العميل (بلا محتوى ثقيل — file_url يحمل مساراً قصيراً)
+  const loadDocs = async () => {
+    const { data } = await supabase.from('documents').select('id,name,doc_type,file_url,file_type,created_at')
+      .eq('related_id', id).eq('related_type', 'customer').order('created_at', { ascending: false })
+    setDocs((data ?? []) as CustomerDoc[])
+  }
 
-  // تعبئة حقول النموذج من بيانات العميل المجلوبة (عند وصولها)
   useEffect(() => {
-    if (customerData) setForm(customerData)
-  }, [customerData])
+    if (!isEdit) return
+    supabase.from('customers').select('*').eq('id', id).single().then(({ data }) => {
+      if (data) setForm(data as Customer)
+    })
+    loadDocs()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, isEdit])
 
   const set = (field: keyof typeof EMPTY) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }))
@@ -107,23 +102,25 @@ export default function CustomerForm() {
     setForm(prev => ({ ...prev, whatsapp: prev.phone }))
   }
 
-  // رفع مستند للعميل (يُحفظ بعد حفظ العميل)
+  // رفع مستند للعميل → يُرفع إلى Storage ويُخزّن مساره في file_url (الصور تُضغط أولاً)
   const handleDocUpload = async (file: File) => {
     if (!isEdit) { toast.error('احفظ العميل أولاً ثم أرفق المستندات'); return }
     setUploadingDoc(true)
     try {
-      const fileData = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+      const filePath = file.type.startsWith('image/')
+        ? await uploadDataUrl(await compressImage(file), DOC_FOLDER)
+        : await uploadAttachment(file, DOC_FOLDER)
       const { error } = await supabase.from('documents').insert({
         name: file.name,
         doc_type: 'customer_doc',
-        file_url: fileData,
+        file_url: filePath,
         file_type: file.type,
         related_id: id,
         related_type: 'customer',
       })
       if (error) throw error
       toast.success('تم إرفاق المستند')
-      reloadDocs()
+      await loadDocs()
     } catch (e) {
       toast.error('تعذّر رفع المستند: ' + ((e as Error)?.message ?? ''))
     } finally {
@@ -131,15 +128,21 @@ export default function CustomerForm() {
     }
   }
 
-  const deleteDoc = async (docId: string) => {
-    await supabase.from('documents').delete().eq('id', docId)
-    reloadDocs()
+  const deleteDoc = async (doc: CustomerDoc) => {
+    await supabase.from('documents').delete().eq('id', doc.id)
+    // حذف الملف من Storage أيضاً (يتجاهل السجلّات القديمة المخزّنة كـ base64)
+    deleteAttachment(doc.file_url).catch(() => {})
+    setDocs(prev => prev.filter(d => d.id !== doc.id))
     toast.success('تم حذف المستند')
   }
 
-  const viewDoc = (doc: CustomerDoc) => {
-    if (doc.file_type?.startsWith('image/')) setPreviewImg(doc.file_url)
-    else openStoredFile(doc.file_url, doc.file_type)
+  // فتح/معاينة المستند: يحلّ مساره إلى رابط موقّع (أو يعرض base64 القديم مباشرة)
+  const viewDoc = async (doc: CustomerDoc) => {
+    const url = await resolveAttachmentUrl(doc.file_url)
+    if (!url) { toast.error('تعذّر فتح المستند'); return }
+    if (doc.file_type?.startsWith('image/')) setPreviewImg(url)
+    else if (url.startsWith('data:')) openStoredFile(url, doc.file_type) // ملف قديم base64
+    else window.open(url, '_blank', 'noopener')                          // ملف في Storage
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -151,10 +154,7 @@ export default function CustomerForm() {
       ? await supabase.from('customers').update(payload).eq('id', id)
       : await supabase.from('customers').insert(payload)
     setLoading(false)
-    if (error) { toast.error('حدث خطأ أثناء الحفظ'); return }
-    // تحديث كاش قائمة العملاء (وبيانات هذا العميل) لتظهر محدَّثة عند العودة
-    queryClient.invalidateQueries({ queryKey: ['customers-list'] })
-    if (isEdit) queryClient.invalidateQueries({ queryKey: ['customer', id] })
+    if (error) { toast.error('حدث خطأ أثناء الحفظ: ' + error.message); return }
     toast.success(isEdit ? 'تم تحديث العميل' : 'تم إضافة العميل')
     navigate('/customers')
   }
@@ -230,7 +230,7 @@ export default function CustomerForm() {
               <div key={doc.id} className="flex items-center gap-3 p-3 rounded-lg border border-slate-100 hover:bg-slate-50">
                 <FileText size={18} className="text-amber-600 shrink-0" />
                 <button onClick={() => viewDoc(doc)} className="flex-1 text-right text-sm text-slate-700 hover:text-amber-700 truncate">{doc.name}</button>
-                <button onClick={() => deleteDoc(doc.id)} className="p-1 text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>
+                <button onClick={() => deleteDoc(doc)} className="p-1 text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>
               </div>
             ))}
           </div>
