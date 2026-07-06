@@ -1,4 +1,6 @@
 import { safeSelect } from './supabase'
+// نستخدم المصدر الموحّد لحساب الأيام (النسخة nullable) بدل تكرار المنطق هنا
+import { daysUntilOrNull as daysUntil } from './utils'
 
 export type AlertLevel = 'overdue' | 'danger' | 'warning' | 'info'
 export type AlertKind = 'cheque' | 'installment' | 'worker_doc' | 'asset_doc' | 'invoice' | 'task' | 'quote'
@@ -14,17 +16,6 @@ export interface AppAlert {
   daysLeft: number | null
   amount?: number
   link?: string
-}
-
-// عدد الأيام حتى تاريخ (سالب = منتهٍ/متأخر)
-export function daysUntil(dateStr: string | null | undefined): number | null {
-  if (!dateStr) return null
-  const target = new Date(dateStr)
-  if (isNaN(target.getTime())) return null
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  target.setHours(0, 0, 0, 0)
-  return Math.round((target.getTime() - today.getTime()) / 86400000)
 }
 
 // ═══ منطق المستوى الموحّد حسب نوع الإشعار ═══
