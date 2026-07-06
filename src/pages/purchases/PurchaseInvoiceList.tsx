@@ -72,12 +72,12 @@ async function fetchPurchaseInvoices(): Promise<PurchaseListData> {
     supabase.from('purchase_invoices').select('id').like('check_image_data', 'data:%'),
   ])
 
-  const invoices = ((listRes.data ?? []) as unknown as InvoiceRow[])
+  const invoices = ((listRes.data ?? []) as InvoiceRow[])
     .sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a)))
 
   const attachmentCounts: Record<string, number> = {}
   for (const group of [copyRes.data, proofRes.data, checkRes.data]) {
-    for (const row of (group ?? []) as unknown as { id: string }[]) {
+    for (const row of (group ?? []) as { id: string }[]) {
       attachmentCounts[row.id] = (attachmentCounts[row.id] ?? 0) + 1
     }
   }

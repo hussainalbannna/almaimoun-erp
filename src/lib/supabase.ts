@@ -79,12 +79,11 @@ function delay(ms: number): Promise<void> {
 export async function safeSelect<T = Record<string, unknown>>(
   table: string,
   columns = '*',
-  // نستخدم any داخلياً لتفادي تعقيد أنواع supabase-js العميق؛ التوقيع العام يبقى مُنمَّطاً (T[])
-  modify?: (q: any) => any
+  modify?: (q: ReturnType<ReturnType<typeof supabase.from>['select']>) => unknown
 ): Promise<T[]> {
   try {
-    let query: any = supabase.from(table).select(columns)
-    if (modify) query = modify(query)
+    let query = supabase.from(table).select(columns)
+    if (modify) query = modify(query) as typeof query
     const { data, error } = await query
     if (error) { console.error(`[${table}] خطأ في القراءة:`, error.message); return [] }
     return (data ?? []) as T[]
