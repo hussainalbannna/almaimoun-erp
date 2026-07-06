@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef } from 'react'
+import { useId, useRef } from 'react'
 import Button from './Button'
+import { useModalBehavior } from './Modal'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -29,25 +30,13 @@ export default function ConfirmDialog({
   const confirmRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
 
-  // نقل التركيز داخل الحوار عند فتحه وإعادته لمصدره عند الإغلاق
-  // في الحوارات الخطرة نُركّز "إلغاء" حتى لا يؤكّد Enter عملية حذف عن طريق الخطأ
-  useEffect(() => {
-    if (!open) return
-    const previouslyFocused = document.activeElement as HTMLElement | null
-    const focusTarget = danger ? cancelRef.current : confirmRef.current
-    focusTarget?.focus()
-    return () => previouslyFocused?.focus?.()
-  }, [open, danger])
-
-  // إغلاق بمفتاح Escape (معطّل أثناء تنفيذ العملية)
-  useEffect(() => {
-    if (!open) return
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !loading) onCancel()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, loading, onCancel])
+  // سلوك النافذة المشترك: في الحوارات الخطرة نُركّز "إلغاء" حتى لا يؤكّد Enter حذفاً بالخطأ،
+  // والإغلاق بـ Escape معطّل أثناء تنفيذ العملية (loading).
+  useModalBehavior(open, {
+    onClose: onCancel,
+    closeOnEscape: !loading,
+    focusRef: danger ? cancelRef : confirmRef,
+  })
 
   if (!open) return null
 
