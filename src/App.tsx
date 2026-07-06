@@ -55,9 +55,6 @@ import NotificationsCenter from './pages/notifications/NotificationsCenter'
 import RentalsList from './pages/rentals/RentalsList'
 import RentalForm from './pages/rentals/RentalForm'
 
-// ⚠️ مؤقّت — أداة نقل المرفقات (احذف هذا السطر بعد اكتمال النقل)
-import MigrateAttachments from './pages/admin/MigrateAttachments'
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, staleTime: 30_000, refetchOnWindowFocus: false },
@@ -160,9 +157,6 @@ export default function App() {
               <Route path="customers/:id/edit" element={<CustomerForm />} />
               <Route path="customers/:customerId/statement" element={<ClientStatement />} />
               <Route path="contacts" element={<ContactsDirectory />} />
-
-              {/* ⚠️ مؤقّت — صفحة نقل المرفقات (احذفها بعد اكتمال النقل) */}
-              <Route path="migrate" element={<MigrateAttachments />} />
 
               {/* أخرى */}
               <Route path="documents" element={<DocumentsPage />} />
