@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, Plus, Trash2, X, Sparkles, Loader2, Upload, FileText,
   Building2, User, Calendar, Hash, Wallet, CreditCard, Paperclip, Truck, Receipt
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery, PurchasePaymentMethod } from '../../types'
-import { readDocumentText, extractJSON, compressImage, hasApiKey, openStoredFile } from '../../lib/ai'
-import { uploadAttachment, uploadDataUrl, getAttachmentUrl } from '../../lib/storage'
+import { readDocumentText, extractJSON, compressImage, fileToDataUrl, hasApiKey, openStoredFile } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
@@ -22,55 +22,28 @@ const PAYMENT_METHODS: { value: PurchasePaymentMethod; label: string; icon: Reac
 ]
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
-const MAX_FILE_BYTES = 10 * 1024 * 1024
-const STORAGE_FOLDER = 'purchase-invoices'
-const DELIVERY_FOLDER = 'purchase-deliveries'
+const isImageData = (data: string) => !!data && data.startsWith('data:image')
+const isPdfData = (data: string) => !!data && data.startsWith('data:application/pdf')
 
-// ── نموذج مرفق واحد في الواجهة ──
-// file: ملف جديد بانتظار الرفع | path: مسار Storage محفوظ | legacy: base64 قديم | preview: رابط العرض
-type AttachKind = 'image' | 'file'
-interface Attachment {
-  file: File | null
-  path: string
-  legacy: string
-  preview: string
-  kind: AttachKind
-}
-const emptyAtt = (): Attachment => ({ file: null, path: '', legacy: '', preview: '', kind: 'file' })
-const kindFromPath = (p: string): AttachKind => (/\.(jpe?g|png|webp|gif)$/i.test(p) ? 'image' : 'file')
-const kindFromData = (d: string): AttachKind => (d.startsWith('data:image') ? 'image' : 'file')
-const revokeBlob = (url: string) => { if (url.startsWith('blob:')) URL.revokeObjectURL(url) }
-
-type AttachKey = 'invoice_copy' | 'payment_proof' | 'check_image'
-
-interface DeliveryRow {
-  id?: string
-  delivery_note_number: string
-  notes: string
-  att: Attachment
-}
-
-// ── معاينة مرفق: صورة تتكبّر، ملف يُفتح، مع زر حذف ──
-function AttachmentPreview({ preview, kind, onRemove, onPreviewImage }: {
-  preview: string; kind: AttachKind; onRemove: () => void; onPreviewImage: (url: string) => void
+// ── معاينة مرفق: صورة تتكبّر، PDF يفتح، مع زر حذف ──
+function AttachmentPreview({ data, label, onRemove, onPreviewImage }: {
+  data: string; label: string; onRemove: () => void; onPreviewImage: (d: string) => void
 }) {
-  if (!preview) return null
-  const openFile = () => {
-    if (preview.startsWith('data:')) openStoredFile(preview, preview.startsWith('data:application/pdf') ? 'application/pdf' : '')
-    else window.open(preview, '_blank', 'noopener')
-  }
+  if (!data) return null
+  const img = isImageData(data)
+  const pdf = isPdfData(data)
   return (
     <div className="mt-2 relative inline-block">
-      {kind === 'image' ? (
-        <button type="button" onClick={() => onPreviewImage(preview)}
+      {img ? (
+        <button type="button" onClick={() => onPreviewImage(data)}
           className="block w-28 h-28 rounded-xl border border-slate-200 overflow-hidden group relative">
-          <img src={preview} alt="attachment" className="w-full h-full object-cover" />
+          <img src={data} alt={label} className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 flex items-center justify-center transition-colors">
             <span className="text-white text-xs font-medium opacity-0 group-hover:opacity-100">عرض بالحجم الكامل</span>
           </div>
         </button>
       ) : (
-        <button type="button" onClick={openFile}
+        <button type="button" onClick={() => openStoredFile(data, pdf ? 'application/pdf' : '')}
           className="w-28 h-28 rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1.5 hover:bg-slate-100 transition-colors">
           <FileText size={30} className="text-red-500" />
           <span className="text-[11px] text-slate-600 font-medium">عرض الملف</span>
@@ -104,6 +77,7 @@ function UploadField({ label, accept, onFile, children }: {
 export default function PurchaseInvoiceForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [saving, setSaving] = useState(false)
@@ -126,24 +100,13 @@ export default function PurchaseInvoiceForm() {
     tax_rate: '10',
     payment_method: 'cash' as PurchasePaymentMethod,
     check_due_date: '',
+    check_image_data: '',
+    invoice_copy_data: '',
+    payment_proof_data: '',
     notes: '',
   })
 
-  // المرفقات الرئيسية الثلاثة (منفصلة عن form لأنها تحمل ملفات ومعاينات)
-  const [atts, setAtts] = useState<Record<AttachKey, Attachment>>({
-    invoice_copy: emptyAtt(),
-    payment_proof: emptyAtt(),
-    check_image: emptyAtt(),
-  })
-
-  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([])
-
-  // ── تحميل مرفق محفوظ: مسار Storage (رابط موقّع) أو base64 قديم ──
-  const loadAttachment = async (path: string, legacy: string): Promise<Attachment> => {
-    if (path) return { file: null, path, legacy: '', preview: (await getAttachmentUrl(path)) ?? '', kind: kindFromPath(path) }
-    if (legacy) return { file: null, path: '', legacy, preview: legacy, kind: kindFromData(legacy) }
-    return emptyAtt()
-  }
+  const [deliveries, setDeliveries] = useState<PurchaseInvoiceDelivery[]>([])
 
   useEffect(() => {
     const loadOptions = async () => {
@@ -162,10 +125,7 @@ export default function PurchaseInvoiceForm() {
       const loadInvoice = async () => {
         const { data } = await supabase.from('purchase_invoices').select('*').eq('id', id).single()
         if (data) {
-          const inv = data as PurchaseInvoice & {
-            entry_date?: string | null; created_at?: string; tax_rate?: number; subtotal?: number
-            invoice_copy_path?: string; payment_proof_path?: string; check_image_path?: string
-          }
+          const inv = data as PurchaseInvoice & { entry_date?: string | null; created_at?: string; tax_rate?: number; subtotal?: number }
           // amount مخزّن شامل الضريبة. نعرض المبلغ قبل الضريبة في الإدخال
           const taxRate = inv.tax_rate != null ? Number(inv.tax_rate) : 10
           const total = Number(inv.amount ?? 0)
@@ -183,27 +143,14 @@ export default function PurchaseInvoiceForm() {
             tax_rate: String(taxRate),
             payment_method: inv.payment_method,
             check_due_date: inv.check_due_date ?? '',
+            check_image_data: inv.check_image_data ?? '',
+            invoice_copy_data: inv.invoice_copy_data ?? '',
+            payment_proof_data: inv.payment_proof_data ?? '',
             notes: inv.notes ?? '',
-          })
-          // تحميل المرفقات (مسار Storage جديد أو base64 قديم)
-          setAtts({
-            invoice_copy: await loadAttachment(inv.invoice_copy_path ?? '', inv.invoice_copy_data ?? ''),
-            payment_proof: await loadAttachment(inv.payment_proof_path ?? '', inv.payment_proof_data ?? ''),
-            check_image: await loadAttachment(inv.check_image_path ?? '', inv.check_image_data ?? ''),
           })
         }
         const { data: delData } = await supabase.from('purchase_invoice_deliveries').select('*').eq('purchase_invoice_id', id).order('created_at')
-        if (delData) {
-          const rows = await Promise.all(
-            (delData as Array<PurchaseInvoiceDelivery & { id?: string; delivery_image_path?: string }>).map(async d => ({
-              id: d.id,
-              delivery_note_number: d.delivery_note_number ?? '',
-              notes: d.notes ?? '',
-              att: await loadAttachment(d.delivery_image_path ?? '', d.delivery_image_data ?? ''),
-            }))
-          )
-          setDeliveries(rows)
-        }
+        if (delData) setDeliveries(delData as PurchaseInvoiceDelivery[])
       }
       loadInvoice()
     }
@@ -223,12 +170,6 @@ export default function PurchaseInvoiceForm() {
     const l = lpos.find(x => x.id === lpoId)
     setForm(f => ({ ...f, lpo_id: lpoId, lpo_number: l?.lpo_number ?? '' }))
   }
-
-  // ── بناء مرفق من ملف مختار (معاينة محلية فورية، يُرفع لاحقاً عند الحفظ) ──
-  const attFromFile = (file: File): Attachment => ({
-    file, path: '', legacy: '', preview: URL.createObjectURL(file),
-    kind: file.type.startsWith('image/') ? 'image' : 'file',
-  })
 
   // ── قراءة الفاتورة بالذكاء الاصطناعي ──
   const handleScanInvoice = async (file: File) => {
@@ -259,7 +200,9 @@ export default function PurchaseInvoiceForm() {
         if (match) { matchedSupplierId = match.id; matchedSupplierName = match.name }
       }
 
+      const dataUrl = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
       const validDate = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : ''
+
       // المبلغ المستخرج من الفاتورة شامل الضريبة → نحوّله لقبل الضريبة حسب النسبة الحالية
       const extractedTotal = parsed.amount ? Number(parsed.amount) : 0
       const curRate = Number(form.tax_rate) || 0
@@ -272,11 +215,8 @@ export default function PurchaseInvoiceForm() {
         vendor_invoice_number: parsed.vendor_invoice_number || f.vendor_invoice_number,
         amount: extractedSubtotal > 0 ? String(Number(extractedSubtotal.toFixed(3))) : f.amount,
         entry_date: validDate || f.entry_date,
+        invoice_copy_data: dataUrl,
       }))
-
-      // الفاتورة الممسوحة تُرفق تلقائياً كنسخة الفاتورة (تُرفع إلى Storage عند الحفظ)
-      revokeBlob(atts.invoice_copy.preview)
-      setAtts(a => ({ ...a, invoice_copy: attFromFile(file) }))
 
       if (parsed.supplier_name && !matchedSupplierId) {
         toast.success(`تم استخراج البيانات. المورد "${parsed.supplier_name}" غير مسجّل — اختره يدوياً`, { id: 'inv-scan', duration: 5000 })
@@ -290,46 +230,44 @@ export default function PurchaseInvoiceForm() {
     }
   }
 
-  // اختيار/حذف مرفق رئيسي
-  const selectAttachment = (key: AttachKey, file: File) => {
-    if (file.size > MAX_FILE_BYTES) { toast.error('حجم الملف يجب أن يكون أقل من 10 ميجابايت'); return }
-    revokeBlob(atts[key].preview)
-    setAtts(a => ({ ...a, [key]: attFromFile(file) }))
-  }
-  const removeAttachment = (key: AttachKey) => {
-    revokeBlob(atts[key].preview)
-    setAtts(a => ({ ...a, [key]: emptyAtt() }))
-  }
-
-  // إدارة صفوف التوصيل
-  const addDelivery = () => setDeliveries(prev => [...prev, { delivery_note_number: '', notes: '', att: emptyAtt() }])
-  const removeDelivery = (idx: number) => {
-    revokeBlob(deliveries[idx]?.att.preview ?? '')
-    setDeliveries(prev => prev.filter((_, i) => i !== idx))
-  }
-  const updateDeliveryField = (idx: number, field: 'delivery_note_number' | 'notes', value: string) =>
-    setDeliveries(prev => prev.map((d, i) => (i === idx ? { ...d, [field]: value } : d)))
-  const selectDeliveryImage = (idx: number, file: File) => {
-    if (file.size > MAX_FILE_BYTES) { toast.error('حجم الملف يجب أن يكون أقل من 10 ميجابايت'); return }
-    revokeBlob(deliveries[idx]?.att.preview ?? '')
-    setDeliveries(prev => prev.map((d, i) => (i === idx ? { ...d, att: attFromFile(file) } : d)))
-  }
-  const removeDeliveryImage = (idx: number) => {
-    revokeBlob(deliveries[idx]?.att.preview ?? '')
-    setDeliveries(prev => prev.map((d, i) => (i === idx ? { ...d, att: emptyAtt() } : d)))
+  // رفع مرفق رئيسي (يضغط الصور، يحفظ PDF كما هو)
+  const handleFileUpload = async (field: 'invoice_copy_data' | 'payment_proof_data' | 'check_image_data', file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('حجم الملف يجب أن يكون أقل من 10 ميجابايت')
+      return
+    }
+    try {
+      const data = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+      setForm(f => ({ ...f, [field]: data }))
+    } catch (e) {
+      toast.error('تعذّر رفع الملف: ' + ((e as Error)?.message ?? ''))
+    }
   }
 
-  // رفع ملف واحد إلى Storage: يضغط الصور، ويرفع الـ PDF كما هو — يُرجع المسار
-  const uploadOne = async (file: File, folder: string): Promise<string> => {
-    if (file.type.startsWith('image/')) return uploadDataUrl(await compressImage(file), folder)
-    return uploadAttachment(file, folder)
+  const handleDeliveryImageUpload = async (idx: number, file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('حجم الملف يجب أن يكون أقل من 10 ميجابايت')
+      return
+    }
+    try {
+      const data = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+      setDeliveries(prev => prev.map((d, i) => i === idx ? { ...d, delivery_image_data: data } : d))
+    } catch (e) {
+      toast.error('تعذّر رفع الملف: ' + ((e as Error)?.message ?? ''))
+    }
   }
+
+  const addDelivery = () => setDeliveries(prev => [...prev, { delivery_note_number: '', delivery_image_data: '', notes: '' }])
+  const removeDelivery = (idx: number) => setDeliveries(prev => prev.filter((_, i) => i !== idx))
 
   // ── حساب الضريبة الحي (المُدخل = المبلغ قبل الضريبة) ──
-  const subtotalNum = Number(form.amount) || 0
-  const taxRateNum = Number(form.tax_rate) || 0
-  const taxAmount = subtotalNum * (taxRateNum / 100)
-  const totalWithTax = subtotalNum + taxAmount
+  const { subtotalNum, taxRateNum, taxAmount, totalWithTax } = useMemo(() => {
+    const subtotalNum = Number(form.amount) || 0
+    const taxRateNum = Number(form.tax_rate) || 0
+    const taxAmount = subtotalNum * (taxRateNum / 100)
+    const totalWithTax = subtotalNum + taxAmount
+    return { subtotalNum, taxRateNum, taxAmount, totalWithTax }
+  }, [form.amount, form.tax_rate])
 
   const handleSave = async () => {
     if (!form.supplier_id) { toast.error('يرجى اختيار المورد'); return }
@@ -338,82 +276,57 @@ export default function PurchaseInvoiceForm() {
     if (form.payment_method === 'deferred_cheque' && !form.check_due_date) { toast.error('يرجى إدخال تاريخ استحقاق الشيك'); return }
 
     setSaving(true)
-    try {
-      // يرفع الملف الجديد (إن وُجد) ويُرجع المسار؛ وإلا يُبقي المحفوظ كما هو (مسار أو base64 قديم)
-      const resolveAtt = async (att: Attachment, folder: string): Promise<{ path: string; legacy: string }> =>
-        att.file ? { path: await uploadOne(att.file, folder), legacy: '' } : { path: att.path, legacy: att.legacy }
-
-      const invoiceCopy = await resolveAtt(atts.invoice_copy, STORAGE_FOLDER)
-      const paymentProof = await resolveAtt(atts.payment_proof, STORAGE_FOLDER)
-      const checkImage = form.payment_method === 'deferred_cheque'
-        ? await resolveAtt(atts.check_image, STORAGE_FOLDER)
-        : { path: '', legacy: '' }
-
-      const payload = {
-        supplier_id: form.supplier_id || null,
-        supplier_name: form.supplier_name,
-        project_id: form.project_id || null,
-        project_name: form.project_name,
-        lpo_id: form.lpo_id || null,
-        lpo_number: form.lpo_number,
-        vendor_invoice_number: form.vendor_invoice_number,
-        entry_date: form.entry_date,
-        subtotal: Number(subtotalNum.toFixed(3)),       // المبلغ قبل الضريبة
-        tax_rate: taxRateNum,                            // نسبة الضريبة
-        amount: Number(totalWithTax.toFixed(3)),         // المجموع الشامل (يبقى amount)
-        payment_method: form.payment_method,
-        check_due_date: form.payment_method === 'deferred_cheque' && form.check_due_date ? form.check_due_date : null,
-        // المرفقات: مسار Storage الجديد + الإبقاء على base64 القديم للسجلّات غير المُحدّثة
-        invoice_copy_path: invoiceCopy.path,
-        invoice_copy_data: invoiceCopy.legacy,
-        payment_proof_path: paymentProof.path,
-        payment_proof_data: paymentProof.legacy,
-        check_image_path: checkImage.path,
-        check_image_data: checkImage.legacy,
-        notes: form.notes,
-        updated_at: new Date().toISOString(),
-      }
-
-      let invoiceId = id
-      if (isEdit) {
-        const { error } = await supabase.from('purchase_invoices').update(payload).eq('id', id)
-        if (error) throw error
-      } else {
-        const { data, error } = await supabase.from('purchase_invoices').insert(payload).select('id').single()
-        if (error || !data) throw error ?? new Error('تعذّر إنشاء الفاتورة')
-        invoiceId = data.id
-      }
-
-      if (isEdit) {
-        await supabase.from('purchase_invoice_deliveries').delete().eq('purchase_invoice_id', id)
-      }
-      const validDeliveries = deliveries.filter(d =>
-        d.delivery_note_number?.trim() || d.att.file || d.att.path || d.att.legacy || d.notes?.trim()
-      )
-      if (validDeliveries.length > 0) {
-        const deliveryPayload = await Promise.all(validDeliveries.map(async d => {
-          const up = d.att.file
-            ? { path: await uploadOne(d.att.file, DELIVERY_FOLDER), legacy: '' }
-            : { path: d.att.path, legacy: d.att.legacy }
-          return {
-            purchase_invoice_id: invoiceId,
-            delivery_note_number: d.delivery_note_number,
-            delivery_image_path: up.path,
-            delivery_image_data: up.legacy,
-            notes: d.notes,
-          }
-        }))
-        const { error: delErr } = await supabase.from('purchase_invoice_deliveries').insert(deliveryPayload)
-        if (delErr) throw delErr
-      }
-
-      toast.success(isEdit ? 'تم تحديث الفاتورة بنجاح' : 'تم تسجيل فاتورة الشراء بنجاح')
-      navigate('/purchases')
-    } catch (e) {
-      toast.error('فشل في الحفظ: ' + ((e as Error)?.message ?? 'خطأ غير معروف'))
-    } finally {
-      setSaving(false)
+    const payload = {
+      supplier_id: form.supplier_id || null,
+      supplier_name: form.supplier_name,
+      project_id: form.project_id || null,
+      project_name: form.project_name,
+      lpo_id: form.lpo_id || null,
+      lpo_number: form.lpo_number,
+      vendor_invoice_number: form.vendor_invoice_number,
+      entry_date: form.entry_date,
+      subtotal: Number(subtotalNum.toFixed(3)),       // المبلغ قبل الضريبة
+      tax_rate: taxRateNum,                            // نسبة الضريبة
+      amount: Number(totalWithTax.toFixed(3)),         // المجموع الشامل (يبقى amount)
+      payment_method: form.payment_method,
+      check_due_date: form.payment_method === 'deferred_cheque' && form.check_due_date ? form.check_due_date : null,
+      check_image_data: form.payment_method === 'deferred_cheque' ? form.check_image_data : '',
+      invoice_copy_data: form.invoice_copy_data,
+      payment_proof_data: form.payment_proof_data,
+      notes: form.notes,
+      updated_at: new Date().toISOString(),
     }
+
+    let invoiceId = id
+    if (isEdit) {
+      const { error } = await supabase.from('purchase_invoices').update(payload).eq('id', id)
+      if (error) { toast.error('فشل في الحفظ: ' + error.message); setSaving(false); return }
+    } else {
+      const { data, error } = await supabase.from('purchase_invoices').insert(payload).select('id').single()
+      if (error || !data) { toast.error('فشل في الحفظ: ' + (error?.message ?? '')); setSaving(false); return }
+      invoiceId = data.id
+    }
+
+    if (isEdit) {
+      await supabase.from('purchase_invoice_deliveries').delete().eq('purchase_invoice_id', id)
+    }
+    const validDeliveries = deliveries.filter(d => d.delivery_note_number?.trim() || d.delivery_image_data || d.notes?.trim())
+    if (validDeliveries.length > 0) {
+      const deliveryPayload = validDeliveries.map(d => ({
+        purchase_invoice_id: invoiceId,
+        delivery_note_number: d.delivery_note_number,
+        delivery_image_data: d.delivery_image_data,
+        notes: d.notes,
+      }))
+      await supabase.from('purchase_invoice_deliveries').insert(deliveryPayload)
+    }
+
+    toast.success(isEdit ? 'تم تحديث الفاتورة بنجاح' : 'تم تسجيل فاتورة الشراء بنجاح')
+    setSaving(false)
+    // تحديث القائمة والتنبيهات (الشيكات الآجلة تظهر في التنبيهات والتقويم)
+    queryClient.invalidateQueries({ queryKey: ['purchase-invoices-list'] })
+    queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
+    navigate('/purchases')
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-300"
@@ -578,10 +491,10 @@ export default function PurchaseInvoiceForm() {
                     className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30" />
                   <p className="text-xs text-orange-600/70 mt-1">لا يُحتسب مصروفاً فعلياً حتى يحين تاريخ الاستحقاق</p>
                 </div>
-                <UploadField label="صورة الشيك" accept="image/*,.pdf" onFile={f => selectAttachment('check_image', f)}>
-                  {atts.check_image.preview && (
-                    <AttachmentPreview preview={atts.check_image.preview} kind={atts.check_image.kind}
-                      onRemove={() => removeAttachment('check_image')} onPreviewImage={setPreviewImage} />
+                <UploadField label="صورة الشيك" accept="image/*,.pdf" onFile={f => handleFileUpload('check_image_data', f)}>
+                  {form.check_image_data && (
+                    <AttachmentPreview data={form.check_image_data} label="Check"
+                      onRemove={() => setForm(f => ({ ...f, check_image_data: '' }))} onPreviewImage={setPreviewImage} />
                   )}
                 </UploadField>
               </div>
@@ -593,16 +506,16 @@ export default function PurchaseInvoiceForm() {
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h2 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Paperclip size={17} className="text-amber-600" /> المرفقات</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <UploadField label="نسخة الفاتورة" accept="image/*,.pdf" onFile={f => selectAttachment('invoice_copy', f)}>
-              {atts.invoice_copy.preview && (
-                <AttachmentPreview preview={atts.invoice_copy.preview} kind={atts.invoice_copy.kind}
-                  onRemove={() => removeAttachment('invoice_copy')} onPreviewImage={setPreviewImage} />
+            <UploadField label="نسخة الفاتورة" accept="image/*,.pdf" onFile={f => handleFileUpload('invoice_copy_data', f)}>
+              {form.invoice_copy_data && (
+                <AttachmentPreview data={form.invoice_copy_data} label="Invoice"
+                  onRemove={() => setForm(f => ({ ...f, invoice_copy_data: '' }))} onPreviewImage={setPreviewImage} />
               )}
             </UploadField>
-            <UploadField label="إثبات الدفع" accept="image/*,.pdf" onFile={f => selectAttachment('payment_proof', f)}>
-              {atts.payment_proof.preview && (
-                <AttachmentPreview preview={atts.payment_proof.preview} kind={atts.payment_proof.kind}
-                  onRemove={() => removeAttachment('payment_proof')} onPreviewImage={setPreviewImage} />
+            <UploadField label="إثبات الدفع" accept="image/*,.pdf" onFile={f => handleFileUpload('payment_proof_data', f)}>
+              {form.payment_proof_data && (
+                <AttachmentPreview data={form.payment_proof_data} label="Proof"
+                  onRemove={() => setForm(f => ({ ...f, payment_proof_data: '' }))} onPreviewImage={setPreviewImage} />
               )}
             </UploadField>
           </div>
@@ -623,18 +536,18 @@ export default function PurchaseInvoiceForm() {
           ) : (
             <div className="space-y-3">
               {deliveries.map((d, idx) => (
-                <div key={d.id ?? idx} className="flex items-start gap-3 bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <div key={idx} className="flex items-start gap-3 bg-slate-50 rounded-lg p-4 border border-slate-100">
                   <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-500 mb-1">رقم الديلفري نوت</label>
                       <input type="text" value={d.delivery_note_number}
-                        onChange={e => updateDeliveryField(idx, 'delivery_note_number', e.target.value)}
+                        onChange={e => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, delivery_note_number: e.target.value } : x))}
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="DN-001" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-500 mb-1">ملاحظات</label>
                       <input type="text" value={d.notes}
-                        onChange={e => updateDeliveryField(idx, 'notes', e.target.value)}
+                        onChange={e => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, notes: e.target.value } : x))}
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="تفاصيل الدفعة" />
                     </div>
                     <div>
@@ -642,11 +555,12 @@ export default function PurchaseInvoiceForm() {
                       <label className="flex items-center gap-1.5 px-2 py-2 border border-dashed border-slate-300 rounded-lg text-xs text-slate-500 cursor-pointer hover:border-amber-400 transition-colors">
                         <Upload size={13} /> اختر ملفاً
                         <input type="file" accept="image/*,.pdf" className="hidden"
-                          onChange={e => { const f = e.target.files?.[0]; if (f) selectDeliveryImage(idx, f); e.target.value = '' }} />
+                          onChange={e => { const f = e.target.files?.[0]; if (f) handleDeliveryImageUpload(idx, f); e.target.value = '' }} />
                       </label>
-                      {d.att.preview && (
-                        <AttachmentPreview preview={d.att.preview} kind={d.att.kind}
-                          onRemove={() => removeDeliveryImage(idx)} onPreviewImage={setPreviewImage} />
+                      {d.delivery_image_data && (
+                        <AttachmentPreview data={d.delivery_image_data} label="DN"
+                          onRemove={() => setDeliveries(prev => prev.map((x, i) => i === idx ? { ...x, delivery_image_data: '' } : x))}
+                          onPreviewImage={setPreviewImage} />
                       )}
                     </div>
                   </div>

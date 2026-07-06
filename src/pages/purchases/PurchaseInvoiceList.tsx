@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Edit, Trash2, Search, FileText, AlertTriangle, Paperclip, Eye, X,
   Image as ImageIcon, Receipt, CreditCard, Building2, ChevronDown, ChevronLeft,
@@ -9,7 +10,6 @@ import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
 import { formatCurrency, formatDate } from '../../lib/utils'
 import { openStoredFile } from '../../lib/ai'
-import { getAttachmentUrl } from '../../lib/storage'
 import * as XLSX from 'xlsx'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
@@ -33,11 +33,8 @@ const daysUntil = (date: string): number =>
   Math.round((new Date(date).getTime() - new Date(todayStr()).getTime()) / 86400000)
 
 // تاريخ الفاتورة الفعلي (entry_date) مع تراجع لتاريخ الإنشاء للفواتير القديمة
-type InvoiceRow = PurchaseInvoice & {
-  entry_date?: string | null; tax_rate?: number; subtotal?: number
-  invoice_copy_path?: string; payment_proof_path?: string; check_image_path?: string
-}
-const invoiceDate = (inv: InvoiceRow): string => inv.entry_date || inv.created_at || ''
+type InvoiceRow = PurchaseInvoice & { entry_date?: string | null; tax_rate?: number; subtotal?: number }
+const invoiceDate = (inv: InvoiceRow): string => inv.entry_date || inv.created_at
 
 // ── حساب تفصيل الضريبة لكل فاتورة (amount = المجموع الشامل) ──
 // إن كان subtotal مخزّناً نستخدمه؛ وإلا نحسب من amount والنسبة (افتراض 10% للقديمة)
@@ -50,65 +47,61 @@ const invSubtotal = (inv: InvoiceRow): number => {
 }
 const invTax = (inv: InvoiceRow): number => invTotal(inv) - invSubtotal(inv)
 
-// مرفق جاهز للعرض: رابط (موقّع من Storage أو base64 قديم) ونوعه
-type AttachKind = 'image' | 'file'
-interface ResolvedDoc { label: string; url: string; kind: AttachKind }
-interface ViewDelivery { id?: string; delivery_note_number: string; notes: string; imageUrl: string; imageKind: AttachKind }
-const kindFromPath = (p: string): AttachKind => (/\.(jpe?g|png|webp|gif)$/i.test(p) ? 'image' : 'file')
+interface DocItem { label: string; data: string }
+
+// الأعمدة الخفيفة فقط للقائمة — نستبعد أعمدة الصور base64 الثقيلة
+// (check_image_data / invoice_copy_data / payment_proof_data) لأنها تُثقل التحميل جداً.
+const LIST_COLUMNS =
+  'id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, ' +
+  'vendor_invoice_number, amount, payment_method, check_due_date, notes, ' +
+  'created_at, updated_at, entry_date, tax_rate, subtotal'
+
+interface PurchaseListData {
+  invoices: InvoiceRow[]
+  attachmentCounts: Record<string, number>
+}
+const EMPTY_LIST: PurchaseListData = { invoices: [], attachmentCounts: {} }
+
+// جلب فواتير الشراء (خفيف) + خريطة عدد المرفقات لكل فاتورة (مصدر React Query)
+// عدّاد المرفقات يُجلب عبر استعلامات تُرجع أرقام الفواتير فقط (id) دون تنزيل الصور — سريع جداً.
+async function fetchPurchaseInvoices(): Promise<PurchaseListData> {
+  const [listRes, copyRes, proofRes, checkRes] = await Promise.all([
+    supabase.from('purchase_invoices').select(LIST_COLUMNS),
+    supabase.from('purchase_invoices').select('id').like('invoice_copy_data', 'data:%'),
+    supabase.from('purchase_invoices').select('id').like('payment_proof_data', 'data:%'),
+    supabase.from('purchase_invoices').select('id').like('check_image_data', 'data:%'),
+  ])
+
+  const invoices = ((listRes.data ?? []) as unknown as InvoiceRow[])
+    .sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a)))
+
+  const attachmentCounts: Record<string, number> = {}
+  for (const group of [copyRes.data, proofRes.data, checkRes.data]) {
+    for (const row of (group ?? []) as unknown as { id: string }[]) {
+      attachmentCounts[row.id] = (attachmentCounts[row.id] ?? 0) + 1
+    }
+  }
+
+  return { invoices, attachmentCounts }
+}
 
 export default function PurchaseInvoiceList() {
   const navigate = useNavigate()
-  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [previewImg, setPreviewImg] = useState<string | null>(null)
   const [groupBy, setGroupBy] = useState<'project' | 'flat'>('project')
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-  // عدد المرفقات لكل فاتورة (مؤشّر خفيف من أعمدة محسوبة — بلا تحميل بيانات base64 في القائمة)
-  const [docCounts, setDocCounts] = useState<Record<string, number>>({})
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   // فاتورة قيد الاستعراض الكامل
   const [viewInv, setViewInv] = useState<InvoiceRow | null>(null)
-  const [viewDeliveries, setViewDeliveries] = useState<ViewDelivery[]>([])
-  const [viewDocs, setViewDocs] = useState<ResolvedDoc[]>([])
+  const [viewDeliveries, setViewDeliveries] = useState<PurchaseInvoiceDelivery[]>([])
   const [loadingView, setLoadingView] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      // استعلام خفيف: بدون أعمدة الصور/الملفات (base64) الضخمة —
-      // جلبها عبر select('*') كان يضخّم حجم الرد ويتسبب في خطأ 500 من الخادم
-      const { data, error } = await supabase
-        .from('purchase_invoices')
-        .select('id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, vendor_invoice_number, amount, payment_method, check_due_date, notes, created_at, updated_at')
-      if (error) throw error
-      // ترتيب آمن حسب تاريخ الفاتورة الفعلي (يتحمّل القيم الفارغة دون أن ينهار)
-      const rows = ((data ?? []) as InvoiceRow[]).slice().sort((a, b) =>
-        (invoiceDate(b) || '').localeCompare(invoiceDate(a) || '')
-      )
-      setInvoices(rows)
-
-      // مؤشّر وجود المرفقات (خفيف) من أعمدة محسوبة اختيارية — يُتجاهل بأمان إن لم تكن موجودة بعد
-      const { data: flags } = await supabase
-        .from('purchase_invoices')
-        .select('id, has_invoice_copy, has_payment_proof, has_check_image')
-      if (flags) {
-        const counts: Record<string, number> = {}
-        for (const f of flags as Array<{ id: string; has_invoice_copy?: boolean; has_payment_proof?: boolean; has_check_image?: boolean }>) {
-          counts[f.id] = (f.has_invoice_copy ? 1 : 0) + (f.has_payment_proof ? 1 : 0) + (f.has_check_image ? 1 : 0)
-        }
-        setDocCounts(counts)
-      }
-    } catch (e) {
-      // إظهار الخطأ الحقيقي بدل بقاء الصفحة عالقة على "جاري التحميل"
-      toast.error('تعذّر تحميل فواتير الشراء: ' + ((e as Error)?.message ?? 'خطأ غير معروف'))
-      setInvoices([])
-    } finally {
-      setLoading(false) // يضمن اختفاء "جاري التحميل" في كل الحالات
-    }
-  }
-
-  useEffect(() => { load() }, [])
+  const { data = EMPTY_LIST, isLoading } = useQuery({ queryKey: ['purchase-invoices-list'], queryFn: fetchPurchaseInvoices })
+  const invoices = data.invoices
+  const attachmentCounts = data.attachmentCounts
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['purchase-invoices-list'] })
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -116,68 +109,50 @@ export default function PurchaseInvoiceList() {
     toast.success('تم حذف فاتورة الشراء')
     setDeleteId(null)
     if (viewInv?.id === deleteId) setViewInv(null)
-    load()
+    reload()
   }
 
-  // يعيد رابط عرض مرفق من مسار Storage (رابط موقّع) أو base64 قديم، مع نوعه — أو null إن لا مرفق
-  const resolveSlot = async (path?: string, data?: string): Promise<{ url: string; kind: AttachKind } | null> => {
-    if (path) {
-      const url = await getAttachmentUrl(path)
-      return url ? { url, kind: kindFromPath(path) } : null
-    }
-    if (hasFile(data)) return { url: data as string, kind: isImageData(data) ? 'image' : 'file' }
-    return null
-  }
-
-  // يبني قائمة مرفقات الفاتورة القابلة للعرض (يدعم مسار Storage و base64 القديم معاً)
-  const buildViewDocs = async (inv: InvoiceRow): Promise<ResolvedDoc[]> => {
-    const slots: Array<{ label: string; path?: string; data?: string }> = [
-      { label: 'نسخة الفاتورة', path: inv.invoice_copy_path, data: inv.invoice_copy_data },
-      { label: 'إثبات الدفع', path: inv.payment_proof_path, data: inv.payment_proof_data },
-      { label: 'صورة الشيك', path: inv.check_image_path, data: inv.check_image_data },
-    ]
-    const docs: ResolvedDoc[] = []
-    for (const s of slots) {
-      const r = await resolveSlot(s.path, s.data)
-      if (r) docs.push({ label: s.label, url: r.url, kind: r.kind })
-    }
-    return docs
-  }
-
-  // فتح نافذة الاستعراض: جلب النسخة الكاملة + حلّ روابط المرفقات وبيانات التوصيل لهذه الفاتورة فقط
+  // فتح نافذة الاستعراض الكامل: نعرض البيانات فوراً، ثم نجلب صور هذه الفاتورة والديلفري نوت عند الطلب فقط
   const openView = async (inv: InvoiceRow) => {
-    setViewInv(inv)            // عرض فوري بالبيانات الخفيفة المتوفّرة
-    setViewDocs([])
+    setViewInv(inv)
     setViewDeliveries([])
     setLoadingView(true)
     const [fullRes, delRes] = await Promise.all([
-      supabase.from('purchase_invoices').select('*').eq('id', inv.id).single(),
-      supabase.from('purchase_invoice_deliveries').select('*').eq('purchase_invoice_id', inv.id).order('created_at'),
+      supabase.from('purchase_invoices')
+        .select('invoice_copy_data, payment_proof_data, check_image_data')
+        .eq('id', inv.id).maybeSingle(),
+      supabase.from('purchase_invoice_deliveries')
+        .select('*').eq('purchase_invoice_id', inv.id).order('created_at'),
     ])
-    const full = (fullRes.data ?? inv) as InvoiceRow
-    setViewInv(full)
-    setViewDocs(await buildViewDocs(full)) // مسار Storage → رابط موقّع، أو base64 مباشرة
-
-    const rawDeliveries = (delRes.data ?? []) as Array<PurchaseInvoiceDelivery & { id?: string; delivery_image_path?: string }>
-    const resolved = await Promise.all(rawDeliveries.map(async d => {
-      const r = await resolveSlot(d.delivery_image_path, d.delivery_image_data)
-      return {
-        id: d.id,
-        delivery_note_number: d.delivery_note_number ?? '',
-        notes: d.notes ?? '',
-        imageUrl: r?.url ?? '',
-        imageKind: (r?.kind ?? 'file') as AttachKind,
-      }
-    }))
-    setViewDeliveries(resolved)
+    // دمج الصور الثقيلة في الفاتورة المعروضة (كانت مستبعدة من جلب القائمة الخفيف)
+    if (fullRes.data) setViewInv(prev => (prev && prev.id === inv.id ? { ...prev, ...fullRes.data } : prev))
+    setViewDeliveries((delRes.data ?? []) as PurchaseInvoiceDelivery[])
     setLoadingView(false)
   }
 
-  // فتح/معاينة مرفق محلول (صورة تتكبّر، ملف يُفتح في تبويب جديد)
-  const openResolved = (url: string, kind: AttachKind) => {
-    if (kind === 'image') { setPreviewImg(url); return }
-    if (url.startsWith('data:')) openStoredFile(url, url.startsWith('data:application/pdf') ? 'application/pdf' : '')
-    else window.open(url, '_blank', 'noopener')
+  const openDoc = (data: string) => {
+    if (isImageData(data)) setPreviewImg(data)
+    else openStoredFile(data, isPdfData(data) ? 'application/pdf' : '')
+  }
+
+  // فتح مرفقات فاتورة من الجدول عند الطلب: نجلب صور هذه الفاتورة وحدها، ثم:
+  // - مرفق واحد → نفتحه مباشرةً (نفس السلوك القديم)
+  // - أكثر من مرفق → نفتح نافذة الفاتورة لعرضها كلها
+  const openAttachments = async (inv: InvoiceRow) => {
+    const { data } = await supabase.from('purchase_invoices')
+      .select('invoice_copy_data, payment_proof_data, check_image_data')
+      .eq('id', inv.id).maybeSingle()
+    const docs = getDocs({ ...inv, ...(data ?? {}) } as InvoiceRow)
+    if (docs.length === 1) openDoc(docs[0].data)
+    else openView(inv)
+  }
+
+  const getDocs = (inv: InvoiceRow): DocItem[] => {
+    const docs: DocItem[] = []
+    if (hasFile(inv.invoice_copy_data)) docs.push({ label: 'نسخة الفاتورة', data: inv.invoice_copy_data })
+    if (hasFile(inv.payment_proof_data)) docs.push({ label: 'إثبات الدفع', data: inv.payment_proof_data })
+    if (hasFile(inv.check_image_data)) docs.push({ label: 'صورة الشيك', data: inv.check_image_data })
+    return docs
   }
 
   const filtered = useMemo(() => invoices.filter(inv => {
@@ -190,13 +165,16 @@ export default function PurchaseInvoiceList() {
 
   // ── الإجماليات ──
   const today = todayStr()
-  const totalAmount = invoices.reduce((s, inv) => s + num(inv.amount), 0)
-  const pendingCheques = invoices.filter(inv => inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today)
-  const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
-  const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
-  const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
-  const recoverableVAT = invoices.reduce((s, inv) => s + invTax(inv), 0)
-  const totalSubtotal = invoices.reduce((s, inv) => s + invSubtotal(inv), 0)
+  const { totalAmount, pendingCheques, pendingChequesTotal, soonCheques, soonChequesTotal, recoverableVAT, totalSubtotal } = useMemo(() => {
+    const totalAmount = invoices.reduce((s, inv) => s + num(inv.amount), 0)
+    const pendingCheques = invoices.filter(inv => inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today)
+    const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
+    const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
+    const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
+    const recoverableVAT = invoices.reduce((s, inv) => s + invTax(inv), 0)
+    const totalSubtotal = invoices.reduce((s, inv) => s + invSubtotal(inv), 0)
+    return { totalAmount, pendingCheques, pendingChequesTotal, soonCheques, soonChequesTotal, recoverableVAT, totalSubtotal }
+  }, [invoices, today])
 
   // ── التجميع حسب المشروع ──
   const groups = useMemo(() => {
@@ -215,7 +193,7 @@ export default function PurchaseInvoiceList() {
       .map(([key, g]) => ({ key, ...g }))
   }, [filtered])
 
-  const toggleGroup = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }))
+  const toggleGroup = (key: string) => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }))
 
   // ═══ تصدير Excel احترافي: ورقة شاملة + ورقة لكل مشروع + ملخّص الضريبة ═══
   const exportToExcel = () => {
@@ -303,7 +281,7 @@ export default function PurchaseInvoiceList() {
 
   // صف فاتورة (يُستخدم في وضع التجميع والوضع المسطّح)
   const InvoiceRowEl = ({ inv }: { inv: InvoiceRow }) => {
-    const docCount = docCounts[inv.id] ?? 0
+    const docCount = attachmentCounts[inv.id] ?? 0
     const isSoonCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today && daysUntil(inv.check_due_date) <= 7
     const isOverdueCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date <= today
     return (
@@ -332,7 +310,7 @@ export default function PurchaseInvoiceList() {
         </td>
         <td className="px-4 py-3">
           {docCount > 0 ? (
-            <button onClick={e => { e.stopPropagation(); openView(inv) }}
+            <button onClick={e => { e.stopPropagation(); openAttachments(inv) }}
               className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2.5 py-1 rounded-lg transition-colors" title="عرض المستندات">
               <Paperclip size={13} /> {docCount}
             </button>
@@ -395,7 +373,7 @@ export default function PurchaseInvoiceList() {
       )}
 
       {/* بطاقات ملخّص */}
-      {!loading && invoices.length > 0 && (
+      {!isLoading && invoices.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-5">
           <div className="bg-white rounded-xl border border-slate-200 p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Receipt size={13} /> إجمالي المشتريات</div>
@@ -449,7 +427,7 @@ export default function PurchaseInvoiceList() {
       </div>
 
       {/* المحتوى */}
-      {loading ? (
+      {isLoading ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
@@ -472,7 +450,7 @@ export default function PurchaseInvoiceList() {
         /* ═══ وضع التجميع حسب المشروع ═══ */
         <div className="space-y-4">
           {groups.map(g => {
-            const isExpanded = !!expanded[g.key]
+            const isCollapsed = collapsed[g.key]
             const isNone = g.key === '__none__'
             return (
               <div key={g.key} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -481,7 +459,7 @@ export default function PurchaseInvoiceList() {
                   className="w-full flex items-center justify-between px-4 py-3 transition-colors hover:bg-slate-50"
                   style={{ background: isNone ? '#f8fafc' : 'linear-gradient(90deg, #faf6f1 0%, #fdfbf8 100%)' }}>
                   <div className="flex items-center gap-2.5">
-                    {isExpanded ? <ChevronDown size={18} className="text-slate-400" /> : <ChevronLeft size={18} className="text-slate-400" />}
+                    {isCollapsed ? <ChevronLeft size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: isNone ? '#e2e8f0' : 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
                       <Building2 size={16} className={isNone ? 'text-slate-500' : 'text-white'} />
                     </div>
@@ -496,7 +474,7 @@ export default function PurchaseInvoiceList() {
                   </div>
                 </button>
                 {/* جدول فواتير المشروع */}
-                {isExpanded && (
+                {!isCollapsed && (
                   <div className="overflow-x-auto border-t border-slate-100">
                     <table className="w-full text-sm">
                       <TableHead />
@@ -573,20 +551,18 @@ export default function PurchaseInvoiceList() {
               {/* المرفقات */}
               <div>
                 <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-1.5"><Paperclip size={15} /> المرفقات</div>
-                {loadingView ? (
-                  <p className="text-xs text-slate-400 text-center py-3">جاري التحميل...</p>
-                ) : viewDocs.length === 0 ? (
+                {getDocs(viewInv).length === 0 ? (
                   <p className="text-xs text-slate-400 bg-slate-50 rounded-lg p-3 text-center">لا توجد مرفقات لهذه الفاتورة</p>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {viewDocs.map((doc, i) => {
-                      const isImg = doc.kind === 'image'
+                    {getDocs(viewInv).map((doc, i) => {
+                      const isImg = isImageData(doc.data)
                       return (
-                        <button key={i} onClick={() => openResolved(doc.url, doc.kind)}
+                        <button key={i} onClick={() => openDoc(doc.data)}
                           className="rounded-xl border border-slate-200 overflow-hidden group hover:border-amber-300 transition-colors">
                           <div className="aspect-[4/3] bg-slate-50 relative flex items-center justify-center">
                             {isImg ? (
-                              <img src={doc.url} alt={doc.label} className="w-full h-full object-cover" />
+                              <img src={doc.data} alt={doc.label} className="w-full h-full object-cover" />
                             ) : (
                               <FileText size={32} className="text-red-500" />
                             )}
@@ -615,11 +591,11 @@ export default function PurchaseInvoiceList() {
                 ) : (
                   <div className="space-y-2">
                     {viewDeliveries.map((d, i) => (
-                      <div key={d.id ?? i} className="flex items-center gap-3 rounded-lg border border-slate-100 p-2.5">
-                        {d.imageUrl ? (
-                          <button onClick={() => openResolved(d.imageUrl, d.imageKind)} className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0">
-                            {d.imageKind === 'image'
-                              ? <img src={d.imageUrl} alt="DN" className="w-full h-full object-cover" />
+                      <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-100 p-2.5">
+                        {hasFile(d.delivery_image_data) ? (
+                          <button onClick={() => openDoc(d.delivery_image_data)} className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0">
+                            {isImageData(d.delivery_image_data)
+                              ? <img src={d.delivery_image_data} alt="DN" className="w-full h-full object-cover" />
                               : <div className="w-full h-full flex items-center justify-center bg-slate-50"><FileText size={18} className="text-red-500" /></div>}
                           </button>
                         ) : <div className="w-12 h-12 rounded-lg bg-slate-50 flex items-center justify-center shrink-0"><Truck size={16} className="text-slate-300" /></div>}
