@@ -1,8 +1,50 @@
-import { useEffect, useId, useRef } from 'react'
-import type { ReactNode } from 'react'
+import { useId, useRef } from 'react'
+import type { ReactNode, RefObject } from 'react'
+import { useEffect } from 'react'
 import { X } from 'lucide-react'
 
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'full'
+
+interface UseModalBehaviorOptions {
+  onClose?: () => void
+  closeOnEscape?: boolean
+  focusRef?: RefObject<HTMLElement>
+}
+
+/**
+ * Hook مشترك لسلوك النوافذ المنبثقة:
+ *  - نقل التركيز إلى النافذة عند فتحها وإعادته لمصدره عند الإغلاق
+ *  - الإغلاق بمفتاح Escape (قابل للتعطيل)
+ *  - منع تمرير الخلفية أثناء الفتح (مع دعم التداخل باستعادة القيمة السابقة)
+ * يستخدمه كل من Modal و ConfirmDialog لتفادي تكرار المنطق نفسه.
+ */
+export function useModalBehavior(
+  open: boolean,
+  { onClose, closeOnEscape = true, focusRef }: UseModalBehaviorOptions,
+): void {
+  useEffect(() => {
+    if (!open) return
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    focusRef?.current?.focus()
+    return () => previouslyFocused?.focus?.()
+  }, [open, focusRef])
+
+  useEffect(() => {
+    if (!open || !closeOnEscape || !onClose) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, closeOnEscape, onClose])
+
+  useEffect(() => {
+    if (!open) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previous }
+  }, [open])
+}
 
 interface ModalProps {
   open: boolean
@@ -34,31 +76,7 @@ export default function Modal({
   const titleId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
 
-  // نقل التركيز داخل النافذة عند فتحها وإعادته لمصدره عند الإغلاق
-  useEffect(() => {
-    if (!open) return
-    const previouslyFocused = document.activeElement as HTMLElement | null
-    dialogRef.current?.focus()
-    return () => previouslyFocused?.focus?.()
-  }, [open])
-
-  // إغلاق بمفتاح Escape (قابل للتعطيل)
-  useEffect(() => {
-    if (!open || !closeOnEscape) return
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, closeOnEscape, onClose])
-
-  // منع تمرير الخلفية أثناء الفتح (يستعيد القيمة السابقة فيدعم التداخل)
-  useEffect(() => {
-    if (!open) return
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = previous }
-  }, [open])
+  useModalBehavior(open, { onClose, closeOnEscape, focusRef: dialogRef })
 
   if (!open) return null
 
