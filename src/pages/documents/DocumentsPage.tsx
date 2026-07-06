@@ -1,6 +1,5 @@
-import { useState, useRef } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileText, Trash2, FileArchive, Upload } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { Trash2, FileArchive, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { parseDocument } from '../../lib/document-parser'
 import type { Document, ExtractedDocumentData } from '../../types'
@@ -9,54 +8,53 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { formatDate } from '../../lib/utils'
 
-// جلب المستندات (مصدر React Query)
-async function fetchDocuments(): Promise<Document[]> {
-  const { data } = await supabase.from('documents').select('*').order('created_at', { ascending: false })
-  return (data ?? []) as Document[]
-}
-
-// أيقونة حسب نوع الملف
-function fileIcon(type: string): string {
-  if (type === 'pdf') return '📄'
-  if (['xlsx', 'xls', 'csv'].includes(type)) return '📊'
-  if (['png', 'jpg', 'jpeg', 'webp'].includes(type)) return '🖼️'
-  return '📁'
-}
-
-// تسميات حقول البيانات المستخرجة (ثابتة — لا تُعاد إنشاؤها في كل رندر)
-const FIELD_LABELS: Record<string, string> = {
-  name: 'الاسم', company_name: 'الشركة', email: 'البريد', phone: 'الهاتف',
-  address: 'العنوان', tax_number: 'رقم الضريبة', invoice_number: 'رقم الفاتورة',
-  lpo_number: 'رقم أمر الشراء', date: 'التاريخ', amount: 'المبلغ',
-  bank_iban: 'IBAN', payment_terms: 'شروط الدفع',
-}
+// صف خفيف للقائمة — بلا file_url (كان يحمل base64) ولا extracted_text الطويل
+type DocumentRow = Pick<Document, 'id' | 'name' | 'file_type' | 'extracted_data' | 'created_at'>
 
 export default function DocumentsPage() {
-  const queryClient = useQueryClient()
+  const [documents, setDocuments] = useState<DocumentRow[]>([])
+  const [loading, setLoading] = useState(true)
   const [parsing, setParsing] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [extracted, setExtracted] = useState<{ data: ExtractedDocumentData; text: string; name: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const { data: documents = [], isLoading } = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
-  const reload = () => queryClient.invalidateQueries({ queryKey: ['documents'] })
+  const load = async () => {
+    try {
+      // استعلام خفيف: نجلب فقط الأعمدة التي تعرضها القائمة، دون الحقول الثقيلة (file_url / extracted_text)
+      const { data, error } = await supabase
+        .from('documents')
+        .select('id, name, file_type, extracted_data, created_at')
+        .order('created_at', { ascending: false })
+      if (error) throw error
+      setDocuments((data ?? []) as DocumentRow[])
+    } catch (e) {
+      toast.error('تعذّر تحميل المستندات: ' + ((e as Error)?.message ?? 'خطأ غير معروف'))
+      setDocuments([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
 
   const handleFile = async (file: File) => {
     setParsing(true)
     try {
       const { data, text } = await parseDocument(file)
       setExtracted({ data, text, name: file.name })
-      // Save to documents table
-      await supabase.from('documents').insert({
+      // نحفظ البيانات المستخرجة فقط (هذه الصفحة أداة تحليل، لا تخزّن الملف نفسه)
+      const { error } = await supabase.from('documents').insert({
         name: file.name,
         file_type: file.name.split('.').pop() ?? '',
         extracted_text: text.slice(0, 5000),
         extracted_data: data,
       })
+      if (error) throw error
       toast.success('تم قراءة الملف وحفظ البيانات المستخرجة')
-      reload()
-    } catch {
-      toast.error('حدث خطأ أثناء قراءة الملف')
+      load()
+    } catch (e) {
+      toast.error('حدث خطأ أثناء قراءة الملف: ' + ((e as Error)?.message ?? ''))
     } finally {
       setParsing(false)
     }
@@ -67,7 +65,14 @@ export default function DocumentsPage() {
     await supabase.from('documents').delete().eq('id', deleteId)
     toast.success('تم حذف المستند')
     setDeleteId(null)
-    reload()
+    load()
+  }
+
+  const fileIcon = (type: string) => {
+    if (type === 'pdf') return '📄'
+    if (['xlsx', 'xls', 'csv'].includes(type)) return '📊'
+    if (['png', 'jpg', 'jpeg', 'webp'].includes(type)) return '🖼️'
+    return '📁'
   }
 
   return (
@@ -108,9 +113,15 @@ export default function DocumentsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
             {Object.entries(extracted.data).map(([key, val]) => {
               if (!val || key === 'items') return null
+              const labels: Record<string, string> = {
+                name: 'الاسم', company_name: 'الشركة', email: 'البريد', phone: 'الهاتف',
+                address: 'العنوان', tax_number: 'رقم الضريبة', invoice_number: 'رقم الفاتورة',
+                lpo_number: 'رقم أمر الشراء', date: 'التاريخ', amount: 'المبلغ',
+                bank_iban: 'IBAN', payment_terms: 'شروط الدفع',
+              }
               return (
                 <div key={key} className="bg-white rounded-lg p-2 border border-green-100">
-                  <p className="text-xs text-slate-500">{FIELD_LABELS[key] ?? key}</p>
+                  <p className="text-xs text-slate-500">{labels[key] ?? key}</p>
                   <p className="font-medium text-slate-800 truncate">{String(val)}</p>
                 </div>
               )
@@ -131,7 +142,7 @@ export default function DocumentsPage() {
       )}
 
       {/* Documents list */}
-      {isLoading ? (
+      {loading ? (
         <div className="flex justify-center py-10">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
