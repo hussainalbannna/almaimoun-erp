@@ -1,15 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
   plugins: [react()],
-  // مُعرّف '@' يشير إلى src (مطابق لإعداد tsconfig.paths) لدعم مسارات الاستيراد المطلقة
-  resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
-    },
-  },
   optimizeDeps: {
     include: ['pdfjs-dist'],
   },
