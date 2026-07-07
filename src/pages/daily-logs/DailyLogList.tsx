@@ -38,7 +38,19 @@ const WEATHER_OPTIONS = [
 
 // ─── Print document generator ──────────────────────────────────────────────
 
-type PrintLog = DailyLog & { project_name?: string; worker_names?: string[] }
+// نوع مخصّص للطباعة يحوي فقط ما تحتاجه القوالب (منفصل عن DailyLog لأن القائمة خفيفة بلا صور)
+interface PrintLog {
+  log_date: string
+  project_name?: string
+  weather?: string
+  workers_count?: number
+  inspector_meeting?: boolean
+  description?: string
+  material_requests?: string
+  additional_notes?: string
+  worker_names?: string[]
+  photos?: string[]
+}
 
 function buildPrintHTML(logs: PrintLog[]): string {
   const formatArabicDate = (d: string) => {
@@ -85,15 +97,15 @@ function buildPrintHTML(logs: PrintLog[]): string {
           <span class="meta-label">المشروع / العميل</span>
           <span class="meta-value">${log.project_name ?? '—'}</span>
         </div>
-        ${(log as PrintLog & { weather?: string }).weather ? `
+        ${log.weather ? `
         <div class="meta-item">
           <span class="meta-label">الطقس</span>
-          <span class="meta-value">${(log as PrintLog & { weather?: string }).weather}</span>
+          <span class="meta-value">${log.weather}</span>
         </div>` : ''}
-        ${((log as PrintLog & { workers_count?: number }).workers_count ?? 0) > 0 ? `
+        ${(log.workers_count ?? 0) > 0 ? `
         <div class="meta-item">
           <span class="meta-label">عدد العمال</span>
-          <span class="meta-value">${(log as PrintLog & { workers_count?: number }).workers_count}</span>
+          <span class="meta-value">${log.workers_count}</span>
         </div>` : ''}
         ${log.inspector_meeting ? `
         <div class="meta-item">
@@ -248,26 +260,34 @@ function buildPrintHTML(logs: PrintLog[]): string {
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-// أنواع بيانات الصفحة + مصدر React Query
+// نوع خفيف للقائمة: يستبعد عمود photos الثقيل (base64) — يُجلب عند الحاجة فقط
+type LightLog = Pick<DailyLog,
+  'id' | 'project_id' | 'log_date' | 'description' | 'material_requests' |
+  'inspector_meeting' | 'weather' | 'workers_count' | 'additional_notes' | 'created_at'
+> & { project_name?: string }
+
+// حقول القائمة الخفيفة (بلا photos) — تُطلب صراحةً لتفادي جلب الصور الضخمة
+const LOG_LIST_COLUMNS = 'id, project_id, log_date, description, material_requests, inspector_meeting, weather, workers_count, additional_notes, created_at'
+
 interface DailyLogsData {
-  logs: (DailyLog & { project_name?: string })[]
+  logs: LightLog[]
   projects: Project[]
   workers: Worker[]
 }
-const EMPTY_LOGS: DailyLogsData['logs'] = []
+const EMPTY_LOGS: LightLog[] = []
 const EMPTY_PROJECTS: Project[] = []
 const EMPTY_WORKERS: Worker[] = []
 
-// استعلام واحد: المشاريع والعمّال والتقارير (ربط اسم المشروع بالتقرير يحتاج المشاريع)
+// استعلام واحد: المشاريع والعمّال والتقارير (خفيفة بلا صور) — ربط اسم المشروع بالتقرير
 async function fetchDailyLogsData(): Promise<DailyLogsData> {
   const [pRes, wRes, lRes] = await Promise.all([
     supabase.from('projects').select('id, project_name').order('project_name'),
     supabase.from('workers').select('id, name, name_en, branch').eq('status', 'active').order('name'),
-    supabase.from('daily_logs').select('*').order('log_date', { ascending: false }).limit(200),
+    supabase.from('daily_logs').select(LOG_LIST_COLUMNS).order('log_date', { ascending: false }).limit(200),
   ])
   const projects = (pRes.data ?? []) as Project[]
   const workers = (wRes.data ?? []) as Worker[]
-  const logData = (lRes.data ?? []) as DailyLog[]
+  const logData = (lRes.data ?? []) as LightLog[]
   const logs = logData.map(l => ({ ...l, project_name: projects.find(p => p.id === l.project_id)?.project_name }))
   return { logs, projects, workers }
 }
@@ -290,6 +310,8 @@ export default function DailyLogList() {
   const [photoUploading, setPhotoUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [scanningMaterials, setScanningMaterials] = useState(false)
+  // ذاكرة مؤقتة لصور كل تقرير — تُجلب عند التوسيع/التعديل/الطباعة فقط (لا تُحمّل في القائمة)
+  const [photosCache, setPhotosCache] = useState<Record<string, string[]>>({})
   const photoInputRef = useRef<HTMLInputElement>(null)
   const materialScanRef = useRef<HTMLInputElement>(null)
 
@@ -303,6 +325,16 @@ export default function DailyLogList() {
   // أي حفظ/حذف يُبطِل الكاش فيُعاد الجلب تلقائياً
   const reload = () => queryClient.invalidateQueries({ queryKey: ['daily-logs-data'] })
 
+  // جلب صور تقرير واحد عند الحاجة (مع تخزينها مؤقتاً لتفادي إعادة الجلب)
+  const fetchLogPhotos = async (logId: string): Promise<string[]> => {
+    const cached = photosCache[logId]
+    if (cached) return cached
+    const { data: row } = await supabase.from('daily_logs').select('photos').eq('id', logId).maybeSingle()
+    const photos = ((row as { photos?: string[] } | null)?.photos ?? [])
+    setPhotosCache(prev => ({ ...prev, [logId]: photos }))
+    return photos
+  }
+
   const resetForm = () => {
     setForm(EMPTY_FORM(prefillProject))
     setSelectedWorkers([])
@@ -310,7 +342,16 @@ export default function DailyLogList() {
     setShowForm(false)
   }
 
-  const openEdit = async (log: DailyLog) => {
+  // توسيع/طيّ التقرير — يجلب صوره عند أول توسيع فقط
+  const toggleExpand = (logId: string) => {
+    const next = expandedLog === logId ? null : logId
+    setExpandedLog(next)
+    if (next && !photosCache[next]) void fetchLogPhotos(next)
+  }
+
+  const openEdit = async (log: LightLog) => {
+    // جلب الصور الحالية للتقرير لعرضها في النموذج (غير محمّلة في القائمة)
+    const photos = await fetchLogPhotos(log.id)
     setForm({
       project_id: log.project_id,
       log_date: log.log_date,
@@ -318,13 +359,13 @@ export default function DailyLogList() {
       material_requests: log.material_requests ?? '',
       inspector_meeting: log.inspector_meeting ?? false,
       additional_notes: log.additional_notes ?? '',
-      weather: (log as DailyLog & { weather?: string }).weather ?? '',
-      overtime_amount: (log as DailyLog & { overtime_amount?: number }).overtime_amount ? String((log as DailyLog & { overtime_amount?: number }).overtime_amount) : '',
-      overtime_notes: (log as DailyLog & { overtime_notes?: string }).overtime_notes ?? '',
-      photos: log.photos ?? [],
+      weather: log.weather ?? '',
+      overtime_amount: (log as LightLog & { overtime_amount?: number }).overtime_amount ? String((log as LightLog & { overtime_amount?: number }).overtime_amount) : '',
+      overtime_notes: (log as LightLog & { overtime_notes?: string }).overtime_notes ?? '',
+      photos,
     })
-    const { data } = await supabase.from('daily_log_workers').select('worker_id').eq('log_id', log.id)
-    setSelectedWorkers((data ?? []).map((r: { worker_id: string }) => r.worker_id))
+    const { data: wData } = await supabase.from('daily_log_workers').select('worker_id').eq('log_id', log.id)
+    setSelectedWorkers((wData ?? []).map((r: { worker_id: string }) => r.worker_id))
     setEditingId(log.id)
     setShowForm(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -378,7 +419,7 @@ export default function DailyLogList() {
     }
   }
 
-  const convertToLPO = (log: DailyLog & { project_name?: string }) => {
+  const convertToLPO = (log: LightLog) => {
     if (!log.material_requests?.trim()) { toast.error('لا توجد طلبات مواد في هذا التقرير'); return }
     const params = new URLSearchParams({
       project: log.project_id,
@@ -431,14 +472,16 @@ export default function DailyLogList() {
         logId = editingId
         await supabase.from('daily_log_workers').delete().eq('log_id', logId)
       } else {
-        const { data, error } = await supabase.from('daily_logs').insert(payload).select().single()
+        const { data: inserted, error } = await supabase.from('daily_logs').insert(payload).select('id').single()
         if (error) throw error
-        logId = (data as DailyLog).id
+        logId = (inserted as { id: string }).id
       }
       for (const wid of selectedWorkers) {
         await supabase.from('daily_log_workers').insert({ log_id: logId, worker_id: wid })
       }
       await syncAttendance(logId, form.log_date, form.project_id, selectedWorkers)
+      // تحديث ذاكرة الصور المؤقتة لهذا التقرير حتى تظهر فوراً عند التوسيع
+      setPhotosCache(prev => ({ ...prev, [logId]: form.photos }))
       toast.success(editingId ? 'تم تحديث التقرير' : 'تم تسجيل التقرير اليومي')
       resetForm()
       reload()
@@ -464,12 +507,12 @@ export default function DailyLogList() {
   }
 
   const resolveWorkerNames = async (logId: string): Promise<string[]> => {
-    const { data } = await supabase
+    const { data: wData } = await supabase
       .from('daily_log_workers')
       .select('worker_id')
       .eq('log_id', logId)
-    if (!data?.length) return []
-    const ids = data.map((r: { worker_id: string }) => r.worker_id)
+    if (!wData?.length) return []
+    const ids = wData.map((r: { worker_id: string }) => r.worker_id)
     return workers.filter(w => ids.includes(w.id)).map(w => (w as Worker & { name_en?: string }).name_en || w.name)
   }
 
@@ -542,28 +585,28 @@ export default function DailyLogList() {
     }
   }
 
-  const handlePreviewSingle = async (log: DailyLog & { project_name?: string }) => {
-    const worker_names = await resolveWorkerNames(log.id)
-    openPreviewWindow(buildPrintHTML([{ ...log, worker_names }]))
+  // بناء تقرير طباعة كامل (يجلب أسماء العمال + الصور عند الحاجة)
+  const buildFullPrintLog = async (log: LightLog): Promise<PrintLog> => {
+    const [worker_names, photos] = await Promise.all([resolveWorkerNames(log.id), fetchLogPhotos(log.id)])
+    return { ...log, worker_names, photos }
   }
 
-  const handlePrintSingle = async (log: DailyLog & { project_name?: string }) => {
-    const worker_names = await resolveWorkerNames(log.id)
-    openPrintWindow(buildPrintHTML([{ ...log, worker_names }]))
+  const handlePreviewSingle = async (log: LightLog) => {
+    openPreviewWindow(buildPrintHTML([await buildFullPrintLog(log)]))
+  }
+
+  const handlePrintSingle = async (log: LightLog) => {
+    openPrintWindow(buildPrintHTML([await buildFullPrintLog(log)]))
   }
 
   const handlePreviewAll = async () => {
-    const logsWithWorkers = await Promise.all(
-      filtered.map(async log => ({ ...log, worker_names: await resolveWorkerNames(log.id) }))
-    )
-    openPreviewWindow(buildPrintHTML(logsWithWorkers))
+    const full = await Promise.all(filtered.map(buildFullPrintLog))
+    openPreviewWindow(buildPrintHTML(full))
   }
 
   const handlePrintAll = async () => {
-    const logsWithWorkers = await Promise.all(
-      filtered.map(async log => ({ ...log, worker_names: await resolveWorkerNames(log.id) }))
-    )
-    openPrintWindow(buildPrintHTML(logsWithWorkers))
+    const full = await Promise.all(filtered.map(buildFullPrintLog))
+    openPrintWindow(buildPrintHTML(full))
   }
 
   const filtered = useMemo(() => logs.filter(l => !filterProject || l.project_id === filterProject), [logs, filterProject])
@@ -752,10 +795,11 @@ export default function DailyLogList() {
             {filtered.map(log => {
               const isExpanded = expandedLog === log.id
               const isDeleting = deletingId === log.id
+              const logPhotos = photosCache[log.id] ?? []
               return (
                 <div key={log.id}
                   className={`bg-white rounded-xl border transition-all ${isExpanded ? 'border-amber-300 shadow-sm' : 'border-slate-200 hover:border-amber-300'}`}>
-                  <div className="flex items-start justify-between p-4 cursor-pointer" onClick={() => setExpandedLog(isExpanded ? null : log.id)}>
+                  <div className="flex items-start justify-between p-4 cursor-pointer" onClick={() => toggleExpand(log.id)}>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
                         <span className="font-semibold text-slate-800 text-sm">{formatDate(log.log_date)}</span>
@@ -765,19 +809,14 @@ export default function DailyLogList() {
                         {log.inspector_meeting && (
                           <span className="text-xs px-2 py-0.5 rounded-full border" style={{ background: '#f3e9dc', color: '#7b4a2d', borderColor: '#e5d9c8' }}>تنسيق استشاري</span>
                         )}
-                        {(log.photos?.length ?? 0) > 0 && (
-                          <span className="text-xs bg-emerald-50 text-emerald-600 border border-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                            <Camera size={10} /> {log.photos.length} صورة
-                          </span>
-                        )}
-                        {(log as DailyLog & { weather?: string }).weather && (
+                        {log.weather && (
                           <span className="text-xs bg-sky-50 text-sky-600 border border-sky-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                            <Cloud size={10} /> {(log as DailyLog & { weather?: string }).weather}
+                            <Cloud size={10} /> {log.weather}
                           </span>
                         )}
-                        {((log as DailyLog & { workers_count?: number }).workers_count ?? 0) > 0 && (
+                        {(log.workers_count ?? 0) > 0 && (
                           <span className="text-xs bg-violet-50 text-violet-600 border border-violet-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                            <Users size={10} /> {(log as DailyLog & { workers_count?: number }).workers_count} عامل
+                            <Users size={10} /> {log.workers_count} عامل
                           </span>
                         )}
                       </div>
@@ -815,7 +854,7 @@ export default function DailyLogList() {
                         title="حذف">
                         <Trash2 size={15} />
                       </button>
-                      <button onClick={() => setExpandedLog(isExpanded ? null : log.id)}
+                      <button onClick={() => toggleExpand(log.id)}
                         className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors">
                         {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                       </button>
@@ -842,11 +881,13 @@ export default function DailyLogList() {
                           <p className="text-slate-700 text-sm whitespace-pre-wrap">{log.additional_notes}</p>
                         </div>
                       )}
-                      {(log.photos?.length ?? 0) > 0 && (
+                      {logPhotos.length > 0 && (
                         <div>
-                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">صور الموقع</p>
+                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1">
+                            <Camera size={12} /> صور الموقع ({logPhotos.length})
+                          </p>
                           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                            {log.photos.map((url, i) => (
+                            {logPhotos.map((url, i) => (
                               <a key={i} href={url} target="_blank" rel="noopener noreferrer"
                                 className="block aspect-square rounded-lg overflow-hidden border border-slate-200 hover:opacity-90 transition-opacity">
                                 <img src={url} alt="" className="w-full h-full object-cover" />
