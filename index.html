@@ -8,19 +8,56 @@
     <meta name="description" content="نظام إدارة مشاريع مؤسسة الميمون للمقاولات — Almaimoun Construction ERP" />
     <link rel="manifest" href="/manifest.json" />
     <title>مؤسسة الميمون للمقاولات</title>
+
+    <!-- تحميل الخطوط بلا حجب العرض: تُطبّق بعد اكتمال التحميل، مع أوزان مُقلّصة -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@300;400;500;600;700&family=Cairo:wght@300;400;600;700&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600;700&family=Cairo:wght@400;600;700&display=swap"
     />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600;700&family=Cairo:wght@400;600;700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600;700&family=Cairo:wght@400;600;700&display=swap"
+      />
+    </noscript>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
+      // تسجيل Service Worker مع تفعيل النسخة الجديدة فوراً وإعادة تحميل واحدة —
+      // يمنع بقاء المتصفح على قوقعة قديمة بعد إعادة النشر (سبب "الصفحة لا تفتح")
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))
+        window.addEventListener('load', async () => {
+          try {
+            const reg = await navigator.serviceWorker.register('/sw.js')
+            reg.addEventListener('updatefound', () => {
+              const nw = reg.installing
+              if (!nw) return
+              nw.addEventListener('statechange', () => {
+                if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                  nw.postMessage('SKIP_WAITING')
+                }
+              })
+            })
+          } catch (_) { /* تجاهل بأمان */ }
+        })
+
+        let refreshed = false
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (refreshed) return
+          refreshed = true
+          window.location.reload()
+        })
       }
     </script>
   </body>
