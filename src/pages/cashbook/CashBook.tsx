@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase'
 import type { Project } from '../../types'
 import { formatCurrency, formatDate, extractVAT } from '../../lib/utils'
 import { readDocumentText, extractJSON, hasApiKey, compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -12,6 +13,18 @@ import Textarea from '../../components/ui/Textarea'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 
+// ════════════════════════════════════════════════════════════════════
+//  دفتر الصندوق — المصروفات النقدية وربطها بالمشاريع
+//
+//  الأداء والتخزين:
+//  - القائمة تجلب أعمدة خفيفة فقط (بلا receipt_image_data الثقيل) —
+//    عمود has_receipt_image المولَّد يكشف وجود الإيصال دون جلبه.
+//  - صورة الإيصال تُجلب عند الضغط على أيقونتها فقط.
+//  - الإيصالات الجديدة تُرفع إلى Supabase Storage ويُحفظ مسارها القصير،
+//    مع توافق خلفي كامل للسجلّات القديمة المخزَّنة base64.
+// ════════════════════════════════════════════════════════════════════
+
+// صف القائمة الخفيف — بلا receipt_image_data
 interface CashEntry {
   id: string
   entry_date: string
@@ -23,12 +36,29 @@ interface CashEntry {
   project_id: string | null
   project_name?: string
   receipt_url: string
-  receipt_image_data?: string
+  has_receipt_image?: boolean
   expense_type: string
   vat_amount?: number
   is_vat_recoverable?: boolean
   notes: string
   created_at: string
+}
+
+// حالة نموذج الإدخال — تحمل صورة الإيصال (Data URL) للمعاينة قبل الرفع
+interface EntryForm {
+  entry_date: string
+  description: string
+  vendor_name: string
+  category: string
+  expense_type: string
+  amount: number
+  payment_method: string
+  project_id: string | null
+  receipt_url: string
+  receipt_image_data: string
+  vat_amount: number
+  is_vat_recoverable: boolean
+  notes: string
 }
 
 const CATEGORIES = [
@@ -83,7 +113,7 @@ function periodRange(key: string): { from: Date | null; to: Date | null } {
   return { from: null, to: null }
 }
 
-const emptyForm = (): Partial<CashEntry> => ({
+const emptyForm = (): EntryForm => ({
   entry_date: new Date().toISOString().slice(0, 10),
   description: '', vendor_name: '', category: 'materials',
   expense_type: 'general', amount: 0, payment_method: 'cash',
@@ -91,14 +121,25 @@ const emptyForm = (): Partial<CashEntry> => ({
   vat_amount: 0, is_vat_recoverable: false, notes: '',
 })
 
+// الأعمدة الخفيفة للقائمة — بلا receipt_image_data (كان يضخّم الرد ويبطئ التحميل)
+const LIGHT_COLUMNS =
+  'id, entry_date, description, vendor_name, category, amount, payment_method, project_id, '
+  + 'project_name, receipt_url, has_receipt_image, expense_type, vat_amount, is_vat_recoverable, '
+  + 'notes, created_at'
+
 // جلب القيود والمشاريع (مصادر React Query)
 async function fetchEntries(): Promise<CashEntry[]> {
-  const { data } = await supabase.from('accounts_payable').select('*').order('entry_date', { ascending: false })
-  return (data ?? []) as CashEntry[]
+  const { data } = await supabase.from('accounts_payable').select(LIGHT_COLUMNS).order('entry_date', { ascending: false })
+  return (data ?? []) as unknown as CashEntry[]
 }
 async function fetchProjectsList(): Promise<Project[]> {
   const { data } = await supabase.from('projects').select('id, project_name').order('project_name')
   return (data ?? []) as Project[]
+}
+// جلب صورة إيصال قيد واحد عند الطلب فقط — قد تكون مسار Storage أو base64 قديم
+async function fetchEntryReceipt(id: string): Promise<string> {
+  const { data } = await supabase.from('accounts_payable').select('receipt_image_data').eq('id', id).maybeSingle()
+  return (data?.receipt_image_data as string | undefined) ?? ''
 }
 
 export default function CashBook() {
@@ -113,9 +154,10 @@ export default function CashBook() {
   const [showAnalysis, setShowAnalysis] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [previewImg, setPreviewImg] = useState<string | null>(null)
+  const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const [form, setForm] = useState<Partial<CashEntry>>(emptyForm())
+  const [form, setForm] = useState<EntryForm>(emptyForm())
 
   // القيود ('accounts-payable') وقائمة المشاريع ('projects-list' — تُشارَك مع صفحات أخرى)
   const { data: entries = [], isLoading } = useQuery({ queryKey: ['accounts-payable'], queryFn: fetchEntries })
@@ -128,7 +170,7 @@ export default function CashBook() {
     setScanning(true)
     toast.loading('جاري قراءة الإيصال...', { id: 'scan' })
     try {
-      // خزّن الصورة مضغوطة
+      // تُحفظ مضغوطة كـ Data URL للمعاينة — الرفع إلى Storage يتم عند حفظ القيد
       const imageData = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
 
       const text = await readDocumentText(file, `هذا إيصال أو فاتورة مصروف (قد يكون صورة أو ممسوح ضوئياً). استخرج البيانات وأرجع JSON فقط بدون شرح:
@@ -164,7 +206,7 @@ export default function CashBook() {
     }
   }
 
-  // رفع صورة الإيصال يدوياً (تُخزّن base64)
+  // رفع صورة الإيصال يدوياً (معاينة فورية — الرفع السحابي عند الحفظ)
   const handleManualImage = async (file: File) => {
     try {
       const imageData = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
@@ -186,37 +228,69 @@ export default function CashBook() {
     if (!form.description) { toast.error('يجب إدخال الوصف'); return }
     if (!form.amount || n(form.amount) <= 0) { toast.error('يجب إدخال المبلغ'); return }
     setSaving(true)
-    const proj = projects.find(p => p.id === form.project_id)
-    const payload = {
-      entry_date: form.entry_date,
-      description: form.description,
-      vendor_name: form.vendor_name ?? '',
-      category: form.category ?? 'other',
-      amount: n(form.amount),
-      payment_method: form.payment_method ?? 'cash',
-      project_id: form.project_id || null,
-      project_name: proj?.project_name ?? '',
-      receipt_url: form.receipt_url ?? '',
-      receipt_image_data: form.receipt_image_data ?? '',
-      expense_type: form.expense_type ?? 'general',
-      vat_amount: n(form.vat_amount),
-      is_vat_recoverable: !!form.is_vat_recoverable,
-      notes: form.notes ?? '',
+    try {
+      // رفع صورة الإيصال إلى التخزين السحابي — يُحفظ المسار القصير فقط في القاعدة
+      let receiptImage = form.receipt_image_data
+      if (receiptImage && isDataUrl(receiptImage)) {
+        receiptImage = await uploadDataUrl(receiptImage, 'cash-receipts')
+      }
+
+      const proj = projects.find(p => p.id === form.project_id)
+      const payload = {
+        entry_date: form.entry_date,
+        description: form.description,
+        vendor_name: form.vendor_name ?? '',
+        category: form.category ?? 'other',
+        amount: n(form.amount),
+        payment_method: form.payment_method ?? 'cash',
+        project_id: form.project_id || null,
+        project_name: proj?.project_name ?? '',
+        receipt_url: form.receipt_url ?? '',
+        receipt_image_data: receiptImage,
+        expense_type: form.expense_type ?? 'general',
+        vat_amount: n(form.vat_amount),
+        is_vat_recoverable: !!form.is_vat_recoverable,
+        notes: form.notes ?? '',
+      }
+      const { error } = await supabase.from('accounts_payable').insert(payload)
+      if (error) throw error
+      toast.success('تم تسجيل القيد')
+      setForm(emptyForm())
+      setShowForm(false)
+      reload()
+    } catch (e) {
+      toast.error('حدث خطأ: ' + ((e as Error)?.message ?? ''))
+    } finally {
+      setSaving(false)
     }
-    const { error } = await supabase.from('accounts_payable').insert(payload)
-    if (error) { toast.error('حدث خطأ: ' + error.message); setSaving(false); return }
-    toast.success('تم تسجيل القيد')
-    setForm(emptyForm())
-    setShowForm(false)
-    reload()
   }
 
   const handleDelete = async () => {
     if (!deleteId) return
-    await supabase.from('accounts_payable').delete().eq('id', deleteId)
+    const target = entries.find(e => e.id === deleteId)
+    // نقرأ مسار الإيصال قبل حذف الصف لتنظيف ملفه من Storage بعد الحذف
+    const oldReceipt = target?.has_receipt_image ? await fetchEntryReceipt(deleteId) : ''
+    const { error } = await supabase.from('accounts_payable').delete().eq('id', deleteId)
+    if (error) { toast.error('تعذّر الحذف'); return }
+    if (oldReceipt && !isDataUrl(oldReceipt)) {
+      deleteAttachment(oldReceipt).catch(() => { /* تنظيف اختياري */ })
+    }
     toast.success('تم الحذف')
     setDeleteId(null)
     reload()
+  }
+
+  // معاينة إيصال قيد من القائمة — الجلب عند الطلب فقط (Data URL قديم أو رابط موقّع)
+  const openEntryReceipt = async (id: string) => {
+    setReceiptLoadingId(id)
+    try {
+      const raw = await fetchEntryReceipt(id)
+      const url = await resolveAttachmentUrl(raw)
+      if (url) setPreviewImg(url)
+      else toast.error('تعذّر فتح الإيصال')
+    } finally {
+      setReceiptLoadingId(null)
+    }
   }
 
   // ── التصفية ──
@@ -332,7 +406,7 @@ export default function CashBook() {
             <label className="text-sm font-medium text-slate-700">صورة الإيصال:</label>
             {form.receipt_image_data ? (
               <div className="flex items-center gap-2">
-                <button onClick={() => setPreviewImg(form.receipt_image_data!)} className="text-sm text-amber-700 hover:underline flex items-center gap-1">
+                <button onClick={() => setPreviewImg(form.receipt_image_data)} className="text-sm text-amber-700 hover:underline flex items-center gap-1">
                   <ReceiptIcon size={14} /> عرض الإيصال
                 </button>
                 <button onClick={() => setForm(p => ({ ...p, receipt_image_data: '' }))} className="text-xs text-red-500 hover:underline">إزالة</button>
@@ -477,8 +551,10 @@ export default function CashBook() {
                     <td className="px-4 py-3 font-bold text-red-600 whitespace-nowrap">{formatCurrency(n(e.amount))}</td>
                     <td className="px-4 py-3 text-green-700 text-xs whitespace-nowrap">{n(e.vat_amount) > 0 ? formatCurrency(n(e.vat_amount)) : '—'}</td>
                     <td className="px-4 py-3">
-                      {e.receipt_image_data ? (
-                        <button onClick={() => setPreviewImg(e.receipt_image_data!)} className="text-amber-600 hover:text-amber-800"><ReceiptIcon size={15} /></button>
+                      {e.has_receipt_image ? (
+                        <button onClick={() => openEntryReceipt(e.id)} disabled={receiptLoadingId === e.id} className="text-amber-600 hover:text-amber-800 disabled:opacity-50">
+                          {receiptLoadingId === e.id ? <Loader2 size={15} className="animate-spin" /> : <ReceiptIcon size={15} />}
+                        </button>
                       ) : e.receipt_url ? (
                         <button onClick={() => openStoredFile(e.receipt_url)} className="text-primary-600 hover:text-primary-800"><ExternalLink size={14} /></button>
                       ) : <span className="text-slate-300">—</span>}
