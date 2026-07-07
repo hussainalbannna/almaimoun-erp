@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Search, Eye, Pencil, Trash2, X, Banknote, ShieldCheck,
@@ -8,6 +8,7 @@ import {
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntil } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -20,6 +21,13 @@ import toast from 'react-hot-toast'
 //  مركز الشيكات — إدارة موحّدة لكل شيكات المؤسسة
 //  آجلة + ضمان | صادرة + واردة | تسوية / ارتداد / استرجاع
 //  جدول cheques هو مصدر الحقيقة — يتغذّى تلقائياً من المشتريات والباطن
+//
+//  الأداء والتخزين:
+//  - القائمة تجلب أعمدة خفيفة فقط (بلا cheque_image_data الثقيل) —
+//    عمود has_image المولَّد في قاعدة البيانات يكشف وجود الصورة.
+//  - صورة الشيك تُجلب عند الطلب فقط (فتح العرض/التعديل).
+//  - الصور الجديدة تُرفع إلى Supabase Storage ويُحفظ مسارها القصير،
+//    مع توافق خلفي كامل للسجلّات القديمة المخزَّنة base64.
 // ════════════════════════════════════════════════════════════════════
 
 interface Cheque {
@@ -39,7 +47,7 @@ interface Cheque {
   project_name: string
   related_type: string
   related_id: string | null
-  cheque_image_data: string
+  has_image: boolean
   notes: string
   created_at: string
 }
@@ -92,15 +100,29 @@ const emptyForm = {
   notes: '',
 }
 
+// الأعمدة الخفيفة للقائمة — بلا cheque_image_data (كان يضخّم الرد ويبطئ التحميل)
+const LIGHT_COLUMNS =
+  'id, cheque_number, direction, cheque_type, party_type, party_name, amount, bank_name, '
+  + 'issue_date, due_date, status, cleared_date, project_id, project_name, related_type, '
+  + 'related_id, has_image, notes, created_at'
+
 // جلب الشيكات ('cheques' — مفتاح مشترك) وقائمة المشاريع (مصادر React Query)
 async function fetchAllCheques(): Promise<Cheque[]> {
-  const { data } = await supabase.from('cheques').select('*').order('due_date', { ascending: true, nullsFirst: false })
-  return (data ?? []) as Cheque[]
+  const { data } = await supabase.from('cheques').select(LIGHT_COLUMNS).order('due_date', { ascending: true, nullsFirst: false })
+  return (data ?? []) as unknown as Cheque[]
 }
 async function fetchProjectsList(): Promise<ProjectOpt[]> {
   const { data } = await supabase.from('projects').select('id, project_name').order('project_name')
   return (data ?? []) as ProjectOpt[]
 }
+// جلب صورة شيك واحد عند الطلب فقط — قد تكون مسار Storage أو base64 قديم
+async function fetchChequeImage(id: string): Promise<string> {
+  const { data } = await supabase.from('cheques').select('cheque_image_data').eq('id', id).maybeSingle()
+  return (data?.cheque_image_data as string | undefined) ?? ''
+}
+
+// هل القيمة/الرابط يشير إلى ملف PDF؟ (يشمل الروابط الموقّعة من Storage)
+const isPdfValue = (v: string) => v.startsWith('data:application/pdf') || /\.pdf($|\?)/i.test(v)
 
 export default function ChequesCenter() {
   const queryClient = useQueryClient()
@@ -112,8 +134,12 @@ export default function ChequesCenter() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
+  // القيمة الأصلية لصورة الشيك عند فتح التعديل — لتنظيف Storage عند الاستبدال/الإزالة
+  const originalImageRef = useRef('')
 
   const [viewCheque, setViewCheque] = useState<Cheque | null>(null)
+  // صورة مودال العرض تُجلب وتُحلّ (رابط موقّع/‏base64 قديم) عند الطلب فقط
+  const [viewImage, setViewImage] = useState<{ loading: boolean; url: string | null }>({ loading: false, url: null })
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   // مودال التسوية (صُرف بتاريخ فعلي)
@@ -174,11 +200,27 @@ export default function ChequesCenter() {
     return list
   }, [cheques, tab, search, projectFilter, t])
 
-  // ─── حفظ (إضافة / تعديل يدوي) ────────────────────────────────────
-  const openNew = () => { setEditingId(null); setForm(emptyForm); setShowForm(true) }
+  // ─── فتح المرفقات (توافق خلفي كامل) ──────────────────────────────
+  // Data URL قديم → يُفتح مباشرة | مسار Storage → رابط موقّع في تبويب جديد
+  const openAttachmentValue = async (value: string) => {
+    if (!value) return
+    if (isDataUrl(value)) { openStoredFile(value); return }
+    const url = value.startsWith('http') ? value : await resolveAttachmentUrl(value)
+    if (url) window.open(url, '_blank', 'noopener')
+    else toast.error('تعذّر فتح المرفق')
+  }
 
-  const openEdit = (c: Cheque) => {
+  // ─── حفظ (إضافة / تعديل يدوي) ────────────────────────────────────
+  const openNew = () => {
+    setEditingId(null)
+    originalImageRef.current = ''
+    setForm(emptyForm)
+    setShowForm(true)
+  }
+
+  const openEdit = async (c: Cheque) => {
     setEditingId(c.id)
+    originalImageRef.current = ''
     setForm({
       cheque_number: c.cheque_number,
       direction: c.direction,
@@ -190,10 +232,16 @@ export default function ChequesCenter() {
       issue_date: c.issue_date ?? new Date().toISOString().slice(0, 10),
       due_date: c.due_date ?? '',
       project_id: c.project_id ?? '',
-      cheque_image_data: c.cheque_image_data,
+      cheque_image_data: '',
       notes: c.notes,
     })
     setShowForm(true)
+    // الصورة تُجلب عند الطلب — لا تُحمَّل ضمن القائمة إطلاقاً
+    if (c.has_image) {
+      const raw = await fetchChequeImage(c.id)
+      originalImageRef.current = raw
+      setForm(f => ({ ...f, cheque_image_data: raw }))
+    }
   }
 
   const handleSave = async () => {
@@ -203,6 +251,12 @@ export default function ChequesCenter() {
     if (form.cheque_type === 'deferred' && !form.due_date) { toast.error('أدخل تاريخ استحقاق الشيك الآجل'); return }
     setSaving(true)
     try {
+      // الصور الجديدة (Data URL) تُرفع إلى Storage ويُحفظ المسار القصير فقط
+      let imageValue = form.cheque_image_data
+      if (imageValue && isDataUrl(imageValue)) {
+        imageValue = await uploadDataUrl(imageValue, 'cheques')
+      }
+
       const projectName = projects.find(p => p.id === form.project_id)?.project_name ?? ''
       const payload = {
         cheque_number: form.cheque_number.trim(),
@@ -216,7 +270,7 @@ export default function ChequesCenter() {
         due_date: form.due_date || null,
         project_id: form.project_id || null,
         project_name: projectName,
-        cheque_image_data: form.cheque_image_data,
+        cheque_image_data: imageValue,
         notes: form.notes,
         updated_at: new Date().toISOString(),
       }
@@ -229,6 +283,13 @@ export default function ChequesCenter() {
         if (error) throw error
         toast.success('تم تسجيل الشيك')
       }
+
+      // تنظيف Storage: إن استُبدلت الصورة القديمة أو أُزيلت، احذف ملفها (دون تعطيل الحفظ)
+      const old = originalImageRef.current
+      if (old && !isDataUrl(old) && old !== imageValue) {
+        deleteAttachment(old).catch(() => { /* تنظيف اختياري — لا يؤثر على العملية */ })
+      }
+
       setShowForm(false)
       reload()
     } catch (e) {
@@ -255,7 +316,7 @@ export default function ChequesCenter() {
     }
     toast.success(msg[status])
     setClearTarget(null)
-    setViewCheque(null)
+    closeView()
     reload()
   }
 
@@ -268,8 +329,13 @@ export default function ChequesCenter() {
       setDeleteId(null)
       return
     }
+    // نقرأ مسار الصورة قبل حذف الصف لتنظيف ملفها من Storage بعد الحذف
+    const oldImage = target?.has_image ? await fetchChequeImage(deleteId) : ''
     const { error } = await supabase.from('cheques').delete().eq('id', deleteId)
     if (error) { toast.error('تعذّر الحذف'); return }
+    if (oldImage && !isDataUrl(oldImage)) {
+      deleteAttachment(oldImage).catch(() => { /* تنظيف اختياري */ })
+    }
     toast.success('تم حذف الشيك')
     setDeleteId(null)
     reload()
@@ -278,12 +344,27 @@ export default function ChequesCenter() {
   // ─── صورة الشيك ──────────────────────────────────────────────────
   const handleImageUpload = async (file: File) => {
     try {
+      // تُضغط وتبقى Data URL للمعاينة الفورية — الرفع الفعلي إلى Storage يتم عند الحفظ
       const data = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
       setForm(f => ({ ...f, cheque_image_data: data }))
       toast.success('تم إرفاق صورة الشيك')
     } catch {
       toast.error('تعذّر قراءة الملف')
     }
+  }
+
+  // ─── عرض التفاصيل (الصورة تُجلب عند الفتح فقط) ───────────────────
+  const openView = async (c: Cheque) => {
+    setViewCheque(c)
+    if (!c.has_image) { setViewImage({ loading: false, url: null }); return }
+    setViewImage({ loading: true, url: null })
+    const raw = await fetchChequeImage(c.id)
+    const url = await resolveAttachmentUrl(raw)
+    setViewImage({ loading: false, url })
+  }
+  const closeView = () => {
+    setViewCheque(null)
+    setViewImage({ loading: false, url: null })
   }
 
   const isLinked = (c: Cheque) => c.related_type !== 'manual'
@@ -408,7 +489,7 @@ export default function ChequesCenter() {
                             {TYPE_LABELS[c.cheque_type]} · {DIRECTION_LABELS[c.direction]}
                             {c.bank_name ? ` · ${c.bank_name}` : ''}
                             {isLinked(c) && <span className="inline-flex items-center gap-0.5 text-blue-500"><Link2 size={10} /> {SOURCE_LABELS[c.related_type] ?? c.related_type}</span>}
-                            {c.cheque_image_data && <ImageIcon size={11} className="text-slate-400" />}
+                            {c.has_image && <ImageIcon size={11} className="text-slate-400" />}
                           </div>
                         </div>
                       </div>
@@ -455,7 +536,7 @@ export default function ChequesCenter() {
                             <RotateCcw size={16} />
                           </button>
                         )}
-                        <button onClick={() => setViewCheque(c)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="عرض">
+                        <button onClick={() => openView(c)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="عرض">
                           <Eye size={16} />
                         </button>
                         <button onClick={() => openEdit(c)} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg" title="تعديل">
@@ -501,7 +582,7 @@ export default function ChequesCenter() {
 
       {/* ═══ مودال عرض التفاصيل ═══ */}
       {viewCheque && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setViewCheque(null)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={closeView}>
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white">
               <div className="flex items-center gap-2">
@@ -509,7 +590,7 @@ export default function ChequesCenter() {
                 <h3 className="font-bold text-slate-800">تفاصيل الشيك</h3>
                 <Badge color={STATUS_META[viewCheque.status]?.color ?? 'gray'}>{STATUS_META[viewCheque.status]?.label}</Badge>
               </div>
-              <button onClick={() => setViewCheque(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
+              <button onClick={closeView} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
             </div>
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
@@ -534,15 +615,23 @@ export default function ChequesCenter() {
                 </div>
               )}
 
-              {viewCheque.cheque_image_data ? (
+              {viewCheque.has_image ? (
                 <div>
                   <div className="text-xs text-slate-400 mb-2 flex items-center gap-1"><ImageIcon size={12} /> صورة الشيك (اضغط للتكبير)</div>
-                  {viewCheque.cheque_image_data.startsWith('data:image') ? (
-                    <img src={viewCheque.cheque_image_data} alt="صورة الشيك"
-                      className="w-full rounded-xl border border-slate-200 cursor-zoom-in hover:opacity-90"
-                      onClick={() => openStoredFile(viewCheque.cheque_image_data)} />
+                  {viewImage.loading ? (
+                    <div className="h-24 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center text-xs text-slate-400">
+                      جاري تحميل الصورة...
+                    </div>
+                  ) : viewImage.url ? (
+                    isPdfValue(viewImage.url) ? (
+                      <Button variant="outline" onClick={() => openAttachmentValue(viewImage.url!)}>فتح ملف PDF</Button>
+                    ) : (
+                      <img src={viewImage.url} alt="صورة الشيك"
+                        className="w-full rounded-xl border border-slate-200 cursor-zoom-in hover:opacity-90"
+                        onClick={() => openAttachmentValue(viewImage.url!)} />
+                    )
                   ) : (
-                    <Button variant="outline" onClick={() => openStoredFile(viewCheque.cheque_image_data)}>فتح المرفق</Button>
+                    <div className="text-xs text-slate-400">تعذّر تحميل الصورة</div>
                   )}
                 </div>
               ) : (
@@ -560,7 +649,7 @@ export default function ChequesCenter() {
                 {viewCheque.status === 'pending' && (
                   <Button size="sm" variant="outline" onClick={() => updateStatus(viewCheque, 'bounced')} icon={<Ban size={14} />}>ارتداد</Button>
                 )}
-                <Button size="sm" variant="secondary" onClick={() => { openEdit(viewCheque); setViewCheque(null) }} icon={<Pencil size={14} />}>تعديل</Button>
+                <Button size="sm" variant="secondary" onClick={() => { openEdit(viewCheque); closeView() }} icon={<Pencil size={14} />}>تعديل</Button>
               </div>
             </div>
           </div>
@@ -639,12 +728,18 @@ export default function ChequesCenter() {
                         className="w-full max-h-44 object-contain rounded-xl border border-slate-200 cursor-zoom-in bg-slate-50"
                         onClick={() => openStoredFile(form.cheque_image_data)} />
                     ) : (
-                      <Button variant="outline" onClick={() => openStoredFile(form.cheque_image_data)}>فتح المرفق</Button>
+                      <Button variant="outline" onClick={() => openAttachmentValue(form.cheque_image_data)}>
+                        {isDataUrl(form.cheque_image_data) ? 'فتح المرفق' : 'عرض الصورة المرفقة'}
+                      </Button>
                     )}
                     <button onClick={() => setForm(f => ({ ...f, cheque_image_data: '' }))}
                       className="absolute top-2 left-2 p-1 bg-white/90 rounded-lg text-red-500 hover:bg-red-50 border border-slate-200">
                       <Trash2 size={14} />
                     </button>
+                  </div>
+                ) : editingId && cheques.find(c => c.id === editingId)?.has_image && !originalImageRef.current ? (
+                  <div className="h-20 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center text-xs text-slate-400">
+                    جاري تحميل الصورة المرفقة...
                   </div>
                 ) : (
                   <label className="flex items-center justify-center gap-2 h-20 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 text-sm cursor-pointer hover:border-slate-300 hover:bg-slate-50">
