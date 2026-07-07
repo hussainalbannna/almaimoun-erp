@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { nextSerial, formatCurrency } from '../../lib/utils'
+import { formatCurrency } from '../../lib/utils'
 import type { Invoice, InvoiceItem, Customer, Project, ProjectMilestone, ExtractedDocumentData } from '../../types'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -87,12 +87,14 @@ export default function InvoiceForm() {
       .then(({ data }) => setMilestones((data ?? []) as ProjectMilestone[]))
   }, [selectedProjectId])
 
-  // ترقيم تلقائي للفاتورة الجديدة
+  const [invoicePrefix, setInvoicePrefix] = useState('INV')
+
+  // بادئة ترقيم الفواتير من الإعدادات — تُستخدم عند توليد الرقم آلياً وقت الحفظ
   useEffect(() => {
     if (isEdit) return
-    supabase.from('invoices').select('invoice_number').then(({ data }) => {
-      const nums = (data ?? []).map((r: { invoice_number: string }) => r.invoice_number)
-      setForm(prev => ({ ...prev, invoice_number: nextSerial(nums, 184) }))
+    supabase.from('company_settings').select('invoice_prefix').maybeSingle().then(({ data }) => {
+      const prefix = (data as { invoice_prefix?: string } | null)?.invoice_prefix?.trim()
+      if (prefix) setInvoicePrefix(prefix)
     })
   }, [isEdit])
 
@@ -218,16 +220,24 @@ export default function InvoiceForm() {
   // ─── الحفظ ───────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.invoice_number.trim()) { toast.error('رقم الفاتورة مطلوب'); return }
     if (!form.customer_name.trim()) { toast.error('اسم العميل مطلوب'); return }
     const validItems = items.filter(i => i.description.trim())
     if (validItems.length === 0) { toast.error('يجب إضافة بند واحد على الأقل'); return }
+    if (isEdit && !form.invoice_number.trim()) { toast.error('رقم الفاتورة مطلوب'); return }
 
     setLoading(true)
     try {
+      // رقم الفاتورة: يدوي إن أُدخل، وإلا يُولَّد ذرّياً من قاعدة البيانات (INV-YYYY-0001) وقت الحفظ فقط
+      let invoiceNumber = form.invoice_number.trim()
+      if (!isEdit && !invoiceNumber) {
+        const { data: gen, error: genErr } = await supabase.rpc('next_invoice_number', { p_prefix: invoicePrefix })
+        if (genErr || !gen) throw genErr ?? new Error('تعذّر توليد رقم الفاتورة')
+        invoiceNumber = String(gen)
+      }
+
       // بناء الحمولة بشكل صريح لتفادي إرسال حقول غير موجودة، وتحويل التواريخ الفارغة إلى null
       const payload = {
-        invoice_number: form.invoice_number.trim(),
+        invoice_number: invoiceNumber,
         customer_id: selectedCustomerId || null,
         customer_name: form.customer_name.trim(),
         customer_email: form.customer_email,
@@ -345,7 +355,7 @@ export default function InvoiceForm() {
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h3 className="font-semibold text-slate-700 mb-4 text-sm">معلومات الفاتورة</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <Input label="رقم الفاتورة *" value={form.invoice_number} onChange={setField('invoice_number')} />
+            <Input label="رقم الفاتورة" value={form.invoice_number} onChange={setField('invoice_number')} placeholder={isEdit ? undefined : `${invoicePrefix}-${new Date().getFullYear()}-•••• (تلقائي عند الحفظ)`} />
             <Input label="تاريخ الإصدار *" type="date" value={form.issue_date} onChange={setField('issue_date')} />
             <Input label="تاريخ الاستحقاق" type="date" value={form.due_date} onChange={setField('due_date')} />
             <Select label="الحالة" value={form.status} onChange={setField('status')} options={STATUS_OPTIONS} />
