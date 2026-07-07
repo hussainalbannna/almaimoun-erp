@@ -2,7 +2,7 @@
 //  مؤسسة الميمون — Service Worker
 //  استراتيجية ذكية: الشبكة أولاً للبيانات، الكاش أولاً للأصول الثابتة
 // ===================================================================
-const VERSION = 'almaimoun-v4'
+const VERSION = 'almaimoun-v5'
 const STATIC_CACHE = `${VERSION}-static`
 const RUNTIME_CACHE = `${VERSION}-runtime`
 
