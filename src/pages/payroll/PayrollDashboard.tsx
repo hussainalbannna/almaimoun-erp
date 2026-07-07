@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, ArrowLeft, Printer, CheckCircle } from 'lucide-react'
+import { Download, ArrowLeft, Printer, CheckCircle, ShieldCheck, Wallet } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Worker, WorkerAdvance } from '../../types'
 import { formatCurrency } from '../../lib/utils'
@@ -10,10 +10,32 @@ import toast from 'react-hot-toast'
 
 const BRANCHES = ['all', '2', '4', '5']
 const BRANCH_LABELS: Record<string, string> = { all: 'الكل', '2': 'الفرع 2', '4': 'الفرع 4', '5': 'الفرع 5' }
-const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
+const MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
 
 type WorkerWithAdvances = Worker & { advances: WorkerAdvance[] }
 const EMPTY_WORKERS: WorkerWithAdvances[] = []
+
+// تنزيل مصفوفة صفوف كملف CSV يفتح في Excel (BOM لدعم العربية + تهريب آمن للخلايا)
+function downloadCsv(rows: (string | number)[][], filename: string) {
+  const csv = rows
+    .map(row =>
+      row
+        .map(cell => {
+          const s = String(cell ?? '')
+          // تغليف أي خلية تحوي فاصلة أو اقتباساً أو سطراً جديداً (يمنع كسر الأعمدة عند وجود فاصلة في الاسم)
+          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+        })
+        .join(','),
+    )
+    .join('\r\n')
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 // جلب عمّال الشركة الشهريين وسلفهم غير المخصومة (مصدر React Query)
 async function fetchPayrollWorkers(): Promise<WorkerWithAdvances[]> {
@@ -52,8 +74,12 @@ export default function PayrollDashboard() {
 
   const paidCount = useMemo(() => branchWorkers.filter(w => paidIds.has(w.id)).length, [branchWorkers, paidIds])
 
+  const branchTag = branch === 'all' ? 'AllBranches' : 'Branch' + branch
+
+  // تصدير 1: ملف حماية الأجور (WPS) — فقط المبلغ الرسمي المحوّل عبر النظام (الأساسي + البدل الاجتماعي)
   const exportWPS = () => {
-    const rows = [
+    if (branchWorkers.length === 0) { toast.error('لا يوجد موظفون للتصدير'); return }
+    const rows: (string | number)[][] = [
       ['CPR/GCC ID', 'Worker Name', 'IBAN/Wallet Number', 'Currency', 'Fixed Salary', 'Social Allowance', 'variable Salary BHD', 'Total Amount BHD', 'Salary Month', 'Salary year'],
       ...branchWorkers.map(w => [
         w.cpr,
@@ -66,21 +92,38 @@ export default function PayrollDashboard() {
         (Number(w.basic_salary) + Number(w.social_allowance)).toFixed(3),
         MONTHS[month],
         year,
-      ])
+      ]),
     ]
-    const csv = rows.map(r => r.join(',')).join('\n')
-    const bom = '\uFEFF'
-    const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `WPS_${branch === 'all' ? 'AllBranches' : 'Branch' + branch}_${MONTHS[month]}_${year}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    toast.success('تم تصدير ملف WPS')
+    downloadCsv(rows, `WPS_${branchTag}_${MONTHS[month]}_${year}.csv`)
+    toast.success('تم تصدير ملف حماية الأجور (WPS)')
+  }
+
+  // تصدير 2: كشف الرواتب الفعلية — المبلغ الحقيقي المدفوع لكل موظف بعد خصم السلف المعلّقة
+  const exportActual = () => {
+    if (branchWorkers.length === 0) { toast.error('لا يوجد موظفون للتصدير'); return }
+    const rows: (string | number)[][] = [
+      ['اسم الموظف', 'CPR', 'الراتب الفعلي', 'السلف المعلقة', 'الصافي المستحق', 'الشهر', 'السنة'],
+      ...branchWorkers.map(w => {
+        const advances = w.advances.reduce((s, a) => s + Number(a.amount), 0)
+        const actual = Number(w.actual_salary)
+        return [
+          w.name_en || w.name,
+          w.cpr || '-',
+          actual.toFixed(3),
+          advances.toFixed(3),
+          (actual - advances).toFixed(3),
+          MONTHS[month],
+          year,
+        ]
+      }),
+      ['الإجمالي', '', totalActual.toFixed(3), totalAdvances.toFixed(3), (totalActual - totalAdvances).toFixed(3), '', ''],
+    ]
+    downloadCsv(rows, `Salaries_${branchTag}_${MONTHS[month]}_${year}.csv`)
+    toast.success('تم تصدير كشف الرواتب الفعلية')
   }
 
   const handlePayAll = async () => {
+    if (branchWorkers.length === 0) { toast.error('لا يوجد موظفون'); return }
     if (!window.confirm(`هل تريد تسجيل صرف الرواتب لـ ${branchWorkers.length} موظف؟`)) return
     setPayingAll(true)
     for (const w of branchWorkers) {
@@ -96,7 +139,7 @@ export default function PayrollDashboard() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/workers')} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">
             <ArrowLeft size={20} />
@@ -106,9 +149,10 @@ export default function PayrollDashboard() {
             <p className="text-slate-500 text-sm">احتساب وصرف جميع رواتب العمال والموظفين</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button variant="secondary" icon={<Printer size={16} />} onClick={() => window.print()}>طباعة</Button>
-          <Button variant="secondary" icon={<Download size={16} />} onClick={exportWPS}>تصدير Excel</Button>
+          <Button variant="secondary" icon={<ShieldCheck size={16} />} onClick={exportWPS}>تصدير حماية الأجور (WPS)</Button>
+          <Button variant="secondary" icon={<Wallet size={16} />} onClick={exportActual}>تصدير الرواتب الفعلية</Button>
           <Button icon={<CheckCircle size={16} />} loading={payingAll} onClick={handlePayAll}>صرف الكل</Button>
         </div>
       </div>
@@ -134,14 +178,14 @@ export default function PayrollDashboard() {
 
       {/* WPS Note */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5 text-xs text-amber-800">
-        ملاحظة: كشف الرواتب هذا يشمل فقط عمال الشركة المسجلين. الأرقام المُصدَّرة (Fixed Salary + Social Allowance) هي فقط ما يتم تحويله عبر نظام الرواتب — بقية المبالغ تُحوَّل بشكل منفصل.
+        ملاحظة: <strong>حماية الأجور (WPS)</strong> يشمل فقط المبلغ الرسمي المحوّل عبر النظام (الأساسي + البدل الاجتماعي). أما <strong>الرواتب الفعلية</strong> فهي المبالغ الحقيقية المدفوعة لكل موظف بعد خصم السلف — يُصدَّر كلٌّ في ملف مستقل.
       </div>
 
       {/* Summary KPIs */}
       <div className="grid grid-cols-3 gap-4 mb-6">
         {[
-          { label: 'إجمالي الصافي', value: formatCurrency(totalWPS), color: '#7b4a2d', sub: `${branchWorkers.length} موظف` },
-          { label: 'عدد الموظفين', value: String(branchWorkers.length), color: '#2563eb', sub: `تم الصرف: ${paidCount} / ${branchWorkers.length}` },
+          { label: 'إجمالي حماية الأجور (WPS)', value: formatCurrency(totalWPS), color: '#7b4a2d', sub: `${branchWorkers.length} موظف` },
+          { label: 'إجمالي الرواتب الفعلية', value: formatCurrency(totalActual), color: '#2563eb', sub: `تم الصرف: ${paidCount} / ${branchWorkers.length}` },
           { label: 'السلف المعلقة', value: formatCurrency(totalAdvances), color: '#dc2626', sub: 'تُخصم من الراتب' },
         ].map(kpi => (
           <div key={kpi.label} className="bg-white rounded-xl border border-slate-200 p-4">
