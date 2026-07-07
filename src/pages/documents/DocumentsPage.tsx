@@ -1,71 +1,113 @@
-import { useEffect, useState, useRef } from 'react'
-import { Trash2, FileArchive, Upload } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Trash2, FileArchive, Upload, ExternalLink, Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { parseDocument } from '../../lib/document-parser'
+import { uploadAttachment, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import type { Document, ExtractedDocumentData } from '../../types'
 import Button from '../../components/ui/Button'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { formatDate } from '../../lib/utils'
 
-// صف خفيف للقائمة — بلا file_url (كان يحمل base64) ولا extracted_text الطويل
-type DocumentRow = Pick<Document, 'id' | 'name' | 'file_type' | 'extracted_data' | 'created_at'>
+// ════════════════════════════════════════════════════════════════════
+//  مركز المستندات — حفظ سحابي + استخراج بيانات تلقائي
+//
+//  الأداء والتخزين:
+//  - الملف الأصلي يُرفع إلى Supabase Storage (bucket: attachments/documents)
+//    ويُحفظ مساره القصير فقط في file_url — لا base64 في القاعدة.
+//  - القائمة تجلب أعمدة خفيفة فقط؛ عمود has_file المولَّد يكشف وجود
+//    الملف، ويُفتح برابط موقّع عند الطلب فقط.
+//  - يُحفظ الملف سحابياً حتى لو تعذّر استخراج بياناته تلقائياً.
+// ════════════════════════════════════════════════════════════════════
+
+// صف خفيف للقائمة — بلا file_url ولا extracted_text الطويل
+type DocumentRow = Pick<Document, 'id' | 'name' | 'file_type' | 'extracted_data' | 'created_at'> & { has_file?: boolean }
+
+// استعلام خفيف: فقط الأعمدة التي تعرضها القائمة، دون الحقول الثقيلة
+async function fetchDocuments(): Promise<DocumentRow[]> {
+  const { data, error } = await supabase
+    .from('documents')
+    .select('id, name, file_type, extracted_data, has_file, created_at')
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as DocumentRow[]
+}
 
 export default function DocumentsPage() {
-  const [documents, setDocuments] = useState<DocumentRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [parsing, setParsing] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [openingId, setOpeningId] = useState<string | null>(null)
   const [extracted, setExtracted] = useState<{ data: ExtractedDocumentData; text: string; name: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const load = async () => {
-    try {
-      // استعلام خفيف: نجلب فقط الأعمدة التي تعرضها القائمة، دون الحقول الثقيلة (file_url / extracted_text)
-      const { data, error } = await supabase
-        .from('documents')
-        .select('id, name, file_type, extracted_data, created_at')
-        .order('created_at', { ascending: false })
-      if (error) throw error
-      setDocuments((data ?? []) as DocumentRow[])
-    } catch (e) {
-      toast.error('تعذّر تحميل المستندات: ' + ((e as Error)?.message ?? 'خطأ غير معروف'))
-      setDocuments([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { load() }, [])
+  // مصدر البيانات الموحّد ('documents') — أي تعديل يُبطِل المفتاح فتتحدّث القائمة تلقائياً
+  const { data: documents = [], isLoading: loading } = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['documents'] })
 
   const handleFile = async (file: File) => {
     setParsing(true)
     try {
-      const { data, text } = await parseDocument(file)
-      setExtracted({ data, text, name: file.name })
-      // نحفظ البيانات المستخرجة فقط (هذه الصفحة أداة تحليل، لا تخزّن الملف نفسه)
+      // 1) الحفظ السحابي أولاً — الملف لا يضيع حتى لو تعثّر التحليل
+      const path = await uploadAttachment(file, 'documents')
+
+      // 2) محاولة استخراج البيانات تلقائياً (لا توقف الحفظ عند الفشل)
+      let data: ExtractedDocumentData = {} as ExtractedDocumentData
+      let text = ''
+      try {
+        const result = await parseDocument(file)
+        data = result.data
+        text = result.text
+        setExtracted({ data, text, name: file.name })
+      } catch {
+        toast('تم حفظ الملف سحابياً، وتعذّر استخراج البيانات تلقائياً', { icon: 'ℹ️' })
+      }
+
+      // 3) حفظ السجل: مسار Storage القصير + البيانات المستخرجة
       const { error } = await supabase.from('documents').insert({
         name: file.name,
         file_type: file.name.split('.').pop() ?? '',
+        file_url: path,
         extracted_text: text.slice(0, 5000),
         extracted_data: data,
       })
       if (error) throw error
-      toast.success('تم قراءة الملف وحفظ البيانات المستخرجة')
-      load()
+      toast.success('تم حفظ المستند سحابياً وقراءة بياناته')
+      reload()
     } catch (e) {
-      toast.error('حدث خطأ أثناء قراءة الملف: ' + ((e as Error)?.message ?? ''))
+      toast.error('حدث خطأ أثناء حفظ الملف: ' + ((e as Error)?.message ?? ''))
     } finally {
       setParsing(false)
     }
   }
 
+  // فتح/تنزيل المستند برابط موقّع — الجلب عند الطلب فقط
+  const openDocument = async (id: string) => {
+    setOpeningId(id)
+    try {
+      const { data } = await supabase.from('documents').select('file_url').eq('id', id).maybeSingle()
+      const url = await resolveAttachmentUrl((data?.file_url as string | undefined) ?? '')
+      if (url) window.open(url, '_blank', 'noopener')
+      else toast.error('تعذّر فتح الملف')
+    } finally {
+      setOpeningId(null)
+    }
+  }
+
   const handleDelete = async () => {
     if (!deleteId) return
-    await supabase.from('documents').delete().eq('id', deleteId)
+    // نقرأ مسار الملف قبل حذف الصف لتنظيفه من Storage بعد الحذف
+    const { data: row } = await supabase.from('documents').select('file_url').eq('id', deleteId).maybeSingle()
+    const { error } = await supabase.from('documents').delete().eq('id', deleteId)
+    if (error) { toast.error('تعذّر حذف المستند'); return }
+    const path = (row?.file_url as string | undefined) ?? ''
+    if (path && !isDataUrl(path)) {
+      deleteAttachment(path).catch(() => { /* تنظيف اختياري */ })
+    }
     toast.success('تم حذف المستند')
     setDeleteId(null)
-    load()
+    reload()
   }
 
   const fileIcon = (type: string) => {
@@ -86,11 +128,11 @@ export default function DocumentsPage() {
       >
         <input ref={inputRef} type="file" className="hidden"
           accept=".pdf,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg"
-          onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = '' }} />
         {parsing ? (
           <div className="flex flex-col items-center gap-2">
             <div className="animate-spin w-8 h-8 border-2 border-primary-600 border-t-transparent rounded-full" />
-            <p className="text-sm text-slate-600">جاري قراءة وتحليل الملف...</p>
+            <p className="text-sm text-slate-600">جاري حفظ الملف سحابياً وتحليله...</p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-3">
@@ -98,8 +140,8 @@ export default function DocumentsPage() {
               <Upload size={24} className="text-primary-600" />
             </div>
             <div>
-              <p className="font-medium text-slate-700">رفع مستند لاستخراج البيانات تلقائياً</p>
-              <p className="text-sm text-slate-500 mt-1">يدعم: PDF, Excel, CSV, صور — يتم استخراج البيانات بدقة عالية</p>
+              <p className="font-medium text-slate-700">رفع مستند للحفظ السحابي واستخراج البيانات تلقائياً</p>
+              <p className="text-sm text-slate-500 mt-1">يدعم: PDF, Excel, CSV, صور — يُحفظ الملف في السحابة وتُستخرج بياناته بدقة عالية</p>
             </div>
             <Button variant="outline" size="sm">اختر ملفاً</Button>
           </div>
@@ -169,7 +211,13 @@ export default function DocumentsPage() {
                     </p>
                   )}
                 </div>
-                <button onClick={() => setDeleteId(doc.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500">
+                {doc.has_file && (
+                  <button onClick={() => openDocument(doc.id)} disabled={openingId === doc.id}
+                    className="p-1.5 rounded-lg hover:bg-primary-50 text-slate-400 hover:text-primary-600 disabled:opacity-50" title="فتح / تنزيل">
+                    {openingId === doc.id ? <Loader2 size={15} className="animate-spin" /> : <ExternalLink size={15} />}
+                  </button>
+                )}
+                <button onClick={() => setDeleteId(doc.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="حذف">
                   <Trash2 size={15} />
                 </button>
               </div>
@@ -181,7 +229,7 @@ export default function DocumentsPage() {
       <ConfirmDialog
         open={!!deleteId}
         title="حذف المستند"
-        message="هل أنت متأكد من حذف هذا المستند؟"
+        message="هل أنت متأكد من حذف هذا المستند؟ سيُحذف الملف من التخزين السحابي أيضاً."
         confirmLabel="حذف"
         onConfirm={handleDelete}
         onCancel={() => setDeleteId(null)}
