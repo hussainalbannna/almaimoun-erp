@@ -10,7 +10,6 @@ import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
 import { formatCurrency, formatDate } from '../../lib/utils'
 import { openStoredFile } from '../../lib/ai'
 import { getAttachmentUrl } from '../../lib/storage'
-import * as XLSX from 'xlsx'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
@@ -253,9 +252,11 @@ export default function PurchaseInvoiceList() {
   }
 
   // تصدير مشروع (عميل) واحد في ملف Excel مستقل — بنفس بيانات وتنسيق التصدير العام تماماً
-  const exportGroup = (g: { name: string; invoices: InvoiceRow[] }) => {
+  const exportGroup = async (g: { name: string; invoices: InvoiceRow[] }) => {
     if (g.invoices.length === 0) { toast.error('لا توجد فواتير في هذا المشروع'); return }
     try {
+      // تحميل مكتبة Excel عند الطلب فقط (تقلّل حجم التحميل الأولي للصفحة بشكل كبير)
+      const XLSX = await import('xlsx')
       const wb = XLSX.utils.book_new()
       const safeName = (g.name || 'مشروع').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28)
       const sheet = XLSX.utils.json_to_sheet(buildRows(g.invoices))
@@ -269,9 +270,11 @@ export default function PurchaseInvoiceList() {
   }
 
   // ═══ تصدير الكل: ورقة شاملة + ورقة لكل مشروع + ملخّص الضريبة ═══
-  const exportToExcel = () => {
+  const exportToExcel = async () => {
     if (invoices.length === 0) { toast.error('لا توجد فواتير للتصدير'); return }
     try {
+      // تحميل مكتبة Excel عند الطلب فقط
+      const XLSX = await import('xlsx')
       const wb = XLSX.utils.book_new()
 
       // ── الورقة الشاملة (كل الفواتير) ──
