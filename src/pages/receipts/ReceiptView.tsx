@@ -134,17 +134,25 @@ export default function ReceiptView() {
       const subject = `إيصال استلام رقم ${receipt.receipt_number} — مؤسسة الميمون للمقاولات`
       const html = buildEmailHTML(receipt, company)
 
+      // مفتاح Resend يبقى في أسرار الخادم حصرياً — لا يُرسَل من المتصفّح إطلاقاً
       const payload: Record<string, string> = { to: email, subject, html }
-      if (company?.resend_api_key) payload.resend_api_key = company.resend_api_key
       if (company?.smtp_from) payload.from = company.smtp_from
 
-      await supabase.functions.invoke('send-email', { body: payload })
-    } catch {
-      // Edge function unreachable — proceed gracefully
-    }
+      const { data: res, error } = await supabase.functions.invoke('send-email', { body: payload })
+      const result = res as { success?: boolean; error?: string } | null
 
-    toast.success('تم إرسال البريد الإلكتروني للعميل بنجاح')
-    setSending(false)
+      // نجاح فقط عند تأكيد الخادم — لا رسالة نجاح كاذبة عند فشل الإرسال
+      if (error || !result?.success) {
+        toast.error('تعذّر إرسال البريد: ' + (result?.error ?? error?.message ?? 'خطأ غير معروف'))
+        return
+      }
+
+      toast.success('تم إرسال البريد الإلكتروني للعميل بنجاح')
+    } catch (e) {
+      toast.error('تعذّر إرسال البريد: ' + ((e as Error)?.message ?? 'تعذّر الوصول للخادم'))
+    } finally {
+      setSending(false)
+    }
   }
 
   if (isLoading) return <div className="flex justify-center py-16"><div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" /></div>
