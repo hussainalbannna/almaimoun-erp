@@ -130,7 +130,7 @@ export default function PurchaseInvoiceForm() {
     vendor_invoice_number: '',
     entry_date: todayISO(),
     amount: '',
-    tax_rate: '10',
+    tax_rate: '0',   // بلا ضريبة تلقائية — تُختار يدوياً بزر 10% عند الحاجة فقط
     payment_method: 'cash' as PurchasePaymentMethod,
     check_due_date: '',
     // القيمة = مسار Storage (سجل موجود) أو Data URL جديد لم يُرفع بعد أو '' — تُحفظ في أعمدة *_path
@@ -170,7 +170,8 @@ export default function PurchaseInvoiceForm() {
             invoice_copy_data?: string; payment_proof_data?: string; check_image_data?: string
           }
           // amount مخزّن شامل الضريبة. نعرض المبلغ قبل الضريبة في الإدخال
-          const taxRate = inv.tax_rate != null ? Number(inv.tax_rate) : 10
+          // فاتورة قديمة بلا نسبة مسجّلة = معفاة (0) — لا تُفترض ضريبة تلقائياً
+          const taxRate = inv.tax_rate != null ? Number(inv.tax_rate) : 0
           const total = Number(inv.amount ?? 0)
           const sub = inv.subtotal && Number(inv.subtotal) > 0 ? Number(inv.subtotal) : (taxRate > 0 ? total / (1 + taxRate / 100) : total)
 
