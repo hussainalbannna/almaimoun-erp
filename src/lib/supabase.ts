@@ -25,7 +25,9 @@ export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKe
     schema: 'public',
   },
   global: {
-    headers: { 'x-application-name': 'almaimoun-erp' },
+    // تحذير: لا تُضِف ترويسات (headers) مخصّصة هنا — أي ترويسة غير قياسية
+    // تُرسَل مع كل طلب وتُفشِل فحص CORS المسبق عند استدعاء الدوال الطرفية
+    // (Edge Functions) من المتصفّح، فيتعطّل الذكاء الاصطناعي والبريد.
     // إعادة محاولة ذكية عند انقطاع الشبكة (مهم للعمل في المواقع)
     fetch: fetchWithRetry,
   },
