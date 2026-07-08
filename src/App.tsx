@@ -76,7 +76,15 @@ const Settings = lazy(() => import('./pages/settings/Settings'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 30_000, refetchOnWindowFocus: false },
+    queries: {
+      retry: 1,
+      // البيانات تبقى "طازجة" 5 دقائق: التنقّل بين الصفحات المزارة يفتح فوراً من الكاش
+      // بلا إعادة جلب ولا شاشة تحميل — التحديث يحدث فقط بعد انقضاء هذه المدة
+      staleTime: 5 * 60_000,
+      // تبقى في الذاكرة 30 دقيقة بعد مغادرة الصفحة، فالعودة إليها فورية
+      gcTime: 30 * 60_000,
+      refetchOnWindowFocus: false,
+    },
   },
 })
 
