@@ -5,12 +5,15 @@ import { ChevronRight, Plus, DollarSign, MessageCircle, Paperclip, Eye, X, FileT
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, subcontractorSpecialtyLabel, openWhatsApp } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import Textarea from '../../components/ui/Textarea'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
+
+const SUBCONTRACTORS_FOLDER = 'subcontractors'
 
 interface Subcontractor {
   id: string
@@ -35,9 +38,13 @@ interface Assignment {
   end_date: string | null
   status: string
   notes: string
-  contract_data?: string
+  contract_data?: string       // قديم (توافق خلفي)
+  contract_path?: string       // مسار Storage (خفيف)
   contract_name?: string
-  work_images?: string  // مصفوفة JSON من صور العمل
+  work_images?: string         // قديم: مصفوفة JSON من base64
+  work_images_paths?: string   // جديد: مصفوفة JSON من مسارات Storage
+  has_contract?: boolean       // علَم محسوب
+  has_work_images?: boolean    // علَم محسوب
 }
 
 interface Payment {
@@ -50,8 +57,12 @@ interface Payment {
   check_number: string
   notes: string
   project_id?: string | null
-  payment_proof_data?: string
-  invoice_copy_data?: string
+  payment_proof_data?: string  // قديم (توافق خلفي)
+  invoice_copy_data?: string   // قديم (توافق خلفي)
+  payment_proof_path?: string  // مسار Storage (خفيف)
+  invoice_copy_path?: string   // مسار Storage (خفيف)
+  has_payment_proof?: boolean  // علَم محسوب
+  has_invoice_copy?: boolean   // علَم محسوب
 }
 
 interface Project { id: string; project_name: string }
@@ -122,8 +133,9 @@ function AttachField({ label, data, onUpload, onPreview, compact }: {
 }
 
 // مكوّن صور متعددة لعمل المقاول (رفع + معاينة + حذف)
-function WorkImagesField({ images, onChange, onPreview }: {
-  images: string[]; onChange: (imgs: string[]) => void; onPreview: (d: string) => void
+// يعمل بمصفوفتين متوازيتين: images (روابط العرض) و savePaths (قيم الحفظ: مسارات أو Data URL جديد)
+function WorkImagesField({ images, savePaths, onChange, onPreview }: {
+  images: string[]; savePaths: string[]; onChange: (imgs: string[], saveImgs: string[]) => void; onPreview: (d: string) => void
 }) {
   const ref = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
@@ -135,9 +147,12 @@ function WorkImagesField({ images, onChange, onPreview }: {
         const d = await fileToData(f)
         if (d) newImgs.push(d)
       }
-      onChange([...images, ...newImgs])
+      // الصورة الجديدة (Data URL) تُعرض وتُحفظ بنفس القيمة قبل رفعها لـ Storage
+      onChange([...images, ...newImgs], [...savePaths, ...newImgs])
     } finally { setBusy(false) }
   }
+  // حذف عنصر من العرض والحفظ معاً (نفس الفهرس)
+  const removeAt = (i: number) => onChange(images.filter((_, idx) => idx !== i), savePaths.filter((_, idx) => idx !== i))
   return (
     <div>
       <input ref={ref} type="file" accept="image/*" multiple className="hidden"
@@ -147,7 +162,7 @@ function WorkImagesField({ images, onChange, onPreview }: {
           <div key={i} className="relative group">
             <img src={img} alt={`عمل ${i + 1}`} className="w-20 h-20 object-cover rounded-lg border border-slate-200 cursor-pointer"
               onClick={() => onPreview(img)} />
-            <button type="button" onClick={() => onChange(images.filter((_, idx) => idx !== i))}
+            <button type="button" onClick={() => removeAt(i)}
               className="absolute -top-1.5 -left-1.5 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
               <X size={11} />
             </button>
@@ -193,14 +208,18 @@ export default function SubcontractorDetail() {
   const [showAssignForm, setShowAssignForm] = useState(false)
   const [editAssignId, setEditAssignId] = useState<string | null>(null)
   const [assignForm, setAssignForm] = useState({
-    project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '', contract_data: '', contract_name: '', work_images: [] as string[],
+    project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '',
+    contract_data: '', contract_name: '', work_images: [] as string[],       // قيم العرض
+    contract_save: '', work_images_save: [] as string[],                       // قيم الحفظ الموازية (مسارات أو Data URL)
   })
 
   const [showPayForm, setShowPayForm] = useState(false)
   const [editPayId, setEditPayId] = useState<string | null>(null)
   const [payForm, setPayForm] = useState({
     assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10),
-    payment_method: 'cash', check_due_date: '', check_number: '', notes: '', payment_proof_data: '', invoice_copy_data: '',
+    payment_method: 'cash', check_due_date: '', check_number: '', notes: '',
+    payment_proof_data: '', invoice_copy_data: '',       // قيم العرض
+    payment_proof_save: '', invoice_copy_save: '',        // قيم الحفظ الموازية
   })
 
   const load = async () => {
@@ -209,14 +228,17 @@ export default function SubcontractorDetail() {
     setProjects((projRes.data ?? []) as Project[])
 
     if (!isNew && id) {
+      // أعمدة خفيفة: مسارات وأعلام بدل محتوى base64 الثقيل — المحتوى يُحمَّل عند الفتح
+      const ASSIGN_COLUMNS = 'id, project_id, project_name, scope, agreed_amount, paid_amount, start_date, end_date, status, notes, contract_path, contract_name, work_images_paths, has_contract, has_work_images, created_at'
+      const PAY_COLUMNS = 'id, assignment_id, amount, payment_date, payment_method, check_due_date, check_number, notes, project_id, payment_proof_path, invoice_copy_path, has_payment_proof, has_invoice_copy'
       const [subRes, assignRes, payRes] = await Promise.all([
         supabase.from('subcontractors').select('*').eq('id', id).maybeSingle(),
-        supabase.from('subcontractor_assignments').select('*').eq('subcontractor_id', id).order('created_at', { ascending: false }),
-        supabase.from('subcontractor_payments').select('*').eq('subcontractor_id', id).order('payment_date', { ascending: false }),
+        supabase.from('subcontractor_assignments').select(ASSIGN_COLUMNS).eq('subcontractor_id', id).order('created_at', { ascending: false }),
+        supabase.from('subcontractor_payments').select(PAY_COLUMNS).eq('subcontractor_id', id).order('payment_date', { ascending: false }),
       ])
       if (subRes.data) setForm(subRes.data as Subcontractor)
-      setAssignments((assignRes.data ?? []) as Assignment[])
-      setPayments((payRes.data ?? []) as Payment[])
+      setAssignments((assignRes.data ?? []) as unknown as Assignment[])
+      setPayments((payRes.data ?? []) as unknown as Payment[])
     }
     setLoading(false)
   }
@@ -228,7 +250,20 @@ export default function SubcontractorDetail() {
     setForm(f => ({ ...f, [k]: val }))
   }
 
-  const openDoc = (data: string) => { if (isImageData(data)) setPreviewImg(data); else openStoredFile(data) }
+  // فتح رابط محلول (Storage أو Data URL): صورة تُعاين، PDF/غيره يُفتح
+  const openDoc = (url: string) => {
+    if (!url) { toast.error('تعذّر تحميل المرفق'); return }
+    if (isImageData(url) || (!isPdfData(url) && !url.startsWith('data:'))) setPreviewImg(url)
+    else openStoredFile(url)
+  }
+  // جلب مرفق مخزّن (مسار أو base64 قديم) من حقل في صف، ثم فتحه
+  const openStoredAttachment = async (table: 'subcontractor_assignments' | 'subcontractor_payments', rowId: string, pathCol: string, dataCol: string) => {
+    const { data } = await supabase.from(table).select('*').eq('id', rowId).maybeSingle()
+    if (!data) { toast.error('تعذّر تحميل المرفق'); return }
+    const row = data as Record<string, string | undefined>
+    const url = await resolveAttachmentUrl(row[pathCol] || row[dataCol] || '')
+    openDoc(url ?? '')
+  }
 
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('أدخل اسم المقاول'); return }
@@ -262,18 +297,27 @@ export default function SubcontractorDetail() {
   }
 
   // فتح نموذج التكليف للإضافة أو التعديل
-  const openAssignForm = (a?: Assignment) => {
+  const openAssignForm = async (a?: Assignment) => {
     if (a) {
       setEditAssignId(a.id)
+      // جلب المحتوى الكامل لهذا التكليف فقط (غير محمّل في القائمة الخفيفة)
+      const { data } = await supabase.from('subcontractor_assignments')
+        .select('contract_path, contract_data, work_images_paths, work_images').eq('id', a.id).maybeSingle()
+      const row = (data ?? {}) as { contract_path?: string; contract_data?: string; work_images_paths?: string; work_images?: string }
+      const contractSave = row.contract_path || row.contract_data || ''
+      const workSave = parseImages(row.work_images_paths || row.work_images)
+      // حلّ روابط العرض (المسارات → روابط موقّعة، base64 يبقى)
+      const contractView = contractSave ? (await resolveAttachmentUrl(contractSave)) ?? '' : ''
+      const workView = (await Promise.all(workSave.map(v => resolveAttachmentUrl(v)))).filter((u): u is string => !!u)
       setAssignForm({
         project_id: a.project_id ?? '', scope: a.scope, agreed_amount: String(a.agreed_amount),
         start_date: a.start_date ?? '', end_date: a.end_date ?? '', notes: a.notes ?? '',
-        contract_data: a.contract_data ?? '', contract_name: a.contract_name ?? '',
-        work_images: parseImages(a.work_images),
+        contract_data: contractView, contract_name: a.contract_name ?? '', work_images: workView,
+        contract_save: contractSave, work_images_save: workSave,
       })
     } else {
       setEditAssignId(null)
-      setAssignForm({ project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '', contract_data: '', contract_name: '', work_images: [] })
+      setAssignForm({ project_id: '', scope: '', agreed_amount: '', start_date: '', end_date: '', notes: '', contract_data: '', contract_name: '', work_images: [], contract_save: '', work_images_save: [] })
     }
     setShowAssignForm(true)
   }
@@ -283,6 +327,30 @@ export default function SubcontractorDetail() {
     if (!id || id === 'new') { toast.error('احفظ بيانات المقاول أولاً'); return }
     try {
       const proj = projects.find(p => p.id === assignForm.project_id)
+
+      // ── رفع العقد إلى Storage (Data URL جديد يُرفع، مسار موجود يبقى) ──
+      let contractPath = ''
+      if (assignForm.contract_save) {
+        contractPath = isDataUrl(assignForm.contract_save)
+          ? await uploadDataUrl(assignForm.contract_save, SUBCONTRACTORS_FOLDER)
+          : assignForm.contract_save
+      }
+      // ── رفع صور الأعمال الجديدة؛ المسارات الموجودة تبقى ──
+      const workPaths = await Promise.all(
+        assignForm.work_images_save.map(v => (isDataUrl(v) ? uploadDataUrl(v, SUBCONTRACTORS_FOLDER) : v))
+      )
+
+      // تنظيف Storage عند التعديل: احذف العقد القديم المستبدَل + صور الأعمال المُزالة
+      if (editAssignId) {
+        const { data: prev } = await supabase.from('subcontractor_assignments')
+          .select('contract_path, work_images_paths').eq('id', editAssignId).maybeSingle()
+        const prevRow = (prev ?? {}) as { contract_path?: string; work_images_paths?: string }
+        if (prevRow.contract_path && prevRow.contract_path !== contractPath) await deleteAttachment(prevRow.contract_path)
+        const prevImgs = parseImages(prevRow.work_images_paths)
+        const removedImgs = prevImgs.filter(p => !isDataUrl(p) && !workPaths.includes(p))
+        if (removedImgs.length) await deleteAttachment(removedImgs)
+      }
+
       const payload = {
         subcontractor_id: id,
         project_id: assignForm.project_id || null,
@@ -292,9 +360,11 @@ export default function SubcontractorDetail() {
         start_date: assignForm.start_date || null,
         end_date: assignForm.end_date || null,
         notes: assignForm.notes || '',
-        contract_data: assignForm.contract_data || '',
+        contract_path: contractPath,                        // مسار Storage (خفيف)
+        contract_data: '',                                  // إفراغ القديم
         contract_name: assignForm.contract_name || '',
-        work_images: JSON.stringify(assignForm.work_images || []),
+        work_images_paths: JSON.stringify(workPaths),       // مصفوفة مسارات
+        work_images: '',                                    // إفراغ القديم
       }
       if (editAssignId) {
         const { error } = await supabase.from('subcontractor_assignments').update(payload).eq('id', editAssignId)
@@ -317,6 +387,12 @@ export default function SubcontractorDetail() {
   const handleDeleteAssignment = async () => {
     if (!deleteAssignId) return
     try {
+      // تنظيف مرفقات التكليف من Storage قبل حذفه
+      const { data: row } = await supabase.from('subcontractor_assignments')
+        .select('contract_path, work_images_paths').eq('id', deleteAssignId).maybeSingle()
+      const r = (row ?? {}) as { contract_path?: string; work_images_paths?: string }
+      await deleteAttachment([r.contract_path, ...parseImages(r.work_images_paths)])
+
       await supabase.from('subcontractor_assignments').delete().eq('id', deleteAssignId)
       toast.success('تم حذف التكليف')
       setDeleteAssignId(null)
@@ -325,17 +401,26 @@ export default function SubcontractorDetail() {
   }
 
   // فتح نموذج الدفعة للإضافة أو التعديل
-  const openPayForm = (p?: Payment) => {
+  const openPayForm = async (p?: Payment) => {
     if (p) {
       setEditPayId(p.id)
+      // جلب مرفقات الدفعة الكاملة (غير محمّلة في القائمة الخفيفة)
+      const { data } = await supabase.from('subcontractor_payments')
+        .select('payment_proof_path, payment_proof_data, invoice_copy_path, invoice_copy_data').eq('id', p.id).maybeSingle()
+      const row = (data ?? {}) as { payment_proof_path?: string; payment_proof_data?: string; invoice_copy_path?: string; invoice_copy_data?: string }
+      const proofSave = row.payment_proof_path || row.payment_proof_data || ''
+      const invoiceSave = row.invoice_copy_path || row.invoice_copy_data || ''
+      const proofView = proofSave ? (await resolveAttachmentUrl(proofSave)) ?? '' : ''
+      const invoiceView = invoiceSave ? (await resolveAttachmentUrl(invoiceSave)) ?? '' : ''
       setPayForm({
         assignment_id: p.assignment_id, amount: String(p.amount), payment_date: p.payment_date,
         payment_method: p.payment_method, check_due_date: p.check_due_date ?? '', check_number: p.check_number ?? '',
-        notes: p.notes ?? '', payment_proof_data: p.payment_proof_data ?? '', invoice_copy_data: p.invoice_copy_data ?? '',
+        notes: p.notes ?? '', payment_proof_data: proofView, invoice_copy_data: invoiceView,
+        payment_proof_save: proofSave, invoice_copy_save: invoiceSave,
       })
     } else {
       setEditPayId(null)
-      setPayForm({ assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'cash', check_due_date: '', check_number: '', notes: '', payment_proof_data: '', invoice_copy_data: '' })
+      setPayForm({ assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'cash', check_due_date: '', check_number: '', notes: '', payment_proof_data: '', invoice_copy_data: '', payment_proof_save: '', invoice_copy_save: '' })
     }
     setShowPayForm(true)
   }
@@ -345,6 +430,24 @@ export default function SubcontractorDetail() {
     if (!payForm.assignment_id) { toast.error('اختر التكليف'); return }
     try {
       const assign = assignments.find(a => a.id === payForm.assignment_id)
+
+      // ── رفع الإثبات والفاتورة إلى Storage (جديد يُرفع، مسار موجود يبقى) ──
+      const proofPath = payForm.payment_proof_save
+        ? (isDataUrl(payForm.payment_proof_save) ? await uploadDataUrl(payForm.payment_proof_save, SUBCONTRACTORS_FOLDER) : payForm.payment_proof_save)
+        : ''
+      const invoicePath = payForm.invoice_copy_save
+        ? (isDataUrl(payForm.invoice_copy_save) ? await uploadDataUrl(payForm.invoice_copy_save, SUBCONTRACTORS_FOLDER) : payForm.invoice_copy_save)
+        : ''
+
+      // تنظيف Storage عند التعديل: احذف المرفقات القديمة المستبدَلة
+      if (editPayId) {
+        const { data: prev } = await supabase.from('subcontractor_payments')
+          .select('payment_proof_path, invoice_copy_path').eq('id', editPayId).maybeSingle()
+        const prevRow = (prev ?? {}) as { payment_proof_path?: string; invoice_copy_path?: string }
+        if (prevRow.payment_proof_path && prevRow.payment_proof_path !== proofPath) await deleteAttachment(prevRow.payment_proof_path)
+        if (prevRow.invoice_copy_path && prevRow.invoice_copy_path !== invoicePath) await deleteAttachment(prevRow.invoice_copy_path)
+      }
+
       const payload = {
         assignment_id: payForm.assignment_id,
         subcontractor_id: id,
@@ -355,8 +458,10 @@ export default function SubcontractorDetail() {
         check_due_date: payForm.check_due_date || null,
         check_number: payForm.check_number || '',
         notes: payForm.notes || '',
-        payment_proof_data: payForm.payment_proof_data || '',
-        invoice_copy_data: payForm.invoice_copy_data || '',
+        payment_proof_path: proofPath,   // مسار Storage (خفيف)
+        invoice_copy_path: invoicePath,  // مسار Storage (خفيف)
+        payment_proof_data: '',          // إفراغ القديم
+        invoice_copy_data: '',           // إفراغ القديم
       }
       if (editPayId) {
         // عند التعديل: نحسب فرق المبلغ لتحديث paid_amount
@@ -392,6 +497,12 @@ export default function SubcontractorDetail() {
   const handleDeletePayment = async () => {
     if (!deletePayId) return
     try {
+      // تنظيف مرفقات الدفعة من Storage قبل حذفها
+      const { data: row } = await supabase.from('subcontractor_payments')
+        .select('payment_proof_path, invoice_copy_path').eq('id', deletePayId.id).maybeSingle()
+      const r = (row ?? {}) as { payment_proof_path?: string; invoice_copy_path?: string }
+      await deleteAttachment([r.payment_proof_path, r.invoice_copy_path])
+
       await supabase.from('subcontractor_payments').delete().eq('id', deletePayId.id)
       // خصم مبلغ الدفعة المحذوفة من paid_amount
       const assign = assignments.find(a => a.id === deletePayId.assignmentId)
@@ -507,14 +618,15 @@ export default function SubcontractorDetail() {
               <div>
                 <label className="block text-xs text-slate-500 mb-1">عقد التكليف (صورة أو PDF)</label>
                 <AttachField label="العقد" data={assignForm.contract_data}
-                  onUpload={async f => { const d = await fileToData(f); setAssignForm(p => ({ ...p, contract_data: d, contract_name: f.name })) }}
+                  onUpload={async f => { const d = await fileToData(f); setAssignForm(p => ({ ...p, contract_data: d, contract_save: d, contract_name: f.name })) }}
                   onPreview={openDoc} />
               </div>
               {/* صور عمل المقاول (متعددة) */}
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">صور عمل المقاول (يمكن إضافة عدة صور)</label>
                 <WorkImagesField images={assignForm.work_images}
-                  onChange={imgs => setAssignForm(p => ({ ...p, work_images: imgs }))}
+                  onChange={(imgs, saveImgs) => setAssignForm(p => ({ ...p, work_images: imgs, work_images_save: saveImgs }))}
+                  savePaths={assignForm.work_images_save}
                   onPreview={setPreviewImg} />
               </div>
               <div className="flex gap-2">
@@ -531,7 +643,6 @@ export default function SubcontractorDetail() {
               {assignments.map(a => {
                 const rem = Number(a.agreed_amount) - Number(a.paid_amount)
                 const pct = Number(a.agreed_amount) > 0 ? Math.round((Number(a.paid_amount) / Number(a.agreed_amount)) * 100) : 0
-                const workImgs = parseImages(a.work_images)
                 return (
                   <div key={a.id} className="bg-white rounded-xl border border-slate-200 p-4">
                     <div className="flex justify-between items-start">
@@ -543,26 +654,21 @@ export default function SubcontractorDetail() {
                             {a.start_date && formatDate(a.start_date)} {a.end_date && `— ${formatDate(a.end_date)}`}
                           </div>
                         )}
-                        {/* عرض العقد المرفق */}
-                        {hasFile(a.contract_data) && (
-                          <button onClick={() => openDoc(a.contract_data!)}
-                            className="flex items-center gap-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg px-2.5 py-1 mt-2 hover:bg-amber-100 transition-colors">
-                            <Paperclip size={12} /> <Eye size={12} /> عرض العقد
-                          </button>
-                        )}
-                        {/* عرض صور العمل */}
-                        {workImgs.length > 0 && (
-                          <div className="mt-2">
-                            <div className="text-xs text-slate-400 mb-1">صور العمل ({workImgs.length}):</div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {workImgs.map((img, i) => (
-                                <img key={i} src={img} alt={`عمل ${i + 1}`}
-                                  className="w-14 h-14 object-cover rounded-lg border border-slate-200 cursor-pointer hover:ring-2 hover:ring-amber-300 transition-all"
-                                  onClick={() => setPreviewImg(img)} />
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                        {/* المرفقات تُحمّل عند النقر (غير مجلوبة مع القائمة الخفيفة) */}
+                        <div className="flex flex-wrap items-center gap-2 mt-2">
+                          {a.has_contract && (
+                            <button onClick={() => openStoredAttachment('subcontractor_assignments', a.id, 'contract_path', 'contract_data')}
+                              className="flex items-center gap-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg px-2.5 py-1 hover:bg-amber-100 transition-colors">
+                              <Paperclip size={12} /> <Eye size={12} /> عرض العقد
+                            </button>
+                          )}
+                          {a.has_work_images && (
+                            <button onClick={() => openAssignForm(a)}
+                              className="flex items-center gap-1.5 text-xs bg-slate-50 text-slate-600 border border-slate-200 rounded-lg px-2.5 py-1 hover:bg-slate-100 transition-colors">
+                              <ImageIcon size={12} className="text-blue-500" /> صور العمل
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="text-left shrink-0">
                         <div className="text-xs text-slate-400">المتفق</div>
@@ -632,13 +738,13 @@ export default function SubcontractorDetail() {
                 <div>
                   <label className="block text-xs text-slate-500 mb-1">إثبات الدفع</label>
                   <AttachField label="الإثبات" data={payForm.payment_proof_data}
-                    onUpload={async f => { const d = await fileToData(f); setPayForm(p => ({ ...p, payment_proof_data: d })) }}
+                    onUpload={async f => { const d = await fileToData(f); setPayForm(p => ({ ...p, payment_proof_data: d, payment_proof_save: d })) }}
                     onPreview={openDoc} />
                 </div>
                 <div>
                   <label className="block text-xs text-slate-500 mb-1">فاتورة المقاول</label>
                   <AttachField label="الفاتورة" data={payForm.invoice_copy_data}
-                    onUpload={async f => { const d = await fileToData(f); setPayForm(p => ({ ...p, invoice_copy_data: d })) }}
+                    onUpload={async f => { const d = await fileToData(f); setPayForm(p => ({ ...p, invoice_copy_data: d, invoice_copy_save: d })) }}
                     onPreview={openDoc} />
                 </div>
               </div>
@@ -666,9 +772,10 @@ export default function SubcontractorDetail() {
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {payments.map(p => {
-                    const docs: { label: string; data: string }[] = []
-                    if (hasFile(p.payment_proof_data)) docs.push({ label: 'إثبات الدفع', data: p.payment_proof_data! })
-                    if (hasFile(p.invoice_copy_data)) docs.push({ label: 'الفاتورة', data: p.invoice_copy_data! })
+                    // مرفقات الدفعة عبر الأعلام الخفيفة — المحتوى يُحمَّل عند النقر
+                    const docs: { label: string; pathCol: string; dataCol: string }[] = []
+                    if (p.has_payment_proof) docs.push({ label: 'إثبات الدفع', pathCol: 'payment_proof_path', dataCol: 'payment_proof_data' })
+                    if (p.has_invoice_copy) docs.push({ label: 'الفاتورة', pathCol: 'invoice_copy_path', dataCol: 'invoice_copy_data' })
                     return (
                       <tr key={p.id} className="hover:bg-slate-50/50">
                         <td className="px-4 py-3 text-slate-700">{formatDate(p.payment_date)}</td>
@@ -680,9 +787,9 @@ export default function SubcontractorDetail() {
                           {docs.length > 0 ? (
                             <div className="flex items-center justify-center gap-1">
                               {docs.map((doc, di) => (
-                                <button key={di} onClick={() => openDoc(doc.data)} title={doc.label}
+                                <button key={di} onClick={() => openStoredAttachment('subcontractor_payments', p.id, doc.pathCol, doc.dataCol)} title={doc.label}
                                   className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2 py-1 rounded-lg transition-colors">
-                                  {isImageData(doc.data) ? <ImageIcon size={12} /> : <FileText size={12} />}
+                                  {doc.label === 'الفاتورة' ? <FileText size={12} /> : <ImageIcon size={12} />}
                                 </button>
                               ))}
                             </div>
