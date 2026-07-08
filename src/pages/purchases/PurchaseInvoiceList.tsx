@@ -79,7 +79,7 @@ export default function PurchaseInvoiceList() {
       // جلبها عبر select('*') كان يضخّم حجم الرد ويتسبب في خطأ 500 من الخادم
       const { data, error } = await supabase
         .from('purchase_invoices')
-        .select('id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, vendor_invoice_number, amount, payment_method, check_due_date, notes, created_at, updated_at')
+        .select('id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, vendor_invoice_number, amount, subtotal, tax_rate, payment_method, check_due_date, notes, entry_date, created_at, updated_at')
       if (error) throw error
       // ترتيب آمن حسب تاريخ الفاتورة الفعلي (يتحمّل القيم الفارغة دون أن ينهار)
       const rows = ((data ?? []) as InvoiceRow[]).slice().sort((a, b) =>
