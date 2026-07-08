@@ -9,10 +9,13 @@ import {
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate } from '../../lib/utils'
 import { openStoredFile, compressImage, fileToDataUrl } from '../../lib/ai'
+import { uploadDataUrl, resolveAttachmentUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
+
+const RENTALS_FOLDER = 'rentals'
 
 // ── الأنواع ──
 interface Rental {
@@ -29,7 +32,8 @@ interface Rental {
   end_date: string | null
   due_day: number | null
   status: string               // active | ended
-  contract_data: string
+  contract_path: string        // مسار Storage (خفيف)
+  has_contract: boolean        // علَم محسوب: هل يوجد عقد؟ (بلا جلب محتواه)
   notes: string
   created_at: string
 }
@@ -40,7 +44,8 @@ interface RentalPayment {
   payment_date: string
   period_label: string
   payment_method: string
-  proof_data: string
+  proof_path: string           // مسار Storage (خفيف)
+  has_proof: boolean           // علَم محسوب: هل يوجد إثبات؟
   notes: string
   created_at: string
 }
@@ -62,7 +67,6 @@ const num = (v: unknown): number => Number(v) || 0
 const todayStr = () => new Date().toISOString().slice(0, 10)
 const isImageData = (d?: string) => !!d && d.startsWith('data:image')
 const isPdfData = (d?: string) => !!d && d.startsWith('data:application/pdf')
-const hasFile = (d?: string) => isImageData(d) || isPdfData(d)
 const daysUntil = (date: string): number =>
   Math.round((new Date(date).getTime() - new Date(todayStr()).getTime()) / 86400000)
 
@@ -77,15 +81,37 @@ const monthlyEquivalent = (r: Rental): number => {
 
 type Tab = 'overview' | 'rentals' | 'payments'
 
-// جلب الإيجارات ودفعاتها مرتّبة (مصدر React Query)
+// أعمدة خفيفة: كل شيء عدا محتوى الملفات (contract_data/proof_data) الثقيل —
+// نجلب المسار والعلَم فقط، والمحتوى يُحمَّل عند فتح الإيجار/الدفعة
+const RENTAL_COLUMNS =
+  'id, name, category, rental_type, vendor_name, project_id, project_name, cost, '
+  + 'billing_cycle, start_date, end_date, due_day, status, contract_path, has_contract, notes, created_at'
+const PAYMENT_COLUMNS =
+  'id, rental_id, amount, payment_date, period_label, payment_method, proof_path, has_proof, notes, created_at'
+
+// جلب الإيجارات ودفعاتها مرتّبة (مصدر React Query) — بالأعمدة الخفيفة فقط
 async function fetchRentalsData(): Promise<{ rentals: Rental[]; payments: RentalPayment[] }> {
   const [rRes, pRes] = await Promise.all([
-    supabase.from('rentals').select('*'),
-    supabase.from('rental_payments').select('*'),
+    supabase.from('rentals').select(RENTAL_COLUMNS),
+    supabase.from('rental_payments').select(PAYMENT_COLUMNS),
   ])
-  const rentals = ((rRes.data ?? []) as Rental[]).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
-  const payments = ((pRes.data ?? []) as RentalPayment[]).sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''))
+  const rentals = ((rRes.data ?? []) as unknown as Rental[]).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+  const payments = ((pRes.data ?? []) as unknown as RentalPayment[]).sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''))
   return { rentals, payments }
+}
+
+// جلب محتوى مرفق واحد عند الطلب فقط (رابط موقّع من Storage أو base64 قديم)
+async function fetchRentalContract(rentalId: string): Promise<string> {
+  const { data } = await supabase.from('rentals').select('contract_path, contract_data').eq('id', rentalId).maybeSingle()
+  if (!data) return ''
+  const row = data as { contract_path?: string; contract_data?: string }
+  return (await resolveAttachmentUrl(row.contract_path || row.contract_data || '')) ?? ''
+}
+async function fetchPaymentProof(paymentId: string): Promise<string> {
+  const { data } = await supabase.from('rental_payments').select('proof_path, proof_data').eq('id', paymentId).maybeSingle()
+  if (!data) return ''
+  const row = data as { proof_path?: string; proof_data?: string }
+  return (await resolveAttachmentUrl(row.proof_path || row.proof_data || '')) ?? ''
 }
 const EMPTY_RENTALS_DATA = { rentals: [] as Rental[], payments: [] as RentalPayment[] }
 
@@ -115,9 +141,20 @@ export default function RentalsList() {
     reload()
   }
 
-  const openDoc = (data: string) => {
-    if (isImageData(data)) setPreviewImg(data)
-    else openStoredFile(data, isPdfData(data) ? 'application/pdf' : '')
+  // فتح مرفق من رابط محلول (Storage أو Data URL): صورة تُعاين، PDF/غيره يُفتح في تبويب
+  const openResolvedUrl = (url: string) => {
+    if (!url) { toast.error('تعذّر تحميل المرفق'); return }
+    const isPdf = isPdfData(url) || /\.pdf($|\?)/i.test(url)
+    if (isPdf) openStoredFile(url, 'application/pdf')
+    else setPreviewImg(url)
+  }
+  // جلب عقد إيجار عند الطلب ثم فتحه
+  const openContract = async (rentalId: string) => {
+    openResolvedUrl(await fetchRentalContract(rentalId))
+  }
+  // جلب إثبات دفعة عند الطلب ثم فتحه
+  const openProof = async (paymentId: string) => {
+    openResolvedUrl(await fetchPaymentProof(paymentId))
   }
 
   // مدفوعات إيجار معيّن
@@ -375,8 +412,8 @@ export default function RentalsList() {
                           <td className="px-4 py-3 font-bold whitespace-nowrap" style={{ color: '#7b4a2d' }}>{formatCurrency(num(p.amount))}</td>
                           <td className="px-4 py-3"><Badge color={p.payment_method === 'deferred_cheque' ? 'amber' : p.payment_method === 'bank_transfer' ? 'blue' : 'green'}>{PAYMENT_LABELS[p.payment_method] ?? p.payment_method}</Badge></td>
                           <td className="px-4 py-3">
-                            {hasFile(p.proof_data) ? (
-                              <button onClick={() => openDoc(p.proof_data)} className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2.5 py-1 rounded-lg"><Paperclip size={12} /> عرض</button>
+                            {p.has_proof ? (
+                              <button onClick={() => openProof(p.id)} className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2.5 py-1 rounded-lg"><Paperclip size={12} /> عرض</button>
                             ) : <span className="text-slate-300 text-xs">—</span>}
                           </td>
                           <td className="px-4 py-3 text-slate-500 whitespace-nowrap text-xs">{formatDate(p.payment_date)}</td>
@@ -402,7 +439,7 @@ export default function RentalsList() {
       {viewRental && (
         <RentalViewModal rental={viewRental} payments={paymentsOf(viewRental.id)} onClose={() => setViewRental(null)}
           onEdit={() => navigate(`/rentals/${viewRental.id}/edit`)} onDelete={() => setDeleteId(viewRental.id)}
-          onOpenDoc={openDoc} />
+          onOpenContract={openContract} onOpenProof={openProof} />
       )}
 
       {/* معاينة الصورة */}
@@ -440,15 +477,22 @@ function PaymentModal({ rental, onClose, onSaved, onPreviewImage }: {
   const save = async () => {
     if (!amount || Number(amount) <= 0) { toast.error('أدخل المبلغ'); return }
     setSaving(true)
-    const { error } = await supabase.from('rental_payments').insert({
-      rental_id: rental.id,
-      amount: Number(amount),
-      payment_date: paymentDate,
-      period_label: periodLabel,
-      payment_method: method,
-      proof_data: proof,
-    })
-    if (error) { toast.error('فشل الحفظ: ' + error.message); setSaving(false); return }
+    try {
+      // رفع الإثبات إلى Storage وحفظ المسار (بدل base64 داخل الجدول)
+      const proofPath = proof ? await uploadDataUrl(proof, RENTALS_FOLDER) : ''
+      const { error } = await supabase.from('rental_payments').insert({
+        rental_id: rental.id,
+        amount: Number(amount),
+        payment_date: paymentDate,
+        period_label: periodLabel,
+        payment_method: method,
+        proof_path: proofPath,   // مسار Storage (خفيف)
+        proof_data: '',          // لم نعد نخزّن base64
+      })
+      if (error) throw error
+    } catch (e) {
+      toast.error('فشل الحفظ: ' + ((e as Error)?.message ?? '')); setSaving(false); return
+    }
     toast.success('تم تسجيل الدفعة')
     setSaving(false)
     onSaved()
@@ -519,8 +563,9 @@ function PaymentModal({ rental, onClose, onSaved, onPreviewImage }: {
 }
 
 // ═══════════ نافذة استعراض الإيجار ═══════════
-function RentalViewModal({ rental, payments, onClose, onEdit, onDelete, onOpenDoc }: {
-  rental: Rental; payments: RentalPayment[]; onClose: () => void; onEdit: () => void; onDelete: () => void; onOpenDoc: (d: string) => void
+function RentalViewModal({ rental, payments, onClose, onEdit, onDelete, onOpenContract, onOpenProof }: {
+  rental: Rental; payments: RentalPayment[]; onClose: () => void; onEdit: () => void; onDelete: () => void
+  onOpenContract: (rentalId: string) => void; onOpenProof: (paymentId: string) => void
 }) {
   const meta = CATEGORY_META[rental.category] || CATEGORY_META.other
   const paid = payments.reduce((s, p) => s + num(p.amount), 0)
@@ -567,13 +612,14 @@ function RentalViewModal({ rental, payments, onClose, onEdit, onDelete, onOpenDo
             </div>
           )}
 
-          {/* العقد */}
-          {hasFile(rental.contract_data) && (
+          {/* العقد — يُحمَّل عند النقر (لا يُجلب مع القائمة) */}
+          {rental.has_contract && (
             <div>
               <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-1.5"><Paperclip size={15} /> العقد المرفق</div>
-              <button onClick={() => onOpenDoc(rental.contract_data)} className="w-32 rounded-xl border border-slate-200 overflow-hidden hover:border-amber-300 transition-colors">
-                <div className="aspect-[4/3] bg-slate-50 flex items-center justify-center">
-                  {isImageData(rental.contract_data) ? <img src={rental.contract_data} alt="العقد" className="w-full h-full object-cover" /> : <FileText size={28} className="text-red-500" />}
+              <button onClick={() => onOpenContract(rental.id)} className="w-32 rounded-xl border border-slate-200 overflow-hidden hover:border-amber-300 transition-colors group">
+                <div className="aspect-[4/3] bg-slate-50 flex flex-col items-center justify-center gap-1 group-hover:bg-amber-50/50">
+                  <Eye size={26} className="text-amber-600" />
+                  <span className="text-[11px] text-slate-500">عرض العقد</span>
                 </div>
               </button>
             </div>
@@ -593,7 +639,7 @@ function RentalViewModal({ rental, payments, onClose, onEdit, onDelete, onOpenDo
                       <div className="text-xs text-slate-400">{PAYMENT_LABELS[p.payment_method] ?? p.payment_method} · {formatDate(p.payment_date)}</div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {hasFile(p.proof_data) && <button onClick={() => onOpenDoc(p.proof_data)} className="text-slate-400 hover:text-amber-600"><Paperclip size={14} /></button>}
+                      {p.has_proof && <button onClick={() => onOpenProof(p.id)} className="text-slate-400 hover:text-amber-600"><Paperclip size={14} /></button>}
                       <span className="font-bold text-sm" style={{ color: '#7b4a2d' }}>{formatCurrency(num(p.amount))}</span>
                     </div>
                   </div>
