@@ -2,16 +2,24 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "npm:@supabase/supabase-js@2.49.1"
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+// ─── CORS ديناميكي ─────────────────────────────────────────────────────
+// يعكس الترويسات التي يطلبها المتصفّح في الفحص المسبق (preflight) بدل قائمة
+// ثابتة — فلا ينكسر الاتصال إذا أضاف عميل Supabase أو التطبيق ترويسة جديدة.
+function corsHeaders(req: Request): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers":
+      req.headers.get("Access-Control-Request-Headers") ??
+      "authorization, x-client-info, apikey, content-type, x-application-name",
+    "Access-Control-Max-Age": "86400",
+  }
 }
 
-const json = (body: unknown, status = 200) =>
+const json = (req: Request, body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders(req), "Content-Type": "application/json" },
   })
 
 interface EmailPayload {
@@ -39,24 +47,24 @@ async function isAuthenticated(req: Request): Promise<boolean> {
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders })
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
+  if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders(req) })
+  if (req.method !== "POST") return json(req, { error: "Method not allowed" }, 405)
 
   try {
     if (!(await isAuthenticated(req))) {
-      return json({ error: "Unauthorized" }, 401)
+      return json(req, { error: "Unauthorized" }, 401)
     }
 
     const { to, subject, html, from } = (await req.json()) as EmailPayload
     if (!to || !subject || !html) {
-      return json({ error: "Missing required fields: to, subject, html" }, 400)
+      return json(req, { error: "Missing required fields: to, subject, html" }, 400)
     }
 
     // مفتاح Resend يُقرأ حصرياً من أسرار الخادم (Supabase Secrets) ولا يُقبل من العميل إطلاقاً.
     // هذا يمنع تسريب المفتاح إلى المتصفّح — بخلاف السلوك السابق الذي كان يستقبله ضمن الحمولة.
     const apiKey = Deno.env.get("RESEND_API_KEY")
     if (!apiKey) {
-      return json({ error: "Email service is not configured on the server" }, 500)
+      return json(req, { error: "Email service is not configured on the server" }, 500)
     }
 
     const fromAddress = from || Deno.env.get("SMTP_FROM") || "noreply@almaimoun-construction.com"
@@ -73,11 +81,11 @@ Deno.serve(async (req: Request) => {
     const result = await response.json().catch(() => ({}))
 
     if (!response.ok) {
-      return json({ error: result?.message ?? "Failed to send email" }, response.status)
+      return json(req, { error: result?.message ?? "Failed to send email" }, response.status)
     }
 
-    return json({ success: true, id: result.id })
+    return json(req, { success: true, id: result.id })
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : "Unknown error" }, 500)
+    return json(req, { error: error instanceof Error ? error.message : "Unknown error" }, 500)
   }
 })
