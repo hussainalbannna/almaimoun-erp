@@ -1,388 +1,688 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Plus, Trash2, Upload, ClipboardList } from 'lucide-react'
+import { useEffect, useState, useMemo } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import {
+  Plus, Edit, Trash2, Search, FileText, AlertTriangle, Paperclip, Eye, X,
+  Image as ImageIcon, Receipt, CreditCard, Building2, ChevronDown, ChevronLeft,
+  Calendar, Truck, Wallet, LayoutGrid, List as ListIcon, FileSpreadsheet
+} from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { nextSerial, formatCurrency } from '../../lib/utils'
-import type { LPO, LPOItem, Supplier, ExtractedDocumentData } from '../../types'
+import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
+import { formatCurrency, formatDate } from '../../lib/utils'
+import { openStoredFile } from '../../lib/ai'
+import { getAttachmentUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
-import Input from '../../components/ui/Input'
-import Select from '../../components/ui/Select'
-import Textarea from '../../components/ui/Textarea'
-import DocumentUpload from '../../components/ui/DocumentUpload'
+import Badge from '../../components/ui/Badge'
+import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 
-const EMPTY_ITEM: Omit<LPOItem, 'id' | 'lpo_id'> = { description: '', quantity: 1, unit: 'قطعة', unit_price: 0, total: 0, sort_order: 0 }
+const PAYMENT_LABELS: Record<string, string> = {
+  cash: 'نقداً',
+  bank_transfer: 'تحويل بنكي',
+  deferred_cheque: 'شيك آجل',
+}
+const PAYMENT_COLOR = (m: string): 'green' | 'blue' | 'amber' =>
+  m === 'deferred_cheque' ? 'amber' : m === 'bank_transfer' ? 'blue' : 'green'
 
-const STATUS_OPTIONS = [
-  { value: 'draft', label: 'مسودة' },
-  { value: 'sent', label: 'مرسل' },
-  { value: 'approved', label: 'موافق عليه' },
-  { value: 'received', label: 'مستلم' },
-  { value: 'cancelled', label: 'ملغى' },
-]
+const num = (v: unknown): number => Number(v) || 0
+const todayStr = () => new Date().toISOString().slice(0, 10)
+const isImageData = (d?: string) => !!d && d.startsWith('data:image')
+const isPdfData = (d?: string) => !!d && d.startsWith('data:application/pdf')
+const hasFile = (d?: string) => isImageData(d) || isPdfData(d)
+const daysUntil = (date: string): number =>
+  Math.round((new Date(date).getTime() - new Date(todayStr()).getTime()) / 86400000)
 
-const PAYMENT_TYPE_OPTIONS = [
-  { value: 'cash', label: 'نقداً' },
-  { value: 'bank_transfer', label: 'تحويل بنكي' },
-  { value: 'cheque', label: 'شيك' },
-  { value: 'benefit', label: 'بنفت' },
-  { value: 'deferred_cheque', label: 'شيك آجل الدفع' },
-  { value: 'credit', label: 'آجل / دين' },
-]
+// تاريخ الفاتورة الفعلي (entry_date) مع تراجع لتاريخ الإنشاء للفواتير القديمة
+type InvoiceRow = PurchaseInvoice & {
+  entry_date?: string | null; tax_rate?: number; subtotal?: number
+  invoice_copy_path?: string; payment_proof_path?: string; check_image_path?: string
+}
+const invoiceDate = (inv: InvoiceRow): string => inv.entry_date || inv.created_at || ''
 
-export default function LPOForm() {
-  const { id } = useParams()
+// ── حساب تفصيل الضريبة لكل فاتورة (amount = المجموع الشامل) ──
+// إن كان subtotal مخزّناً نستخدمه؛ وإلا نحسب من amount والنسبة (افتراض 10% للقديمة)
+const invTaxRate = (inv: InvoiceRow): number => inv.tax_rate != null ? Number(inv.tax_rate) : 10
+const invTotal = (inv: InvoiceRow): number => Number(inv.amount) || 0
+const invSubtotal = (inv: InvoiceRow): number => {
+  if (inv.subtotal != null && Number(inv.subtotal) > 0) return Number(inv.subtotal)
+  const rate = invTaxRate(inv)
+  return rate > 0 ? invTotal(inv) / (1 + rate / 100) : invTotal(inv)
+}
+const invTax = (inv: InvoiceRow): number => invTotal(inv) - invSubtotal(inv)
+
+// مرفق جاهز للعرض: رابط (موقّع من Storage أو base64 قديم) ونوعه
+type AttachKind = 'image' | 'file'
+interface ResolvedDoc { label: string; url: string; kind: AttachKind }
+interface ViewDelivery { id?: string; delivery_note_number: string; notes: string; imageUrl: string; imageKind: AttachKind }
+const kindFromPath = (p: string): AttachKind => (/\.(jpe?g|png|webp|gif)$/i.test(p) ? 'image' : 'file')
+
+export default function PurchaseInvoiceList() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const queryClient = useQueryClient()
-  const isEdit = !!id
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [projects, setProjects] = useState<{ id: string; project_name: string }[]>([])
-  const [selectedSupplierId, setSelectedSupplierId] = useState('')
-  const [items, setItems] = useState<Array<Omit<LPOItem, 'id' | 'lpo_id'>>>([{ ...EMPTY_ITEM }])
-  const [form, setForm] = useState({
-    lpo_number: '',
-    supplier_name: '',
-    supplier_email: '',
-    supplier_address: '',
-    supplier_tax_number: '',
-    project_id: '',
-    issue_date: new Date().toISOString().slice(0, 10),
-    delivery_date: '',
-    status: 'draft',
-    tax_rate: 10, // ضريبة القيمة المضافة البحرينية الحالية للمشتريات (قابلة للتعديل يدوياً للحالات الاستثنائية)
-    discount: 0,
-    notes: '',
-    payment_terms: 'صافي 30 يوم',
-    payment_type: 'bank_transfer',
-    check_due_date: '',
-    delivery_address: '',
-  })
-  const [loading, setLoading] = useState(false)
-  const [showUpload, setShowUpload] = useState(false)
-  const [fromLogId, setFromLogId] = useState<string | null>(null)
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [previewImg, setPreviewImg] = useState<string | null>(null)
+  const [groupBy, setGroupBy] = useState<'project' | 'flat'>('project')
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  // عدد المرفقات لكل فاتورة (مؤشّر خفيف من أعمدة محسوبة — بلا تحميل بيانات base64 في القائمة)
+  const [docCounts, setDocCounts] = useState<Record<string, number>>({})
+  // فاتورة قيد الاستعراض الكامل
+  const [viewInv, setViewInv] = useState<InvoiceRow | null>(null)
+  const [viewDeliveries, setViewDeliveries] = useState<ViewDelivery[]>([])
+  const [viewDocs, setViewDocs] = useState<ResolvedDoc[]>([])
+  const [loadingView, setLoadingView] = useState(false)
 
-  useEffect(() => {
-    supabase.from('suppliers').select('*').order('name').then(({ data }) => setSuppliers((data ?? []) as Supplier[]))
-    supabase.from('projects').select('id, project_name').eq('status', 'active').order('project_name').then(({ data }) => setProjects((data ?? []) as { id: string; project_name: string }[]))
-    if (!isEdit) {
-      supabase.from('lpos').select('lpo_number').then(({ data }) => {
-        const nums = (data ?? []).map((r: { lpo_number: string }) => r.lpo_number)
-        setForm(prev => ({ ...prev, lpo_number: nextSerial(nums, 1036) }))
-      })
-      // استقبال البيانات القادمة من التقرير اليومي (تحويل طلب مواد → أمر شراء)
-      const projectParam = searchParams.get('project')
-      const materialsParam = searchParams.get('materials')
-      const fromLog = searchParams.get('from_log')
-      if (projectParam) setForm(prev => ({ ...prev, project_id: projectParam }))
-      if (fromLog) setFromLogId(fromLog)
-      if (materialsParam) {
-        // تحويل كل سطر من طلبات المواد إلى بند منفصل
-        const lines = materialsParam.split('\n').map(l => l.trim()).filter(Boolean)
-        if (lines.length > 0) {
-          const newItems = lines.map((line, i) => {
-            // محاولة فصل "المادة - الكمية" إن وجدت
-            const parts = line.split(/[-–:]/).map(p => p.trim())
-            const desc = parts[0] || line
-            const qtyMatch = line.match(/(\d+(?:\.\d+)?)/)
-            return {
-              description: desc,
-              quantity: qtyMatch ? parseFloat(qtyMatch[1]) : 1,
-              unit: 'قطعة',
-              unit_price: 0,
-              total: 0,
-              sort_order: i,
-            }
-          })
-          setItems(newItems)
-          toast.success(`تم تحويل ${newItems.length} مادة من التقرير اليومي`)
-        }
-      }
-    }
-  }, [isEdit, searchParams])
-
-  useEffect(() => {
-    if (!isEdit) return
-    supabase.from('lpos').select('*').eq('id', id).single().then(({ data }) => {
-      if (!data) return
-      const lpo = data as LPO
-      setForm({
-        lpo_number: lpo.lpo_number,
-        supplier_name: lpo.supplier_name,
-        supplier_email: lpo.supplier_email,
-        supplier_address: lpo.supplier_address,
-        supplier_tax_number: lpo.supplier_tax_number,
-        project_id: (lpo as LPO & { project_id?: string }).project_id ?? '',
-        issue_date: lpo.issue_date,
-        delivery_date: lpo.delivery_date ?? '',
-        status: lpo.status,
-        tax_rate: Number(lpo.tax_rate),
-        discount: Number(lpo.discount),
-        notes: lpo.notes,
-        payment_terms: lpo.payment_terms,
-        payment_type: lpo.payment_type ?? 'bank_transfer',
-        check_due_date: lpo.check_due_date ?? '',
-        delivery_address: lpo.delivery_address,
-      })
-      setSelectedSupplierId(lpo.supplier_id ?? '')
-      supabase.from('lpo_items').select('*').eq('lpo_id', id).order('sort_order').then(({ data: rows }) => {
-        if (rows?.length) setItems(rows as LPOItem[])
-      })
-    })
-  }, [id, isEdit])
-
-  useEffect(() => {
-    if (!selectedSupplierId) return
-    const s = suppliers.find(s => s.id === selectedSupplierId)
-    if (!s) return
-    setForm(prev => ({
-      ...prev,
-      supplier_name: s.name || s.company_name,
-      supplier_email: s.email,
-      supplier_address: `${s.address}${s.city ? `, ${s.city}` : ''}`,
-      supplier_tax_number: s.tax_number,
-    }))
-  }, [selectedSupplierId, suppliers])
-
-  const setField = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
-    setForm(prev => ({ ...prev, [field]: e.target.value }))
-
-  const updateItem = useCallback((idx: number, field: keyof typeof EMPTY_ITEM, value: string | number) => {
-    setItems(prev => {
-      const next = [...prev]
-      const item = { ...next[idx], [field]: value }
-      item.total = Number(item.quantity) * Number(item.unit_price)
-      next[idx] = item
-      return next
-    })
-  }, [])
-
-  const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM, sort_order: prev.length }])
-  const removeItem = (idx: number) => setItems(prev => prev.filter((_, i) => i !== idx))
-
-  // الحسابات المالية — تُعاد فقط عند تغيّر البنود أو نسبة الضريبة أو الخصم
-  const { subtotal, taxAmount, total } = useMemo(() => {
-    const subtotal = items.reduce((s, i) => s + Number(i.total), 0)
-    const taxAmount = (subtotal * Number(form.tax_rate)) / 100
-    const total = subtotal + taxAmount - Number(form.discount)
-    return { subtotal, taxAmount, total }
-  }, [items, form.tax_rate, form.discount])
-
-  const handleExtracted = (data: ExtractedDocumentData) => {
-    if (data.lpo_number) setForm(prev => ({ ...prev, lpo_number: data.lpo_number! }))
-    if (data.date) setForm(prev => ({ ...prev, issue_date: data.date! }))
-    if (data.notes) setForm(prev => ({ ...prev, notes: data.notes! }))
-    if (data.payment_terms) setForm(prev => ({ ...prev, payment_terms: data.payment_terms! }))
-    if (data.name) setForm(prev => ({ ...prev, supplier_name: data.name! }))
-    if (data.email) setForm(prev => ({ ...prev, supplier_email: data.email! }))
-    if (data.address) setForm(prev => ({ ...prev, supplier_address: data.address! }))
-    if (data.tax_number) setForm(prev => ({ ...prev, supplier_tax_number: data.tax_number! }))
-    if (data.items?.length) setItems(data.items.map((item, i) => ({ ...item, unit: 'قطعة', sort_order: i })))
-    toast.success('تم استخراج بيانات أمر الشراء تلقائياً')
-    setShowUpload(false)
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!form.supplier_name.trim()) { toast.error('اسم المورد مطلوب'); return }
+  const load = async () => {
     setLoading(true)
-
-    const payload = {
-      ...form,
-      supplier_id: selectedSupplierId || null,
-      project_id: form.project_id || null,
-      tax_rate: Number(form.tax_rate),
-      discount: Number(form.discount),
-      subtotal,
-      tax_amount: taxAmount,
-      total,
-      updated_at: new Date().toISOString(),
-    }
-
-    if (isEdit) {
-      const { error } = await supabase.from('lpos').update(payload).eq('id', id)
-      if (error) { toast.error('حدث خطأ'); setLoading(false); return }
-      await supabase.from('lpo_items').delete().eq('lpo_id', id)
-      await supabase.from('lpo_items').insert(
-        items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, lpo_id: id, sort_order: idx }))
+    try {
+      // استعلام خفيف: بدون أعمدة الصور/الملفات (base64) الضخمة —
+      // جلبها عبر select('*') كان يضخّم حجم الرد ويتسبب في خطأ 500 من الخادم
+      const { data, error } = await supabase
+        .from('purchase_invoices')
+        .select('id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, vendor_invoice_number, amount, subtotal, tax_rate, payment_method, check_due_date, notes, entry_date, created_at, updated_at')
+      if (error) throw error
+      // ترتيب آمن حسب تاريخ الفاتورة الفعلي (يتحمّل القيم الفارغة دون أن ينهار)
+      const rows = ((data ?? []) as InvoiceRow[]).slice().sort((a, b) =>
+        (invoiceDate(b) || '').localeCompare(invoiceDate(a) || '')
       )
-    } else {
-      const { data: newLpo, error } = await supabase.from('lpos').insert(payload).select().single()
-      if (error || !newLpo) { toast.error('حدث خطأ'); setLoading(false); return }
-      await supabase.from('lpo_items').insert(
-        items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, lpo_id: (newLpo as LPO).id, sort_order: idx }))
-      )
-      // تعليم التقرير اليومي المصدر بأنه تم تحويله لأمر شراء
-      if (fromLogId) {
-        await supabase.from('daily_logs').update({ converted_to_lpo: true }).eq('id', fromLogId)
+      setInvoices(rows)
+
+      // مؤشّر وجود المرفقات (خفيف) من أعمدة محسوبة اختيارية — يُتجاهل بأمان إن لم تكن موجودة بعد
+      const { data: flags } = await supabase
+        .from('purchase_invoices')
+        .select('id, has_invoice_copy, has_payment_proof, has_check_image')
+      if (flags) {
+        const counts: Record<string, number> = {}
+        for (const f of flags as Array<{ id: string; has_invoice_copy?: boolean; has_payment_proof?: boolean; has_check_image?: boolean }>) {
+          counts[f.id] = (f.has_invoice_copy ? 1 : 0) + (f.has_payment_proof ? 1 : 0) + (f.has_check_image ? 1 : 0)
+        }
+        setDocCounts(counts)
       }
+    } catch (e) {
+      // إظهار الخطأ الحقيقي بدل بقاء الصفحة عالقة على "جاري التحميل"
+      toast.error('تعذّر تحميل فواتير الشراء: ' + ((e as Error)?.message ?? 'خطأ غير معروف'))
+      setInvoices([])
+    } finally {
+      setLoading(false) // يضمن اختفاء "جاري التحميل" في كل الحالات
     }
-
-    setLoading(false)
-    queryClient.invalidateQueries({ queryKey: ['lpos-list'] })
-    toast.success(isEdit ? 'تم تحديث أمر الشراء' : 'تم إنشاء أمر الشراء')
-    navigate('/lpos')
   }
+
+  useEffect(() => { load() }, [])
+
+  const handleDelete = async () => {
+    if (!deleteId) return
+    await supabase.from('purchase_invoices').delete().eq('id', deleteId)
+    toast.success('تم حذف فاتورة الشراء')
+    setDeleteId(null)
+    if (viewInv?.id === deleteId) setViewInv(null)
+    load()
+  }
+
+  // يعيد رابط عرض مرفق من مسار Storage (رابط موقّع) أو base64 قديم، مع نوعه — أو null إن لا مرفق
+  const resolveSlot = async (path?: string, data?: string): Promise<{ url: string; kind: AttachKind } | null> => {
+    if (path) {
+      const url = await getAttachmentUrl(path)
+      return url ? { url, kind: kindFromPath(path) } : null
+    }
+    if (hasFile(data)) return { url: data as string, kind: isImageData(data) ? 'image' : 'file' }
+    return null
+  }
+
+  // يبني قائمة مرفقات الفاتورة القابلة للعرض (يدعم مسار Storage و base64 القديم معاً)
+  const buildViewDocs = async (inv: InvoiceRow): Promise<ResolvedDoc[]> => {
+    const slots: Array<{ label: string; path?: string; data?: string }> = [
+      { label: 'نسخة الفاتورة', path: inv.invoice_copy_path, data: inv.invoice_copy_data },
+      { label: 'إثبات الدفع', path: inv.payment_proof_path, data: inv.payment_proof_data },
+      { label: 'صورة الشيك', path: inv.check_image_path, data: inv.check_image_data },
+    ]
+    const docs: ResolvedDoc[] = []
+    for (const s of slots) {
+      const r = await resolveSlot(s.path, s.data)
+      if (r) docs.push({ label: s.label, url: r.url, kind: r.kind })
+    }
+    return docs
+  }
+
+  // فتح نافذة الاستعراض: جلب النسخة الكاملة + حلّ روابط المرفقات وبيانات التوصيل لهذه الفاتورة فقط
+  const openView = async (inv: InvoiceRow) => {
+    setViewInv(inv)            // عرض فوري بالبيانات الخفيفة المتوفّرة
+    setViewDocs([])
+    setViewDeliveries([])
+    setLoadingView(true)
+    const [fullRes, delRes] = await Promise.all([
+      supabase.from('purchase_invoices').select('*').eq('id', inv.id).single(),
+      supabase.from('purchase_invoice_deliveries').select('*').eq('purchase_invoice_id', inv.id).order('created_at'),
+    ])
+    const full = (fullRes.data ?? inv) as InvoiceRow
+    setViewInv(full)
+    setViewDocs(await buildViewDocs(full)) // مسار Storage → رابط موقّع، أو base64 مباشرة
+
+    const rawDeliveries = (delRes.data ?? []) as Array<PurchaseInvoiceDelivery & { id?: string; delivery_image_path?: string }>
+    const resolved = await Promise.all(rawDeliveries.map(async d => {
+      const r = await resolveSlot(d.delivery_image_path, d.delivery_image_data)
+      return {
+        id: d.id,
+        delivery_note_number: d.delivery_note_number ?? '',
+        notes: d.notes ?? '',
+        imageUrl: r?.url ?? '',
+        imageKind: (r?.kind ?? 'file') as AttachKind,
+      }
+    }))
+    setViewDeliveries(resolved)
+    setLoadingView(false)
+  }
+
+  // فتح/معاينة مرفق محلول (صورة تتكبّر، ملف يُفتح في تبويب جديد)
+  const openResolved = (url: string, kind: AttachKind) => {
+    if (kind === 'image') { setPreviewImg(url); return }
+    if (url.startsWith('data:')) openStoredFile(url, url.startsWith('data:application/pdf') ? 'application/pdf' : '')
+    else window.open(url, '_blank', 'noopener')
+  }
+
+  const filtered = useMemo(() => invoices.filter(inv => {
+    const q = search.toLowerCase()
+    return !q ||
+      (inv.supplier_name || '').toLowerCase().includes(q) ||
+      (inv.vendor_invoice_number || '').toLowerCase().includes(q) ||
+      (inv.project_name || '').toLowerCase().includes(q)
+  }), [invoices, search])
+
+  // ── الإجماليات ──
+  const today = todayStr()
+  const totalAmount = invoices.reduce((s, inv) => s + num(inv.amount), 0)
+  const pendingCheques = invoices.filter(inv => inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today)
+  const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
+  const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
+  const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
+  const recoverableVAT = invoices.reduce((s, inv) => s + invTax(inv), 0)
+  const totalSubtotal = invoices.reduce((s, inv) => s + invSubtotal(inv), 0)
+
+  // ── التجميع حسب المشروع ──
+  const groups = useMemo(() => {
+    const map = new Map<string, { name: string; invoices: InvoiceRow[]; total: number }>()
+    for (const inv of filtered) {
+      const key = inv.project_name?.trim() || '__none__'
+      const name = inv.project_name?.trim() || 'بدون مشروع'
+      if (!map.has(key)) map.set(key, { name, invoices: [], total: 0 })
+      const g = map.get(key)!
+      g.invoices.push(inv)
+      g.total += num(inv.amount)
+    }
+    // المشاريع المسماة أولاً، "بدون مشروع" أخيراً
+    return Array.from(map.entries())
+      .sort(([ka], [kb]) => (ka === '__none__' ? 1 : kb === '__none__' ? -1 : 0))
+      .map(([key, g]) => ({ key, ...g }))
+  }, [filtered])
+
+  const toggleGroup = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }))
+
+  // ═══ تصدير Excel: أعمدة وباني صفوف مشتركان (يستخدمهما تصدير الكل وتصدير كل مشروع) ═══
+  const EXPORT_COLS = [
+    { wch: 4 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 12 }, { wch: 13 },
+    { wch: 16 }, { wch: 10 }, { wch: 13 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 18 }, { wch: 25 },
+  ]
+
+  const buildRows = (list: InvoiceRow[]) => {
+    const rows = list.map((inv, i) => ({
+      'م': i + 1,
+      'المورد': inv.supplier_name || '',
+      'المشروع': inv.project_name || 'بدون مشروع',
+      'رقم الفاتورة': inv.vendor_invoice_number || '',
+      'LPO': inv.lpo_number || '',
+      'تاريخ الفاتورة': formatDate(invoiceDate(inv)),
+      'المبلغ قبل الضريبة': Number(invSubtotal(inv).toFixed(3)),
+      'نسبة الضريبة': invTaxRate(inv) + '%',
+      'مبلغ الضريبة': Number(invTax(inv).toFixed(3)),
+      'المجموع الشامل': Number(invTotal(inv).toFixed(3)),
+      'طريقة الدفع': PAYMENT_LABELS[inv.payment_method] ?? inv.payment_method,
+      'استحقاق الشيك': inv.check_due_date ? formatDate(inv.check_due_date) : '',
+      'حالة الدفع': inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today ? 'شيك آجل (لم يُصرف)' : 'مدفوع',
+      'ملاحظات': inv.notes || '',
+    }))
+    const sumSub = list.reduce((s, inv) => s + invSubtotal(inv), 0)
+    const sumTax = list.reduce((s, inv) => s + invTax(inv), 0)
+    const sumTotal = list.reduce((s, inv) => s + invTotal(inv), 0)
+    rows.push({
+      'م': '' as never, 'المورد': 'الإجمالي' as never, 'المشروع': '', 'رقم الفاتورة': '', 'LPO': '',
+      'تاريخ الفاتورة': '', 'المبلغ قبل الضريبة': Number(sumSub.toFixed(3)), 'نسبة الضريبة': '',
+      'مبلغ الضريبة': Number(sumTax.toFixed(3)), 'المجموع الشامل': Number(sumTotal.toFixed(3)),
+      'طريقة الدفع': '', 'استحقاق الشيك': '', 'حالة الدفع': '', 'ملاحظات': '',
+    })
+    return rows
+  }
+
+  // تصدير مشروع (عميل) واحد في ملف Excel مستقل — بنفس بيانات وتنسيق التصدير العام تماماً
+  const exportGroup = async (g: { name: string; invoices: InvoiceRow[] }) => {
+    if (g.invoices.length === 0) { toast.error('لا توجد فواتير في هذا المشروع'); return }
+    try {
+      // تحميل مكتبة Excel عند الطلب فقط (تقلّل حجم التحميل الأولي للصفحة بشكل كبير)
+      const XLSX = await import('xlsx')
+      const wb = XLSX.utils.book_new()
+      const safeName = (g.name || 'مشروع').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28)
+      const sheet = XLSX.utils.json_to_sheet(buildRows(g.invoices))
+      sheet['!cols'] = EXPORT_COLS
+      XLSX.utils.book_append_sheet(wb, sheet, safeName || 'مشروع')
+      XLSX.writeFile(wb, `مشتريات_${safeName}_${today.replace(/-/g, '')}.xlsx`)
+      toast.success(`تم تصدير مشتريات: ${g.name}`)
+    } catch (e) {
+      toast.error('تعذّر التصدير: ' + ((e as Error)?.message ?? ''))
+    }
+  }
+
+  // ═══ تصدير الكل: ورقة شاملة + ورقة لكل مشروع + ملخّص الضريبة ═══
+  const exportToExcel = async () => {
+    if (invoices.length === 0) { toast.error('لا توجد فواتير للتصدير'); return }
+    try {
+      // تحميل مكتبة Excel عند الطلب فقط
+      const XLSX = await import('xlsx')
+      const wb = XLSX.utils.book_new()
+
+      // ── الورقة الشاملة (كل الفواتير) ──
+      const allSheet = XLSX.utils.json_to_sheet(buildRows(invoices))
+      allSheet['!cols'] = EXPORT_COLS
+      XLSX.utils.book_append_sheet(wb, allSheet, 'كل الفواتير')
+
+      // ── ورقة لكل مشروع ──
+      for (const g of groups) {
+        const safeName = (g.name || 'بدون مشروع').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28)
+        const sheet = XLSX.utils.json_to_sheet(buildRows(g.invoices))
+        sheet['!cols'] = EXPORT_COLS
+        XLSX.utils.book_append_sheet(wb, sheet, safeName || 'مشروع')
+      }
+
+      // ── ورقة ملخّص الضريبة حسب المشروع ──
+      const summaryRows = groups.map((g, i) => ({
+        'م': i + 1,
+        'المشروع': g.name,
+        'عدد الفواتير': g.invoices.length,
+        'المبلغ قبل الضريبة': Number(g.invoices.reduce((s, inv) => s + invSubtotal(inv), 0).toFixed(3)),
+        'مبلغ الضريبة (قابل للاسترداد)': Number(g.invoices.reduce((s, inv) => s + invTax(inv), 0).toFixed(3)),
+        'المجموع الشامل': Number(g.invoices.reduce((s, inv) => s + invTotal(inv), 0).toFixed(3)),
+      }))
+      summaryRows.push({
+        'م': '' as never, 'المشروع': 'الإجمالي الكلي' as never, 'عدد الفواتير': invoices.length as never,
+        'المبلغ قبل الضريبة': Number(totalSubtotal.toFixed(3)),
+        'مبلغ الضريبة (قابل للاسترداد)': Number(recoverableVAT.toFixed(3)),
+        'المجموع الشامل': Number(totalAmount.toFixed(3)),
+      })
+      const summarySheet = XLSX.utils.json_to_sheet(summaryRows)
+      summarySheet['!cols'] = [{ wch: 4 }, { wch: 24 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 16 }]
+      XLSX.utils.book_append_sheet(wb, summarySheet, 'ملخص الضريبة')
+
+      XLSX.writeFile(wb, `مشتريات_الميمون_${today.replace(/-/g, '')}.xlsx`)
+      toast.success('تم تصدير ملف Excel بنجاح')
+    } catch (e) {
+      toast.error('تعذّر التصدير: ' + ((e as Error)?.message ?? ''))
+    }
+  }
+
+  // صف فاتورة (يُستخدم في وضع التجميع والوضع المسطّح)
+  const InvoiceRowEl = ({ inv }: { inv: InvoiceRow }) => {
+    const docCount = docCounts[inv.id] ?? 0
+    const isSoonCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today && daysUntil(inv.check_due_date) <= 7
+    const isOverdueCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date <= today
+    return (
+      <tr className={`transition-colors cursor-pointer ${isSoonCheque ? 'bg-red-50/40 hover:bg-red-50' : 'hover:bg-amber-50/40'}`}
+        onClick={() => openView(inv)}>
+        <td className="px-4 py-3">
+          <div className="font-medium text-slate-800">{inv.supplier_name || '—'}</div>
+          {inv.lpo_number && <div className="text-xs text-slate-400">LPO: {inv.lpo_number}</div>}
+        </td>
+        <td className="px-4 py-3 font-mono text-slate-600 text-xs">{inv.vendor_invoice_number || '—'}</td>
+        <td className="px-4 py-3 text-slate-600 whitespace-nowrap text-xs" dir="ltr">{formatCurrency(invSubtotal(inv))}</td>
+        <td className="px-4 py-3 whitespace-nowrap text-xs" dir="ltr">
+          {invTax(inv) > 0 ? <span className="text-emerald-600 font-medium">{formatCurrency(invTax(inv))}</span> : <span className="text-slate-300">معفى</span>}
+        </td>
+        <td className="px-4 py-3 font-bold whitespace-nowrap" style={{ color: '#7b4a2d' }}>
+          {formatCurrency(invTotal(inv))}
+        </td>
+        <td className="px-4 py-3">
+          <Badge color={PAYMENT_COLOR(inv.payment_method)}>{PAYMENT_LABELS[inv.payment_method] ?? inv.payment_method}</Badge>
+          {inv.payment_method === 'deferred_cheque' && inv.check_due_date && (
+            <div className={`text-xs mt-0.5 ${isOverdueCheque ? 'text-slate-500' : isSoonCheque ? 'text-red-600 font-bold' : 'text-orange-600'}`}>
+              استحقاق: {formatDate(inv.check_due_date)}
+              {isSoonCheque && ` (${daysUntil(inv.check_due_date)} يوم)`}
+            </div>
+          )}
+        </td>
+        <td className="px-4 py-3">
+          {docCount > 0 ? (
+            <button onClick={e => { e.stopPropagation(); openView(inv) }}
+              className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-700 px-2.5 py-1 rounded-lg transition-colors" title="عرض المستندات">
+              <Paperclip size={13} /> {docCount}
+            </button>
+          ) : <span className="text-slate-300 text-xs">—</span>}
+        </td>
+        <td className="px-4 py-3 text-slate-500 whitespace-nowrap text-xs">{formatDate(invoiceDate(inv))}</td>
+        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+          <div className="flex gap-1">
+            <button onClick={() => openView(inv)} className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-amber-50" title="استعراض"><Eye size={15} /></button>
+            <Link to={`/purchases/${inv.id}/edit`}>
+              <button className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50" title="تعديل"><Edit size={15} /></button>
+            </Link>
+            <button onClick={() => setDeleteId(inv.id)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50" title="حذف"><Trash2 size={15} /></button>
+          </div>
+        </td>
+      </tr>
+    )
+  }
+
+  const TableHead = () => (
+    <thead className="bg-slate-50 border-b border-slate-100">
+      <tr>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">المورد</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">رقم الفاتورة</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">قبل الضريبة</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">الضريبة</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">المجموع</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">طريقة الدفع</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">مستندات</th>
+        <th className="px-4 py-2.5 text-right font-semibold text-slate-600 text-xs">تاريخ الفاتورة</th>
+        <th className="px-4 py-2.5"></th>
+      </tr>
+    </thead>
+  )
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => navigate('/lpos')} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-600">
-          <ArrowLeft size={20} />
-        </button>
-        <h2 className="text-lg font-semibold text-slate-800">{isEdit ? 'تعديل أمر الشراء' : 'أمر شراء جديد (LPO)'}</h2>
+    <div className="p-6" dir="rtl">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">الفواتير والمدفوعات</h1>
+          <p className="text-slate-500 text-sm mt-0.5">مشتريات الموردين مجمّعة حسب المشروع ومتابعة الشيكات الآجلة</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={exportToExcel}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors">
+            <FileSpreadsheet size={16} /> تصدير Excel
+          </button>
+          <Button onClick={() => navigate('/purchases/new')} icon={<Plus size={16} />}>تسجيل فاتورة شراء</Button>
+        </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-5">
-        <button type="button" onClick={() => setShowUpload(!showUpload)} className="flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700">
-          <Upload size={16} />
-          {showUpload ? 'إخفاء رفع الملف' : 'رفع ملف لاستخراج بيانات أمر الشراء تلقائياً'}
-        </button>
-        {showUpload && <div className="mt-4"><DocumentUpload onExtracted={handleExtracted} /></div>}
+      {/* تنبيه الشيكات القريبة */}
+      {soonCheques.length > 0 && (
+        <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-sm mb-4">
+          <AlertTriangle size={18} className="text-red-600 shrink-0" />
+          <span className="text-red-700">
+            <strong>{soonCheques.length}</strong> شيك آجل يستحق خلال 7 أيام (إجمالي {formatCurrency(soonChequesTotal)}) — جهّز رصيدها في البنك.
+          </span>
+        </div>
+      )}
+
+      {/* بطاقات ملخّص */}
+      {!loading && invoices.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-5">
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Receipt size={13} /> إجمالي المشتريات</div>
+            <div className="text-lg font-bold text-slate-800">{formatCurrency(totalAmount)}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">{invoices.length} فاتورة (شامل الضريبة)</div>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Wallet size={13} /> المبلغ قبل الضريبة</div>
+            <div className="text-lg font-bold text-slate-700">{formatCurrency(totalSubtotal)}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">صافي قيمة المشتريات</div>
+          </div>
+          <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4">
+            <div className="text-xs text-emerald-700 flex items-center gap-1 mb-1"><Receipt size={13} /> ضريبة قابلة للاسترداد</div>
+            <div className="text-lg font-bold text-emerald-700">{formatCurrency(recoverableVAT)}</div>
+            <div className="text-[11px] text-emerald-600 mt-0.5">مجموع ضريبة كل الفواتير</div>
+          </div>
+          <div className={`rounded-xl border p-4 ${pendingChequesTotal > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
+            <div className="text-xs flex items-center gap-1 mb-1" style={{ color: pendingChequesTotal > 0 ? '#b91c1c' : '#94a3b8' }}><CreditCard size={13} /> شيكات آجلة معلّقة</div>
+            <div className="text-lg font-bold" style={{ color: pendingChequesTotal > 0 ? '#dc2626' : '#334155' }}>{formatCurrency(pendingChequesTotal)}</div>
+            <div className="text-[11px] mt-0.5" style={{ color: pendingChequesTotal > 0 ? '#b91c1c' : '#94a3b8' }}>{pendingCheques.length} شيك لم ينصرف</div>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Wallet size={13} /> مدفوع فعلياً</div>
+            <div className="text-lg font-bold text-slate-800">{formatCurrency(totalAmount - pendingChequesTotal)}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">باستثناء الشيكات المعلّقة</div>
+          </div>
+        </div>
+      )}
+
+      {/* شريط أدوات: بحث + تبديل العرض */}
+      <div className="bg-white rounded-xl border border-slate-200 mb-4 p-3 flex items-center justify-between gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="بحث بالمورد أو المشروع أو رقم الفاتورة..."
+            className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+          />
+        </div>
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+          <button onClick={() => setGroupBy('project')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${groupBy === 'project' ? 'bg-white shadow-sm text-amber-700' : 'text-slate-500'}`}>
+            <LayoutGrid size={14} /> حسب المشروع
+          </button>
+          <button onClick={() => setGroupBy('flat')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${groupBy === 'flat' ? 'bg-white shadow-sm text-amber-700' : 'text-slate-500'}`}>
+            <ListIcon size={14} /> قائمة موحّدة
+          </button>
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-5">
-        {fromLogId && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2 text-sm text-amber-800">
-            <ClipboardList size={16} />
-            تم إنشاء هذا الأمر من طلبات مواد في تقرير يومي — راجع البنود وأضف الأسعار والمورد
-          </div>
-        )}
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h3 className="font-semibold text-slate-700 mb-4 text-sm">معلومات أمر الشراء</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <Input label="رقم أمر الشراء *" value={form.lpo_number} onChange={setField('lpo_number')} />
-            <Input label="تاريخ الإصدار *" type="date" value={form.issue_date} onChange={setField('issue_date')} />
-            <Input label="تاريخ التسليم المتوقع" type="date" value={form.delivery_date} onChange={setField('delivery_date')} />
-            <Select label="المشروع" value={form.project_id} onChange={setField('project_id')}
-              options={[{ value: '', label: '— غير مرتبط بمشروع —' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))]} />
-            <Select label="الحالة" value={form.status} onChange={setField('status')} options={STATUS_OPTIONS} />
-            <Input label="شروط الدفع" value={form.payment_terms} onChange={setField('payment_terms')} />
-            <Select label="طريقة الدفع" value={form.payment_type} onChange={setField('payment_type')} options={PAYMENT_TYPE_OPTIONS} />
-            {form.payment_type === 'deferred_cheque' && (
-              <Input label="تاريخ استحقاق الشيك *" type="date" value={form.check_due_date} onChange={setField('check_due_date')} />
-            )}
+      {/* المحتوى */}
+      {loading ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">جاري التحميل...</div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
+          <FileText size={40} className="mx-auto mb-3 text-slate-300" />
+          <p>{search ? 'لا نتائج للبحث' : 'لا توجد فواتير مسجلة'}</p>
+        </div>
+      ) : groupBy === 'flat' ? (
+        /* ═══ وضع القائمة الموحّدة ═══ */
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <TableHead />
+              <tbody className="divide-y divide-slate-50">
+                {filtered.map(inv => <InvoiceRowEl key={inv.id} inv={inv} />)}
+              </tbody>
+            </table>
           </div>
         </div>
+      ) : (
+        /* ═══ وضع التجميع حسب المشروع ═══ */
+        <div className="space-y-4">
+          {groups.map(g => {
+            const isExpanded = !!expanded[g.key]
+            const isNone = g.key === '__none__'
+            return (
+              <div key={g.key} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                {/* رأس المشروع */}
+                <div className="w-full flex items-center gap-2 px-4 py-3 transition-colors hover:bg-slate-50"
+                  style={{ background: isNone ? '#f8fafc' : 'linear-gradient(90deg, #faf6f1 0%, #fdfbf8 100%)' }}>
+                  <button onClick={() => toggleGroup(g.key)} className="flex-1 flex items-center justify-between min-w-0">
+                    <div className="flex items-center gap-2.5">
+                      {isExpanded ? <ChevronDown size={18} className="text-slate-400" /> : <ChevronLeft size={18} className="text-slate-400" />}
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: isNone ? '#e2e8f0' : 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
+                        <Building2 size={16} className={isNone ? 'text-slate-500' : 'text-white'} />
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-slate-800 text-sm">{g.name}</div>
+                        <div className="text-xs text-slate-400">{g.invoices.length} فاتورة</div>
+                      </div>
+                    </div>
+                    <div className="text-left">
+                      <div className="font-bold text-base" style={{ color: '#7b4a2d' }}>{formatCurrency(g.total)}</div>
+                      <div className="text-[11px] text-slate-400">إجمالي المشروع</div>
+                    </div>
+                  </button>
+                  {/* تصدير Excel مستقل لهذا المشروع (العميل) */}
+                  <button onClick={() => exportGroup(g)} title="تصدير Excel لهذا المشروع وحده"
+                    className="shrink-0 h-9 w-9 flex items-center justify-center rounded-lg text-green-700 bg-green-50 hover:bg-green-100 transition-colors">
+                    <FileSpreadsheet size={16} />
+                  </button>
+                </div>
+                {/* جدول فواتير المشروع */}
+                {isExpanded && (
+                  <div className="overflow-x-auto border-t border-slate-100">
+                    <table className="w-full text-sm">
+                      <TableHead />
+                      <tbody className="divide-y divide-slate-50">
+                        {g.invoices.map(inv => <InvoiceRowEl key={inv.id} inv={inv} />)}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h3 className="font-semibold text-slate-700 mb-4 text-sm">بيانات المورد</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium text-slate-700 block mb-1">اختر مورداً موجوداً</label>
-              <select
-                value={selectedSupplierId}
-                onChange={e => setSelectedSupplierId(e.target.value)}
-                className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none"
-              >
-                <option value="">-- اختر موردًا --</option>
-                {suppliers.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}{s.company_name ? ` (${s.company_name})` : ''}</option>
-                ))}
-              </select>
+      <ConfirmDialog open={!!deleteId} title="حذف الفاتورة" message="هل أنت متأكد من حذف هذه الفاتورة؟ لا يمكن التراجع." confirmLabel="حذف" onConfirm={handleDelete} onCancel={() => setDeleteId(null)} danger />
+
+      {/* ═══ نافذة استعراض الفاتورة الكاملة ═══ */}
+      {viewInv && (
+        <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4" onClick={() => setViewInv(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            {/* رأس النافذة */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-100 sticky top-0 bg-white z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #c4925a 0%, #7b4a2d 100%)' }}>
+                  <Receipt size={20} className="text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800">{viewInv.supplier_name || 'فاتورة شراء'}</h3>
+                  <p className="text-xs text-slate-400">{viewInv.vendor_invoice_number ? `فاتورة رقم: ${viewInv.vendor_invoice_number}` : 'بدون رقم فاتورة'}</p>
+                </div>
+              </div>
+              <button onClick={() => setViewInv(null)} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"><X size={18} /></button>
             </div>
-            <Input label="اسم المورد *" value={form.supplier_name} onChange={setField('supplier_name')} placeholder="أو اكتب اسم المورد مباشرة" />
-            <Input label="البريد الإلكتروني" type="email" value={form.supplier_email} onChange={setField('supplier_email')} />
-            <Input label="رقم الضريبة" value={form.supplier_tax_number} onChange={setField('supplier_tax_number')} />
-            <div className="sm:col-span-2">
-              <Textarea label="عنوان المورد" value={form.supplier_address} onChange={setField('supplier_address')} rows={2} />
-            </div>
-            <div className="sm:col-span-2">
-              <Textarea label="عنوان التسليم" value={form.delivery_address} onChange={setField('delivery_address')} rows={2} />
+
+            <div className="p-5 space-y-5">
+              {/* المبلغ مع تفصيل الضريبة */}
+              <div className="rounded-xl overflow-hidden" style={{ background: 'linear-gradient(135deg, #7b4a2d 0%, #9a6440 100%)' }}>
+                <div className="grid grid-cols-3 divide-x divide-x-reverse divide-white/15">
+                  <div className="p-3 text-center">
+                    <div className="text-[11px] text-white/70 mb-0.5">قبل الضريبة</div>
+                    <div className="text-white font-bold text-sm" dir="ltr">{formatCurrency(invSubtotal(viewInv))}</div>
+                  </div>
+                  <div className="p-3 text-center">
+                    <div className="text-[11px] text-white/70 mb-0.5">الضريبة ({invTaxRate(viewInv)}%)</div>
+                    <div className="text-white font-bold text-sm" dir="ltr">{formatCurrency(invTax(viewInv))}</div>
+                  </div>
+                  <div className="p-3 text-center bg-black/15">
+                    <div className="text-[11px] text-white/80 mb-0.5">المجموع</div>
+                    <div className="text-white font-black text-base" dir="ltr">{formatCurrency(invTotal(viewInv))}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* تفاصيل */}
+              <div className="grid grid-cols-2 gap-3">
+                <DetailItem icon={<Building2 size={14} />} label="المشروع" value={viewInv.project_name || 'بدون مشروع'} />
+                <DetailItem icon={<Calendar size={14} />} label="تاريخ الفاتورة" value={formatDate(invoiceDate(viewInv))} />
+                <DetailItem icon={<Wallet size={14} />} label="طريقة الدفع" value={PAYMENT_LABELS[viewInv.payment_method] ?? viewInv.payment_method} />
+                {viewInv.lpo_number && <DetailItem icon={<FileText size={14} />} label="LPO المرتبط" value={viewInv.lpo_number} />}
+                {viewInv.payment_method === 'deferred_cheque' && viewInv.check_due_date && (
+                  <DetailItem icon={<CreditCard size={14} />} label="استحقاق الشيك" value={formatDate(viewInv.check_due_date)}
+                    highlight={viewInv.check_due_date > today && daysUntil(viewInv.check_due_date) <= 7} />
+                )}
+              </div>
+
+              {viewInv.notes && (
+                <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                  <div className="text-xs font-semibold text-slate-500 mb-1">ملاحظات</div>
+                  <div className="text-sm text-slate-700 whitespace-pre-wrap">{viewInv.notes}</div>
+                </div>
+              )}
+
+              {/* المرفقات */}
+              <div>
+                <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-1.5"><Paperclip size={15} /> المرفقات</div>
+                {loadingView ? (
+                  <p className="text-xs text-slate-400 text-center py-3">جاري التحميل...</p>
+                ) : viewDocs.length === 0 ? (
+                  <p className="text-xs text-slate-400 bg-slate-50 rounded-lg p-3 text-center">لا توجد مرفقات لهذه الفاتورة</p>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {viewDocs.map((doc, i) => {
+                      const isImg = doc.kind === 'image'
+                      return (
+                        <button key={i} onClick={() => openResolved(doc.url, doc.kind)}
+                          className="rounded-xl border border-slate-200 overflow-hidden group hover:border-amber-300 transition-colors">
+                          <div className="aspect-[4/3] bg-slate-50 relative flex items-center justify-center">
+                            {isImg ? (
+                              <img src={doc.url} alt={doc.label} className="w-full h-full object-cover" />
+                            ) : (
+                              <FileText size={32} className="text-red-500" />
+                            )}
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors">
+                              <Eye size={20} className="text-white opacity-0 group-hover:opacity-100" />
+                            </div>
+                          </div>
+                          <div className="px-2 py-1.5 text-[11px] text-slate-600 flex items-center gap-1 justify-center">
+                            {isImg ? <ImageIcon size={11} className="text-blue-500" /> : <FileText size={11} className="text-red-500" />}
+                            {doc.label}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* الديلفري نوت */}
+              <div>
+                <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-1.5"><Truck size={15} /> بيانات التوصيل</div>
+                {loadingView ? (
+                  <p className="text-xs text-slate-400 text-center py-3">جاري التحميل...</p>
+                ) : viewDeliveries.length === 0 ? (
+                  <p className="text-xs text-slate-400 bg-slate-50 rounded-lg p-3 text-center">لا توجد بيانات توصيل</p>
+                ) : (
+                  <div className="space-y-2">
+                    {viewDeliveries.map((d, i) => (
+                      <div key={d.id ?? i} className="flex items-center gap-3 rounded-lg border border-slate-100 p-2.5">
+                        {d.imageUrl ? (
+                          <button onClick={() => openResolved(d.imageUrl, d.imageKind)} className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0">
+                            {d.imageKind === 'image'
+                              ? <img src={d.imageUrl} alt="DN" className="w-full h-full object-cover" />
+                              : <div className="w-full h-full flex items-center justify-center bg-slate-50"><FileText size={18} className="text-red-500" /></div>}
+                          </button>
+                        ) : <div className="w-12 h-12 rounded-lg bg-slate-50 flex items-center justify-center shrink-0"><Truck size={16} className="text-slate-300" /></div>}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-slate-700">{d.delivery_note_number || 'بدون رقم'}</div>
+                          {d.notes && <div className="text-xs text-slate-400 truncate">{d.notes}</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* أزرار */}
+              <div className="flex gap-2 pt-2 border-t border-slate-100">
+                <Button onClick={() => navigate(`/purchases/${viewInv.id}/edit`)} icon={<Edit size={15} />}>تعديل الفاتورة</Button>
+                <Button variant="secondary" onClick={() => { setDeleteId(viewInv.id) }} icon={<Trash2 size={15} />}>حذف</Button>
+              </div>
             </div>
           </div>
         </div>
+      )}
 
-        {/* Items */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-slate-700 text-sm">البنود</h3>
-            <button type="button" onClick={addItem} className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700">
-              <Plus size={15} /> إضافة بند
-            </button>
-          </div>
-          <div className="space-y-3">
-            <div className="hidden sm:grid grid-cols-12 gap-2 text-xs font-medium text-slate-500 pb-1 border-b border-slate-100">
-              <div className="col-span-4">الوصف</div>
-              <div className="col-span-2 text-center">الكمية</div>
-              <div className="col-span-2 text-center">الوحدة</div>
-              <div className="col-span-2 text-center">سعر الوحدة</div>
-              <div className="col-span-1 text-center">المجموع</div>
-              <div className="col-span-1" />
-            </div>
-            {items.map((item, idx) => (
-              <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                <div className="col-span-12 sm:col-span-4">
-                  <input type="text" placeholder="وصف المادة / الخدمة" value={item.description} onChange={e => updateItem(idx, 'description', e.target.value)}
-                    className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none" />
-                </div>
-                <div className="col-span-3 sm:col-span-2">
-                  <input type="number" placeholder="الكمية" value={item.quantity} min={0} step="0.01" onChange={e => updateItem(idx, 'quantity', parseFloat(e.target.value) || 0)}
-                    className="w-full h-9 px-2 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none text-center" />
-                </div>
-                <div className="col-span-3 sm:col-span-2">
-                  <input type="text" placeholder="الوحدة" value={item.unit} onChange={e => updateItem(idx, 'unit', e.target.value)}
-                    className="w-full h-9 px-2 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none text-center" />
-                </div>
-                <div className="col-span-3 sm:col-span-2">
-                  <input type="number" placeholder="السعر" value={item.unit_price} min={0} step="0.01" onChange={e => updateItem(idx, 'unit_price', parseFloat(e.target.value) || 0)}
-                    className="w-full h-9 px-2 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none text-center" />
-                </div>
-                <div className="col-span-2 sm:col-span-1 text-center text-xs font-medium text-slate-700">
-                  {formatCurrency(Number(item.total)).split(' ')[0]}
-                </div>
-                <div className="col-span-1 flex justify-center">
-                  {items.length > 1 && (
-                    <button type="button" onClick={() => removeItem(idx)} className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-red-500">
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-6 flex justify-end">
-            <div className="w-full sm:w-72 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-slate-500">المجموع الجزئي</span>
-                <span className="font-medium">{formatCurrency(subtotal)}</span>
-              </div>
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-slate-500">الضريبة</span>
-                <div className="flex items-center gap-1">
-                  <input type="number" value={form.tax_rate} min={0} max={100} step="0.1" onChange={setField('tax_rate')}
-                    className="w-16 h-7 px-2 rounded border border-slate-300 text-xs text-center" />
-                  <span className="text-slate-500">%</span>
-                  <span className="font-medium w-24 text-left">{formatCurrency(taxAmount)}</span>
-                </div>
-              </div>
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-slate-500">خصم</span>
-                <input type="number" value={form.discount} min={0} step="0.01" onChange={setField('discount')}
-                  className="w-28 h-7 px-2 rounded border border-slate-300 text-xs text-center" />
-              </div>
-              <div className="flex justify-between border-t border-slate-200 pt-2">
-                <span className="font-bold text-slate-800">الإجمالي</span>
-                <span className="font-bold text-primary-700 text-base">{formatCurrency(total)}</span>
-              </div>
-            </div>
+      {/* معاينة الصورة بملء الشاشة */}
+      {previewImg && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setPreviewImg(null)}>
+          <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setPreviewImg(null)} className="absolute -top-3 -right-3 bg-white text-slate-700 rounded-full w-8 h-8 flex items-center justify-center shadow-lg hover:bg-slate-100"><X size={18} /></button>
+            <img src={previewImg} alt="معاينة" className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl" />
           </div>
         </div>
+      )}
+    </div>
+  )
+}
 
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <Textarea label="ملاحظات وشروط" value={form.notes} onChange={setField('notes')} rows={3} placeholder="شروط التوريد، متطلبات خاصة..." />
-        </div>
-
-        <div className="flex gap-3">
-          <Button type="submit" loading={loading}>{isEdit ? 'حفظ التعديلات' : 'إنشاء أمر الشراء'}</Button>
-          {isEdit && (
-            <Button type="button" variant="outline" onClick={() => navigate(`/lpos/${id}/view`)}>عرض أمر الشراء</Button>
-          )}
-          <Button type="button" variant="secondary" onClick={() => navigate('/lpos')}>إلغاء</Button>
-        </div>
-      </form>
+// عنصر تفصيل في نافذة الاستعراض
+function DetailItem({ icon, label, value, highlight }: { icon: React.ReactNode; label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className={`rounded-lg border p-2.5 ${highlight ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-100'}`}>
+      <div className={`text-[11px] flex items-center gap-1 mb-0.5 ${highlight ? 'text-red-600' : 'text-slate-400'}`}>{icon} {label}</div>
+      <div className={`text-sm font-medium ${highlight ? 'text-red-700' : 'text-slate-700'}`}>{value}</div>
     </div>
   )
 }
