@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { NAV_GROUPS } from '../../lib/navigation'
+import { prefetchRoute } from '../../lib/prefetchRoutes'
 
 // قائمة التنقّل تُقرأ من المصدر الموحّد (src/lib/navigation.ts) —
 // أي مسار جديد يُضاف هناك مرة واحدة فيظهر هنا وفي عنوان الهيدر معاً
@@ -69,6 +70,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                     to={to}
                     end={end}
                     onClick={onClose}
+                    onMouseEnter={() => prefetchRoute(to)}
+                    onTouchStart={() => prefetchRoute(to)}
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                         isActive
