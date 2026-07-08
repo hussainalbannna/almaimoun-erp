@@ -7,8 +7,11 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
+
+const RENTALS_FOLDER = 'rentals'
 
 interface ProjectOption { id: string; project_name: string }
 
@@ -22,7 +25,6 @@ const CATEGORIES = [
   { value: 'other', label: 'أخرى', icon: <Package size={16} /> },
 ]
 const todayISO = () => new Date().toISOString().slice(0, 10)
-const isImageData = (data: string) => !!data && data.startsWith('data:image')
 const isPdfData = (data: string) => !!data && data.startsWith('data:application/pdf')
 
 export default function RentalForm() {
@@ -34,6 +36,9 @@ export default function RentalForm() {
   const [saving, setSaving] = useState(false)
   const [projects, setProjects] = useState<ProjectOption[]>([])
   const [previewImage, setPreviewImage] = useState<string | null>(null)
+  // المسار الأصلي المحفوظ في Storage (لحذفه عند الاستبدال) + رابط العرض المحلول
+  const [originalContractPath, setOriginalContractPath] = useState('')
+  const [contractPreviewUrl, setContractPreviewUrl] = useState('')
 
   const [form, setForm] = useState({
     name: '',
@@ -58,8 +63,11 @@ export default function RentalForm() {
     })
 
     if (isEdit) {
-      supabase.from('rentals').select('*').eq('id', id).single().then(({ data }) => {
+      supabase.from('rentals').select('*').eq('id', id).single().then(async ({ data }) => {
         if (data) {
+          // المسار الجديد أولاً، ثم توافق خلفي مع base64 القديم
+          const contractVal = data.contract_path || data.contract_data || ''
+          setOriginalContractPath(data.contract_path || '')
           setForm({
             name: data.name ?? '',
             category: data.category ?? 'equipment',
@@ -73,9 +81,11 @@ export default function RentalForm() {
             end_date: data.end_date ?? '',
             due_day: data.due_day ? String(data.due_day) : '1',
             status: data.status ?? 'active',
-            contract_data: data.contract_data ?? '',
+            contract_data: contractVal,
             notes: data.notes ?? '',
           })
+          // حلّ رابط المعاينة (رابط موقّع للمسار، أو Data URL مباشرة)
+          if (contractVal) setContractPreviewUrl((await resolveAttachmentUrl(contractVal)) ?? '')
         }
       })
     }
@@ -89,8 +99,10 @@ export default function RentalForm() {
   const uploadContract = async (file: File) => {
     if (file.size > 10 * 1024 * 1024) { toast.error('الحجم أقل من 10 ميجا'); return }
     try {
+      // يُحوَّل لـ Data URL محلياً للمعاينة الفورية، ويُرفع فعلياً إلى Storage عند الحفظ
       const data = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
       setForm(f => ({ ...f, contract_data: data }))
+      setContractPreviewUrl(data)
     } catch { toast.error('تعذّر رفع الملف') }
   }
 
@@ -101,30 +113,49 @@ export default function RentalForm() {
     if (form.rental_type === 'recurring' && (!form.due_day || Number(form.due_day) < 1 || Number(form.due_day) > 31)) { toast.error('أدخل يوم استحقاق صحيح (1-31)'); return }
 
     setSaving(true)
-    const payload = {
-      name: form.name,
-      category: form.category,
-      rental_type: form.rental_type,
-      vendor_name: form.vendor_name,
-      project_id: form.project_id || null,
-      project_name: form.project_name,
-      cost: Number(form.cost),
-      billing_cycle: form.billing_cycle,
-      start_date: form.rental_type === 'temporary' ? (form.start_date || null) : (form.start_date || null),
-      end_date: form.rental_type === 'temporary' ? (form.end_date || null) : null,
-      due_day: form.rental_type === 'recurring' ? Number(form.due_day) : null,
-      status: form.status,
-      contract_data: form.contract_data,
-      notes: form.notes,
-      updated_at: new Date().toISOString(),
-    }
+    try {
+      // ── رفع العقد إلى Storage وحفظ المسار (بدل base64 داخل الجدول) ──
+      // إن كان مسار موجود لم يتغيّر: نُبقيه. إن كان Data URL جديد: نرفعه.
+      // إن أُزيل: نمسحه ونحذف المسار القديم من Storage.
+      let contractPath = ''
+      if (form.contract_data) {
+        contractPath = isDataUrl(form.contract_data)
+          ? await uploadDataUrl(form.contract_data, RENTALS_FOLDER) // ملف جديد → رفع
+          : form.contract_data                                     // مسار موجود → إبقاء
+      }
+      // حذف العقد القديم من Storage عند استبداله أو إزالته
+      if (originalContractPath && originalContractPath !== contractPath) {
+        await deleteAttachment(originalContractPath)
+      }
 
-    if (isEdit) {
-      const { error } = await supabase.from('rentals').update(payload).eq('id', id)
-      if (error) { toast.error('فشل الحفظ: ' + error.message); setSaving(false); return }
-    } else {
-      const { error } = await supabase.from('rentals').insert(payload)
-      if (error) { toast.error('فشل الحفظ: ' + error.message); setSaving(false); return }
+      const payload = {
+        name: form.name,
+        category: form.category,
+        rental_type: form.rental_type,
+        vendor_name: form.vendor_name,
+        project_id: form.project_id || null,
+        project_name: form.project_name,
+        cost: Number(form.cost),
+        billing_cycle: form.billing_cycle,
+        start_date: form.rental_type === 'temporary' ? (form.start_date || null) : (form.start_date || null),
+        end_date: form.rental_type === 'temporary' ? (form.end_date || null) : null,
+        due_day: form.rental_type === 'recurring' ? Number(form.due_day) : null,
+        status: form.status,
+        contract_path: contractPath,   // مسار Storage (خفيف)
+        contract_data: '',             // إفراغ العمود القديم — لم نعد نخزّن base64
+        notes: form.notes,
+        updated_at: new Date().toISOString(),
+      }
+
+      if (isEdit) {
+        const { error } = await supabase.from('rentals').update(payload).eq('id', id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('rentals').insert(payload)
+        if (error) throw error
+      }
+    } catch (e) {
+      toast.error('فشل الحفظ: ' + ((e as Error)?.message ?? '')); setSaving(false); return
     }
 
     toast.success(isEdit ? 'تم تحديث الإيجار' : 'تم تسجيل الإيجار')
@@ -136,6 +167,9 @@ export default function RentalForm() {
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-300"
+
+  // هل العقد ملف PDF؟ يُستدلّ من Data URL الجديد أو من امتداد المسار المحفوظ
+  const contractIsPdf = isPdfData(form.contract_data) || /\.pdf($|\?)/i.test(form.contract_data)
 
   return (
     <div className="p-6 max-w-3xl mx-auto" dir="rtl">
@@ -277,14 +311,15 @@ export default function RentalForm() {
               <Upload size={15} className="text-slate-400" /> اختر ملفاً (صورة أو PDF)
               <input type="file" accept="image/*,.pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadContract(f); e.target.value = '' }} />
             </label>
-            {form.contract_data && (
+            {form.contract_data && contractPreviewUrl && (
               <div className="mt-2 relative inline-block">
-                {isImageData(form.contract_data) ? (
-                  <button type="button" onClick={() => setPreviewImage(form.contract_data)} className="w-24 h-24 rounded-xl border border-slate-200 overflow-hidden block"><img src={form.contract_data} alt="العقد" className="w-full h-full object-cover" /></button>
+                {/* النوع يُحدَّد من القيمة الأصلية (مسار بامتداد أو Data URL)؛ الرابط للعرض محلول من Storage */}
+                {contractIsPdf ? (
+                  <button type="button" onClick={() => openStoredFile(contractPreviewUrl, 'application/pdf')} className="w-24 h-24 rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1"><FileText size={26} className="text-red-500" /><span className="text-[10px] text-slate-600">عرض الملف</span></button>
                 ) : (
-                  <button type="button" onClick={() => openStoredFile(form.contract_data, isPdfData(form.contract_data) ? 'application/pdf' : '')} className="w-24 h-24 rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1"><FileText size={26} className="text-red-500" /><span className="text-[10px] text-slate-600">عرض الملف</span></button>
+                  <button type="button" onClick={() => setPreviewImage(contractPreviewUrl)} className="w-24 h-24 rounded-xl border border-slate-200 overflow-hidden block"><img src={contractPreviewUrl} alt="العقد" className="w-full h-full object-cover" /></button>
                 )}
-                <button type="button" onClick={() => setForm(f => ({ ...f, contract_data: '' }))} className="absolute -top-2 -left-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center shadow-md"><X size={13} /></button>
+                <button type="button" onClick={() => { setForm(f => ({ ...f, contract_data: '' })); setContractPreviewUrl('') }} className="absolute -top-2 -left-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center shadow-md"><X size={13} /></button>
               </div>
             )}
           </div>
