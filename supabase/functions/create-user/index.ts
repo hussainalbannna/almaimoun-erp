@@ -2,16 +2,24 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "npm:@supabase/supabase-js@2.49.1"
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+// ─── CORS ديناميكي ─────────────────────────────────────────────────────
+// يعكس الترويسات التي يطلبها المتصفّح في الفحص المسبق (preflight) بدل قائمة
+// ثابتة — فلا ينكسر الاتصال إذا أضاف عميل Supabase أو التطبيق ترويسة جديدة.
+function corsHeaders(req: Request): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers":
+      req.headers.get("Access-Control-Request-Headers") ??
+      "authorization, x-client-info, apikey, content-type, x-application-name",
+    "Access-Control-Max-Age": "86400",
+  }
 }
 
-const json = (body: unknown, status = 200) =>
+const json = (req: Request, body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders(req), "Content-Type": "application/json" },
   })
 
 /**
@@ -31,22 +39,22 @@ async function isAuthenticated(req: Request): Promise<boolean> {
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders })
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
+  if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders(req) })
+  if (req.method !== "POST") return json(req, { error: "Method not allowed" }, 405)
 
   try {
     // لا تُنشئ مستخدمين إلا لطلب صادر عن مستخدم مسجّل الدخول
     if (!(await isAuthenticated(req))) {
-      return json({ error: "Unauthorized" }, 401)
+      return json(req, { error: "Unauthorized" }, 401)
     }
 
     const { email, password } = await req.json()
 
     if (!email || !password) {
-      return json({ error: "Email and password are required" }, 400)
+      return json(req, { error: "Email and password are required" }, 400)
     }
     if (typeof password !== "string" || password.length < 6) {
-      return json({ error: "Password must be at least 6 characters" }, 400)
+      return json(req, { error: "Password must be at least 6 characters" }, 400)
     }
 
     // عميل بصلاحيات الخدمة (Service Role) لإنشاء المستخدم — لا يُستخدم إلا بعد اجتياز التحقق أعلاه
@@ -62,11 +70,11 @@ Deno.serve(async (req: Request) => {
     })
 
     if (error) {
-      return json({ error: error.message }, 400)
+      return json(req, { error: error.message }, 400)
     }
 
-    return json({ success: true, user_id: data.user.id })
+    return json(req, { success: true, user_id: data.user.id })
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : "Unknown error" }, 500)
+    return json(req, { error: err instanceof Error ? err.message : "Unknown error" }, 500)
   }
 })
