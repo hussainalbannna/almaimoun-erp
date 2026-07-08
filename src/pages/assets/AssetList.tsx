@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2, TrendingUp } from 'lucide-react'
+import { Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency, formatDate } from '../../lib/utils'
+import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import Badge, { type BadgeColor } from '../../components/ui/Badge'
+import Input from '../../components/ui/Input'
+import Select from '../../components/ui/Select'
+import Textarea from '../../components/ui/Textarea'
 import toast from 'react-hot-toast'
 
 interface Asset {
@@ -38,19 +41,16 @@ const ASSET_TYPE_LABELS: Record<string, string> = {
 const STATUS_COLORS: Record<string, BadgeColor> = { available: 'green', in_use: 'blue', maintenance: 'orange', retired: 'gray' }
 const STATUS_LABELS: Record<string, string> = { available: 'متاح', in_use: 'قيد الاستخدام', maintenance: 'صيانة', retired: 'مستبعد' }
 
+// خيارات القوائم المنسدلة (مبنية مرة واحدة من التسميات أعلاه)
+const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
+const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
+
 const emptyForm = {
   name: '', asset_type: 'equipment', plate_number: '', serial_number: '',
   purchase_date: '', purchase_value: '', current_location: '', status: 'available',
   insurance_expiry: '', registration_expiry: '', notes: '',
   payment_method: 'cash', bank_name: '', finance_amount: '', down_payment: '',
   monthly_installment: '', total_installments: '', paid_installments: '', next_installment_date: '',
-}
-
-// حساب أيام حتى تاريخ
-const daysUntil = (date: string | null) => {
-  if (!date) return null
-  const diff = new Date(date).getTime() - new Date().setHours(0, 0, 0, 0)
-  return Math.ceil(diff / 86400000)
 }
 
 // جلب الأصول (مصدر React Query)
@@ -150,7 +150,7 @@ export default function AssetList() {
       return s + (remaining > 0 ? remaining : 0)
     }, 0)
     const dueSoon = installmentAssets.filter(a => {
-      const d = daysUntil(a.next_installment_date)
+      const d = daysUntilOrNull(a.next_installment_date)
       return a.paid_installments < a.total_installments && d !== null && d <= 7
     })
     return { installmentAssets, totalRemaining, dueSoon }
@@ -203,23 +203,19 @@ export default function AssetList() {
         <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6 space-y-4">
           <div className="font-semibold text-slate-700 mb-2">{editId ? 'تعديل الأصل' : 'أصل جديد'}</div>
           <div className="grid grid-cols-3 gap-3">
-            <input className="input-field" placeholder="اسم الأصل *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-            <select className="input-field" value={form.asset_type} onChange={e => setForm(f => ({ ...f, asset_type: e.target.value }))}>
-              {Object.entries(ASSET_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <select className="input-field" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
-              {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
+            <Input placeholder="اسم الأصل *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            <Select options={ASSET_TYPE_OPTIONS} value={form.asset_type} onChange={e => setForm(f => ({ ...f, asset_type: e.target.value }))} />
+            <Select options={STATUS_OPTIONS} value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <input className="input-field" placeholder="رقم اللوحة" value={form.plate_number} onChange={e => setForm(f => ({ ...f, plate_number: e.target.value }))} dir="ltr" />
-            <input className="input-field" placeholder="الرقم التسلسلي" value={form.serial_number} onChange={e => setForm(f => ({ ...f, serial_number: e.target.value }))} dir="ltr" />
-            <input className="input-field" placeholder="الموقع الحالي" value={form.current_location} onChange={e => setForm(f => ({ ...f, current_location: e.target.value }))} />
+            <Input placeholder="رقم اللوحة" value={form.plate_number} onChange={e => setForm(f => ({ ...f, plate_number: e.target.value }))} dir="ltr" />
+            <Input placeholder="الرقم التسلسلي" value={form.serial_number} onChange={e => setForm(f => ({ ...f, serial_number: e.target.value }))} dir="ltr" />
+            <Input placeholder="الموقع الحالي" value={form.current_location} onChange={e => setForm(f => ({ ...f, current_location: e.target.value }))} />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div><label className="text-xs text-slate-500">تاريخ الشراء</label><input className="input-field" type="date" value={form.purchase_date} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))} /></div>
-            <div><label className="text-xs text-slate-500">قيمة الشراء الكلية (د.ب)</label><input className="input-field" type="number" value={form.purchase_value} onChange={e => setForm(f => ({ ...f, purchase_value: e.target.value }))} dir="ltr" /></div>
-            <div><label className="text-xs text-slate-500">انتهاء التأمين</label><input className="input-field" type="date" value={form.insurance_expiry} onChange={e => setForm(f => ({ ...f, insurance_expiry: e.target.value }))} /></div>
+            <Input label="تاريخ الشراء" type="date" value={form.purchase_date} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))} />
+            <Input label="قيمة الشراء الكلية (د.ب)" type="number" value={form.purchase_value} onChange={e => setForm(f => ({ ...f, purchase_value: e.target.value }))} dir="ltr" />
+            <Input label="انتهاء التأمين" type="date" value={form.insurance_expiry} onChange={e => setForm(f => ({ ...f, insurance_expiry: e.target.value }))} />
           </div>
 
           {/* ═══ طريقة الشراء: نقدي / أقساط ═══ */}
@@ -242,17 +238,17 @@ export default function AssetList() {
             {isInst && (
               <div className="bg-purple-50/50 rounded-xl border border-purple-200 p-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <div><label className="text-xs text-slate-500">اسم البنك</label><input className="input-field" placeholder="مثال: بنك البحرين الوطني" value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} /></div>
-                  <div><label className="text-xs text-slate-500">مبلغ التمويل الكلي (د.ب)</label><input className="input-field" type="number" value={form.finance_amount} onChange={e => setForm(f => ({ ...f, finance_amount: e.target.value }))} dir="ltr" /></div>
+                  <Input label="اسم البنك" placeholder="مثال: بنك البحرين الوطني" value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} />
+                  <Input label="مبلغ التمويل الكلي (د.ب)" type="number" value={form.finance_amount} onChange={e => setForm(f => ({ ...f, finance_amount: e.target.value }))} dir="ltr" />
                 </div>
                 <div className="grid grid-cols-3 gap-3">
-                  <div><label className="text-xs text-slate-500">الدفعة المقدمة (د.ب)</label><input className="input-field" type="number" value={form.down_payment} onChange={e => setForm(f => ({ ...f, down_payment: e.target.value }))} dir="ltr" /></div>
-                  <div><label className="text-xs text-slate-500">القسط الشهري (د.ب)</label><input className="input-field" type="number" value={form.monthly_installment} onChange={e => setForm(f => ({ ...f, monthly_installment: e.target.value }))} dir="ltr" /></div>
-                  <div><label className="text-xs text-slate-500">تاريخ القسط القادم</label><input className="input-field" type="date" value={form.next_installment_date} onChange={e => setForm(f => ({ ...f, next_installment_date: e.target.value }))} /></div>
+                  <Input label="الدفعة المقدمة (د.ب)" type="number" value={form.down_payment} onChange={e => setForm(f => ({ ...f, down_payment: e.target.value }))} dir="ltr" />
+                  <Input label="القسط الشهري (د.ب)" type="number" value={form.monthly_installment} onChange={e => setForm(f => ({ ...f, monthly_installment: e.target.value }))} dir="ltr" />
+                  <Input label="تاريخ القسط القادم" type="date" value={form.next_installment_date} onChange={e => setForm(f => ({ ...f, next_installment_date: e.target.value }))} />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><label className="text-xs text-slate-500">عدد الأقساط الكلي</label><input className="input-field" type="number" value={form.total_installments} onChange={e => setForm(f => ({ ...f, total_installments: e.target.value }))} dir="ltr" /></div>
-                  <div><label className="text-xs text-slate-500">الأقساط المدفوعة</label><input className="input-field" type="number" value={form.paid_installments} onChange={e => setForm(f => ({ ...f, paid_installments: e.target.value }))} dir="ltr" /></div>
+                  <Input label="عدد الأقساط الكلي" type="number" value={form.total_installments} onChange={e => setForm(f => ({ ...f, total_installments: e.target.value }))} dir="ltr" />
+                  <Input label="الأقساط المدفوعة" type="number" value={form.paid_installments} onChange={e => setForm(f => ({ ...f, paid_installments: e.target.value }))} dir="ltr" />
                 </div>
                 {/* ملخص حسابي مباشر */}
                 {Number(form.monthly_installment) > 0 && Number(form.total_installments) > 0 && (
@@ -269,7 +265,7 @@ export default function AssetList() {
             )}
           </div>
 
-          <textarea className="input-field w-full" rows={2} placeholder="ملاحظات" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+          <Textarea rows={2} placeholder="ملاحظات" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
           <div className="flex gap-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
             <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null) }}>إلغاء</Button>
@@ -294,7 +290,7 @@ export default function AssetList() {
             const remaining = (asset.total_installments - asset.paid_installments) * asset.monthly_installment
             const progress = asset.total_installments > 0 ? (asset.paid_installments / asset.total_installments) * 100 : 0
             const isPaidOff = asset.paid_installments >= asset.total_installments && asset.total_installments > 0
-            const dDays = daysUntil(asset.next_installment_date)
+            const dDays = daysUntilOrNull(asset.next_installment_date)
             const isDue = !isPaidOff && dDays !== null && dDays <= 7
 
             return (
@@ -374,8 +370,6 @@ export default function AssetList() {
           })}
         </div>
       )}
-
-      <style>{`.input-field { height: 36px; padding: 0 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px; width: 100%; outline: none; transition: border-color 0.2s; } .input-field:focus { border-color: #c4925a; box-shadow: 0 0 0 3px rgba(196,146,90,0.1); }`}</style>
     </div>
   )
 }
