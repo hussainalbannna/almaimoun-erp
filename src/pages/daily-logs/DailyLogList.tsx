@@ -6,12 +6,15 @@ import { supabase } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
 import { formatDate } from '../../lib/utils'
 import { readDocumentText, hasApiKey } from '../../lib/ai'
+import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import Textarea from '../../components/ui/Textarea'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
+
+const DAILY_LOGS_FOLDER = 'daily-logs'
 
 const EMPTY_FORM = (projectId = '') => ({
   project_id: projectId,
@@ -23,7 +26,8 @@ const EMPTY_FORM = (projectId = '') => ({
   weather: '',
   overtime_amount: '',
   overtime_notes: '',
-  photos: [] as string[],
+  photos: [] as string[],      // قيم العرض: روابط محلولة (تحرير) أو Data URL (جديدة)
+  photoPaths: [] as string[],  // قيم الحفظ الموازية: مسارات Storage (تحرير) أو Data URL (جديدة)
 })
 
 const WEATHER_OPTIONS = [
@@ -312,6 +316,9 @@ export default function DailyLogList() {
   const [scanningMaterials, setScanningMaterials] = useState(false)
   // ذاكرة مؤقتة لصور كل تقرير — تُجلب عند التوسيع/التعديل/الطباعة فقط (لا تُحمّل في القائمة)
   const [photosCache, setPhotosCache] = useState<Record<string, string[]>>({})
+  // القيم الخام (مسارات Storage أو base64 قديم) — تُستخدم عند التحرير للحفظ،
+  // بينما photosCache يحمل الروابط المحلولة الجاهزة للعرض
+  const [rawPhotosCache, setRawPhotosCache] = useState<Record<string, string[]>>({})
   const photoInputRef = useRef<HTMLInputElement>(null)
   const materialScanRef = useRef<HTMLInputElement>(null)
 
@@ -326,13 +333,17 @@ export default function DailyLogList() {
   const reload = () => queryClient.invalidateQueries({ queryKey: ['daily-logs-data'] })
 
   // جلب صور تقرير واحد عند الحاجة (مع تخزينها مؤقتاً لتفادي إعادة الجلب)
+  // تُرجع روابط عرض محلولة (رابط موقّع من Storage أو base64 قديم)، وتحتفظ بالقيم الخام للحفظ
   const fetchLogPhotos = async (logId: string): Promise<string[]> => {
     const cached = photosCache[logId]
     if (cached) return cached
     const { data: row } = await supabase.from('daily_logs').select('photos').eq('id', logId).maybeSingle()
-    const photos = ((row as { photos?: string[] } | null)?.photos ?? [])
-    setPhotosCache(prev => ({ ...prev, [logId]: photos }))
-    return photos
+    const raw = ((row as { photos?: string[] } | null)?.photos ?? [])
+    // حلّ كل قيمة لرابط عرض (المسارات → روابط موقّعة، base64 يبقى كما هو)
+    const resolved = (await Promise.all(raw.map(v => resolveAttachmentUrl(v)))).filter((u): u is string => !!u)
+    setRawPhotosCache(prev => ({ ...prev, [logId]: raw }))
+    setPhotosCache(prev => ({ ...prev, [logId]: resolved }))
+    return resolved
   }
 
   const resetForm = () => {
@@ -351,7 +362,8 @@ export default function DailyLogList() {
 
   const openEdit = async (log: LightLog) => {
     // جلب الصور الحالية للتقرير لعرضها في النموذج (غير محمّلة في القائمة)
-    const photos = await fetchLogPhotos(log.id)
+    const photos = await fetchLogPhotos(log.id)          // روابط محلولة للعرض
+    const photoPaths = rawPhotosCache[log.id] ?? photos  // المسارات الخام للحفظ (بعد الجلب أعلاه)
     setForm({
       project_id: log.project_id,
       log_date: log.log_date,
@@ -363,6 +375,7 @@ export default function DailyLogList() {
       overtime_amount: (log as LightLog & { overtime_amount?: number }).overtime_amount ? String((log as LightLog & { overtime_amount?: number }).overtime_amount) : '',
       overtime_notes: (log as LightLog & { overtime_notes?: string }).overtime_notes ?? '',
       photos,
+      photoPaths,
     })
     const { data: wData } = await supabase.from('daily_log_workers').select('worker_id').eq('log_id', log.id)
     setSelectedWorkers((wData ?? []).map((r: { worker_id: string }) => r.worker_id))
@@ -385,7 +398,12 @@ export default function DailyLogList() {
     setPhotoUploading(true)
     try {
       const dataUrls = await Promise.all(accepted.map(fileToDataUrl))
-      setForm(prev => ({ ...prev, photos: [...prev.photos, ...dataUrls] }))
+      // الصورة الجديدة تُعرض وتُحفظ بنفس القيمة (Data URL) قبل رفعها لـ Storage عند الحفظ
+      setForm(prev => ({
+        ...prev,
+        photos: [...prev.photos, ...dataUrls],
+        photoPaths: [...prev.photoPaths, ...dataUrls],
+      }))
     } catch {
       toast.error('حدث خطأ أثناء معالجة الصور')
     } finally {
@@ -394,7 +412,12 @@ export default function DailyLogList() {
   }
 
   const removePhoto = (idx: number) => {
-    setForm(prev => ({ ...prev, photos: prev.photos.filter((_, i) => i !== idx) }))
+    // إزالة العنصر من العرض والحفظ معاً (نفس الفهرس)
+    setForm(prev => ({
+      ...prev,
+      photos: prev.photos.filter((_, i) => i !== idx),
+      photoPaths: prev.photoPaths.filter((_, i) => i !== idx),
+    }))
   }
 
   const handleScanMaterials = async (file: File) => {
@@ -452,6 +475,19 @@ export default function DailyLogList() {
     if (!form.description.trim()) { toast.error('يجب إدخال وصف الأعمال'); return }
     setSaving(true)
     try {
+      // ── رفع الصور الجديدة (Data URL) إلى Storage؛ المسارات الموجودة تبقى ──
+      // photoPaths يحمل: مسارات قائمة (تبقى) + Data URL جديدة (تُرفع الآن)
+      const finalPaths = await Promise.all(
+        form.photoPaths.map(v => (isDataUrl(v) ? uploadDataUrl(v, DAILY_LOGS_FOLDER) : v))
+      )
+
+      // تنظيف Storage: عند التحرير، احذف الصور التي أُزيلت من التقرير
+      if (editingId) {
+        const previous = rawPhotosCache[editingId] ?? []
+        const removed = previous.filter(p => !isDataUrl(p) && !finalPaths.includes(p))
+        if (removed.length) await deleteAttachment(removed)
+      }
+
       const payload = {
         project_id: form.project_id,
         log_date: form.log_date,
@@ -463,7 +499,7 @@ export default function DailyLogList() {
         overtime_amount: Number(form.overtime_amount) || 0,
         overtime_notes: form.overtime_notes,
         workers_count: selectedWorkers.length,
-        photos: form.photos,
+        photos: finalPaths,   // مصفوفة مسارات Storage (خفيفة) بدل base64
       }
       let logId: string
       if (editingId) {
@@ -480,8 +516,10 @@ export default function DailyLogList() {
         await supabase.from('daily_log_workers').insert({ log_id: logId, worker_id: wid })
       }
       await syncAttendance(logId, form.log_date, form.project_id, selectedWorkers)
-      // تحديث ذاكرة الصور المؤقتة لهذا التقرير حتى تظهر فوراً عند التوسيع
-      setPhotosCache(prev => ({ ...prev, [logId]: form.photos }))
+      // تحديث الكاش: الخام = المسارات النهائية، والعرض = روابط محلولة جاهزة
+      const resolved = (await Promise.all(finalPaths.map(p => resolveAttachmentUrl(p)))).filter((u): u is string => !!u)
+      setRawPhotosCache(prev => ({ ...prev, [logId]: finalPaths }))
+      setPhotosCache(prev => ({ ...prev, [logId]: resolved }))
       toast.success(editingId ? 'تم تحديث التقرير' : 'تم تسجيل التقرير اليومي')
       resetForm()
       reload()
@@ -495,8 +533,16 @@ export default function DailyLogList() {
   const handleDelete = async () => {
     if (!deleteTarget) return
     setDeletingId(deleteTarget)
+    const target = deleteTarget
     setDeleteTarget(null)
-    const { error } = await supabase.from('daily_logs').delete().eq('id', deleteTarget)
+    // حذف صور التقرير من Storage قبل حذف السجل (تفادي ملفات يتيمة)
+    try {
+      const { data: row } = await supabase.from('daily_logs').select('photos').eq('id', target).maybeSingle()
+      const paths = ((row as { photos?: string[] } | null)?.photos ?? [])
+      if (paths.length) await deleteAttachment(paths)
+    } catch { /* تجاهل فشل تنظيف Storage — لا يمنع حذف السجل */ }
+
+    const { error } = await supabase.from('daily_logs').delete().eq('id', target)
     if (error) {
       toast.error('حدث خطأ أثناء الحذف')
     } else {
