@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Bell, RefreshCw, CreditCard, UserCog, Package, FileText, ListTodo, Calculator, ChevronLeft, CheckCircle2, Landmark } from 'lucide-react'
 import { fetchAllAlerts, type AppAlert, type AlertKind, type AlertLevel } from '../../lib/notifications'
 import { formatCurrency, formatDate } from '../../lib/utils'
@@ -36,18 +37,14 @@ const FILTERS: { key: 'all' | AlertLevel; label: string }[] = [
 
 export default function NotificationsCenter() {
   const navigate = useNavigate()
-  const [alerts, setAlerts] = useState<AppAlert[]>([])
-  const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | AlertLevel>('all')
 
-  const load = async () => {
-    setLoading(true)
-    const data = await fetchAllAlerts()
-    setAlerts(data)
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  // نفس مفتاح الهيدر ('app-alerts') — استعلامات التنبيهات السبعة تُنفَّذ
+  // مرة واحدة ويتشارك نتيجتها العدّاد وهذه الصفحة، بدل تكرارها لكل منهما
+  const { data: alerts = [], isLoading: loading, isFetching, refetch } = useQuery({
+    queryKey: ['app-alerts'],
+    queryFn: fetchAllAlerts,
+  })
 
   const filtered = filter === 'all' ? alerts : alerts.filter(a => a.level === filter)
 
@@ -77,8 +74,8 @@ export default function NotificationsCenter() {
             <p className="text-sm text-slate-500">{alerts.length} تنبيه</p>
           </div>
         </div>
-        <button onClick={load} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> تحديث
+        <button onClick={() => refetch()} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 px-3 py-2 rounded-lg hover:bg-slate-100">
+          <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} /> تحديث
         </button>
       </div>
 
