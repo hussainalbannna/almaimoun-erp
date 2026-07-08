@@ -1,92 +1,9 @@
 import { NavLink } from 'react-router-dom'
-import {
-  LayoutDashboard, FileText, ShoppingCart, Users, Building2,
-  Settings, FileArchive, X, HardHat, Receipt, UserCog,
-  ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
-  Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound, Banknote,
-  type LucideIcon,
-} from 'lucide-react'
+import { X } from 'lucide-react'
+import { NAV_GROUPS } from '../../lib/navigation'
 
-interface NavItem {
-  to: string
-  label: string
-  icon: LucideIcon
-  end?: boolean // مطابقة تامّة للمسار (للوحة التحكم فقط حتى لا تبقى نشطة في كل الصفحات)
-}
-
-interface NavGroup {
-  label: string
-  items: NavItem[]
-}
-
-const navGroups: NavGroup[] = [
-  {
-    label: 'الرئيسية',
-    items: [
-      { to: '/', label: 'لوحة التحكم', icon: LayoutDashboard, end: true },
-      { to: '/assistant', label: 'المساعد الذكي', icon: Bot },
-      { to: '/calendar', label: 'التقويم', icon: Calendar },
-      { to: '/notifications', label: 'مركز الإشعارات', icon: Bell },
-    ],
-  },
-  {
-    label: 'المبيعات والعروض',
-    items: [
-      { to: '/quotations', label: 'عروض الأسعار', icon: Calculator },
-    ],
-  },
-  {
-    label: 'إدارة المشاريع',
-    items: [
-      { to: '/projects', label: 'المشاريع والمراحل', icon: HardHat },
-      { to: '/daily-logs', label: 'تقارير الموقع وأوامر التغيير', icon: ClipboardList },
-      { to: '/assets', label: 'الأصول والمعدات', icon: Package },
-      { to: '/rentals', label: 'الإيجارات والمصاريف', icon: KeyRound },
-    ],
-  },
-  {
-    label: 'الموارد البشرية',
-    items: [
-      { to: '/workers', label: 'العمالة والسجلات', icon: Users },
-      { to: '/payroll', label: 'كشف الرواتب', icon: UserCog },
-      { to: '/subcontractors', label: 'مقاولو الباطن', icon: Wrench },
-      { to: '/tasks', label: 'المهام والتذكيرات', icon: ListTodo },
-    ],
-  },
-  {
-    label: 'المالية والمحاسبة',
-    items: [
-      { to: '/finance', label: 'اللوحة المالية', icon: PieChart },
-      { to: '/cheques', label: 'مركز الشيكات', icon: Banknote },
-      { to: '/invoices', label: 'الفواتير', icon: FileText },
-      { to: '/receipts', label: 'الإيصالات', icon: Receipt },
-      { to: '/cashbook', label: 'دفتر الصندوق', icon: BookOpen },
-    ],
-  },
-  {
-    label: 'المشتريات',
-    items: [
-      { to: '/purchases', label: 'الفواتير والمدفوعات', icon: CreditCard },
-      { to: '/lpos', label: 'أوامر الشراء (LPO)', icon: ShoppingCart },
-      { to: '/suppliers', label: 'الموردون', icon: Truck },
-    ],
-  },
-  {
-    label: 'الدليل',
-    items: [
-      { to: '/contacts', label: 'جهات الاتصال', icon: Phone },
-      { to: '/customers', label: 'العملاء', icon: Building2 },
-    ],
-  },
-  {
-    label: '',
-    items: [
-      { to: '/reports', label: 'التقارير والإحصائيات', icon: BarChart2 },
-      { to: '/documents', label: 'المستندات', icon: FileArchive },
-      { to: '/settings', label: 'الإعدادات', icon: Settings },
-    ],
-  },
-]
+// قائمة التنقّل تُقرأ من المصدر الموحّد (src/lib/navigation.ts) —
+// أي مسار جديد يُضاف هناك مرة واحدة فيظهر هنا وفي عنوان الهيدر معاً
 
 interface SidebarProps {
   open: boolean
@@ -138,7 +55,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Nav */}
         <nav className="flex-1 p-3 overflow-y-auto scrollbar-thin space-y-3" aria-label="التنقّل الرئيسي">
-          {navGroups.map((group, gi) => (
+          {NAV_GROUPS.map((group, gi) => (
             <div key={gi}>
               {group.label && (
                 <div className="text-xs font-semibold uppercase px-3 mb-1" style={{ color: '#c4925a55', letterSpacing: '0.08em' }}>
