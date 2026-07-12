@@ -7,6 +7,7 @@ import { nextSerial, formatCurrency } from '../../lib/utils'
 import type { LPO, LPOItem, Supplier, ExtractedDocumentData } from '../../types'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
+import MoneyInput from '../../components/ui/MoneyInput'
 import Select from '../../components/ui/Select'
 import Textarea from '../../components/ui/Textarea'
 import DocumentUpload from '../../components/ui/DocumentUpload'
@@ -326,7 +327,7 @@ export default function LPOForm() {
                     className="w-full h-9 px-2 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none text-center" />
                 </div>
                 <div className="col-span-3 sm:col-span-2">
-                  <input type="number" placeholder="السعر" value={item.unit_price} min={0} step="0.001" inputMode="decimal" onChange={e => updateItem(idx, 'unit_price', parseFloat(e.target.value) || 0)}
+                  <MoneyInput placeholder="السعر" value={Number(item.unit_price) || 0} onValueChange={v => updateItem(idx, 'unit_price', v)}
                     className="w-full h-9 px-2 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none text-center" />
                 </div>
                 <div className="col-span-2 sm:col-span-1 text-center text-xs font-medium text-slate-700">
@@ -360,7 +361,7 @@ export default function LPOForm() {
               </div>
               <div className="flex justify-between items-center gap-2">
                 <span className="text-slate-500">خصم</span>
-                <input type="number" value={form.discount} min={0} step="0.001" inputMode="decimal" onChange={setField('discount')}
+                <MoneyInput value={Number(form.discount) || 0} onValueChange={v => setForm(prev => ({ ...prev, discount: v }))}
                   className="w-28 h-7 px-2 rounded border border-slate-300 text-xs text-center" />
               </div>
               <div className="flex justify-between border-t border-slate-200 pt-2">
