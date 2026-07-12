@@ -11,6 +11,7 @@ import { readDocumentText, extractJSON, hasApiKey, compressImage, fileToDataUrl,
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
+import MoneyInput from '../../components/ui/MoneyInput'
 import Select from '../../components/ui/Select'
 import Textarea from '../../components/ui/Textarea'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
@@ -570,7 +571,7 @@ export default function CashBook() {
             <Select label="التصنيف" value={form.category ?? 'other'} onChange={e => setForm(p => ({ ...p, category: e.target.value }))} options={CATEGORIES} />
             <Select label="نوع المصروف" value={form.expense_type ?? 'general'} onChange={e => setForm(p => ({ ...p, expense_type: e.target.value }))} options={EXPENSE_TYPES} />
             <Input label="وصف المصروف *" value={form.description ?? ''} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
-            <Input label="المبلغ الإجمالي (د.ب) *" type="number" step="0.001" inputMode="decimal" hint="بالفلوس بثلاث خانات — مثال: 1.252" value={String(form.amount ?? 0)} onChange={e => setForm(p => ({ ...p, amount: parseFloat(e.target.value) || 0 }))} />
+            <MoneyInput label="المبلغ الإجمالي (د.ب) *" hint="بالفلوس بثلاث خانات — مثال: 1.252 أو 0.070" value={n(form.amount)} onValueChange={v => setForm(p => ({ ...p, amount: v }))} />
             <Select label="طريقة الدفع" value={form.payment_method ?? 'cash'} onChange={e => setForm(p => ({ ...p, payment_method: e.target.value }))} options={PAYMENT_METHODS} />
             <Select label="المشروع (لربط التكلفة)" value={form.project_id ?? ''} onChange={e => setForm(p => ({ ...p, project_id: e.target.value || null }))} options={projectOptions} />
 
@@ -578,8 +579,8 @@ export default function CashBook() {
             <div>
               <label className="text-sm font-medium text-slate-700 block mb-1">ضريبة قابلة للاسترداد (د.ب)</label>
               <div className="flex gap-1.5">
-                <input type="number" step="0.001" inputMode="decimal" value={String(form.vat_amount ?? 0)}
-                  onChange={e => setForm(p => ({ ...p, vat_amount: parseFloat(e.target.value) || 0, is_vat_recoverable: (parseFloat(e.target.value) || 0) > 0 }))}
+                <MoneyInput value={n(form.vat_amount)}
+                  onValueChange={v => setForm(p => ({ ...p, vat_amount: v, is_vat_recoverable: v > 0 }))}
                   className="flex-1 h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" placeholder="0.000" />
                 <button onClick={autoVAT} type="button" title="حساب 10% تلقائياً"
                   className="px-2.5 rounded-lg border border-amber-300 text-amber-700 text-xs hover:bg-amber-50 whitespace-nowrap">احسب 10%</button>
