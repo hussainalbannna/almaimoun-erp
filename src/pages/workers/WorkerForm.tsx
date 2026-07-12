@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Plus, Sparkles, Loader2, Award, CalendarDays } from 'lucide-react'
+import { ArrowLeft, Sparkles, Loader2, Award, CalendarDays } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import type { Worker, WorkerAdvance } from '../../types'
-import { formatDate, formatCurrency, calcEndOfService, calcAccruedLeave } from '../../lib/utils'
+import type { Worker } from '../../types'
+import { formatCurrency, calcEndOfService, calcAccruedLeave } from '../../lib/utils'
 import { readDocumentText, extractJSON, hasApiKey } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -38,9 +38,6 @@ export default function WorkerForm() {
   const queryClient = useQueryClient()
   const isEdit = !!id
   const [saving, setSaving] = useState(false)
-  const [advances, setAdvances] = useState<WorkerAdvance[]>([])
-  const [newAdvance, setNewAdvance] = useState({ amount: 0, notes: '', advance_date: new Date().toISOString().slice(0, 10) })
-  const [addingAdvance, setAddingAdvance] = useState(false)
   const [scanning, setScanning] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -59,9 +56,6 @@ export default function WorkerForm() {
     if (isEdit) {
       supabase.from('workers').select('*').eq('id', id).single().then(({ data }) => {
         if (data) setForm(data as Worker)
-      })
-      supabase.from('worker_advances').select('*').eq('worker_id', id).order('advance_date', { ascending: false }).then(({ data }) => {
-        setAdvances((data ?? []) as WorkerAdvance[])
       })
     }
   }, [id, isEdit])
@@ -123,24 +117,6 @@ export default function WorkerForm() {
       setSaving(false)
     }
   }
-
-  const handleAddAdvance = async () => {
-    if (!newAdvance.amount || Number(newAdvance.amount) <= 0) { toast.error('يجب إدخال المبلغ'); return }
-    setAddingAdvance(true)
-    const { data, error } = await supabase.from('worker_advances').insert({ ...newAdvance, worker_id: id }).select().single()
-    if (error) { toast.error('حدث خطأ'); setAddingAdvance(false); return }
-    setAdvances(prev => [data as WorkerAdvance, ...prev])
-    setNewAdvance({ amount: 0, notes: '', advance_date: new Date().toISOString().slice(0, 10) })
-    toast.success('تم تسجيل السلفة')
-    setAddingAdvance(false)
-  }
-
-  const toggleDeducted = async (adv: WorkerAdvance) => {
-    await supabase.from('worker_advances').update({ deducted: !adv.deducted }).eq('id', adv.id)
-    setAdvances(prev => prev.map(a => a.id === adv.id ? { ...a, deducted: !a.deducted } : a))
-  }
-
-  const totalAdvances = useMemo(() => advances.filter(a => !a.deducted).reduce((s, a) => s + Number(a.amount), 0), [advances])
 
   // حسابات ذكية
   const eos = useMemo(() => calcEndOfService(Number(form.basic_salary) || 0, form.join_date ?? ''), [form.basic_salary, form.join_date])
@@ -268,39 +244,10 @@ export default function WorkerForm() {
 
         <Textarea label="ملاحظات" value={form.notes ?? ''} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} />
 
-        {/* السلف */}
+        {/* السلف تُدار الآن من كشف الرواتب (زيادة/خصم/سلفة قابلة للتعديل شهرياً) */}
         {isEdit && (
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-slate-700">السلف المقدمة</h2>
-              <span className="text-sm text-red-600 font-medium">رصيد السلف: {formatCurrency(totalAdvances)}</span>
-            </div>
-            <div className="grid grid-cols-3 gap-3 mb-4 p-3 bg-slate-50 rounded-lg">
-              <Input label="المبلغ (د.ب)" type="number" value={String(newAdvance.amount)} onChange={e => setNewAdvance(p => ({ ...p, amount: parseFloat(e.target.value) || 0 }))} />
-              <Input label="التاريخ" type="date" value={newAdvance.advance_date} onChange={e => setNewAdvance(p => ({ ...p, advance_date: e.target.value }))} />
-              <div className="flex items-end">
-                <Button size="sm" icon={<Plus size={14} />} loading={addingAdvance} onClick={handleAddAdvance}>إضافة سلفة</Button>
-              </div>
-            </div>
-            {advances.length === 0 ? (
-              <div className="text-center text-slate-400 text-sm py-4">لا توجد سلف مسجلة</div>
-            ) : (
-              <div className="space-y-2">
-                {advances.map(adv => (
-                  <div key={adv.id} className={`flex items-center justify-between p-3 rounded-lg border ${adv.deducted ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
-                    <div>
-                      <span className="font-medium text-sm">{formatCurrency(Number(adv.amount))}</span>
-                      <span className="text-slate-500 text-xs mr-2">{formatDate(adv.advance_date)}</span>
-                      {adv.notes && <span className="text-slate-500 text-xs"> — {adv.notes}</span>}
-                    </div>
-                    <label className="flex items-center gap-2 text-xs cursor-pointer">
-                      <input type="checkbox" checked={adv.deducted} onChange={() => toggleDeducted(adv)} className="rounded" />
-                      {adv.deducted ? 'تم الخصم' : 'لم يُخصم بعد'}
-                    </label>
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+            تُسجَّل السلف والزيادات والخصومات الآن من صفحة <button type="button" onClick={() => navigate('/payroll')} className="font-semibold underline underline-offset-2 hover:text-blue-900">كشف الرواتب</button> — لكل شهر على حدة، مع بقاء الراتب الأساسي ثابتاً لحماية الأجور.
           </div>
         )}
 
