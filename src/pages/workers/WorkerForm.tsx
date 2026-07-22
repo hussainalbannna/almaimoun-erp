@@ -188,7 +188,7 @@ export default function WorkerForm() {
             )}
             <Select label="الحالة" value={form.status ?? 'active'}
               onChange={e => setForm(p => ({ ...p, status: e.target.value as Worker['status'] }))}
-              options={[{ value: 'active', label: 'نشط' }, { value: 'inactive', label: 'غير نشط' }]} />
+              options={[{ value: 'active', label: 'نشط' }, { value: 'inactive', label: 'غير نشط' }, { value: 'former', label: 'سابق / خرج' }]} />
           </div>
         </div>
 
