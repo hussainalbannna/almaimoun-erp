@@ -4,11 +4,11 @@ import {
   ArrowRight, FileText,
   TrendingUp, TrendingDown,
   DollarSign, Briefcase, Users, ShoppingCart, KeyRound, ChevronDown,
-  Upload, Image as ImageIcon, X, Trash2
+  Upload, Image as ImageIcon, X, Trash2, Plus, History
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import type {
-  Project, ProjectMilestone, VariationOrder, DailyLog
+  Project, ProjectMilestone, VariationOrder, DailyLog, ProjectLaborEntry
 } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/utils';
 import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage';
@@ -95,6 +95,18 @@ export default function ProjectDetail() {
   const [workersLaborCost, setWorkersLaborCost] = useState<number>(0); // تكلفة العمالة الفعلية (تُخصم)
   const [overtimeCost, setOvertimeCost] = useState<number>(0); // مبلغ الأوفر تايم من التقارير اليومية
   const [laborDetails, setLaborDetails] = useState<{ name: string; days: number; cost: number; type: string }[]>([]); // تفصيل تكلفة كل عامل
+
+  // ── العمالة التاريخية/اليدوية (مشاريع قديمة قبل النظام / عمال خرجوا) ──
+  const [histEntries, setHistEntries] = useState<ProjectLaborEntry[]>([]);
+  const [formerWorkers, setFormerWorkers] = useState<{ id: string; name: string; name_en: string; worker_type: string }[]>([]);
+  const emptyHistForm = {
+    worker_id: '', worker_name: '', worker_type: 'company',
+    entry_type: 'lump' as 'detailed' | 'lump',
+    days: '', rate: '', amount: '', cost_date: today(), period_label: '', notes: '',
+  };
+  const [histForm, setHistForm] = useState(emptyHistForm);
+  const [savingHist, setSavingHist] = useState(false);
+  const [showHistForm, setShowHistForm] = useState(false);
 
   const load = async () => {
     if (!id) return;
@@ -250,6 +262,14 @@ export default function ProjectDetail() {
       );
       setOvertimeCost(overtimeSum);
 
+      // 7. العمالة التاريخية/اليدوية + قائمة العمال السابقين للاختيار
+      const [histRes, formerRes] = await Promise.all([
+        supabase.from('project_labor_entries').select('*').eq('project_id', id).order('cost_date', { ascending: false }),
+        supabase.from('workers').select('id, name, name_en, worker_type').eq('status', 'former').order('name'),
+      ]);
+      setHistEntries((histRes.data ?? []) as ProjectLaborEntry[]);
+      setFormerWorkers((formerRes.data ?? []) as { id: string; name: string; name_en: string; worker_type: string }[]);
+
     } catch (error) {
       toast.error('حدث خطأ أثناء تحميل البيانات المالية للمشروع');
     } finally {
@@ -372,6 +392,46 @@ export default function ProjectDetail() {
     toast.success('تم حذف المستند');
   };
 
+  // ── حفظ تكلفة عمالة تاريخية/يدوية ──
+  // المبلغ مصدر الحقيقة: تفصيلي = أيام × أجر، إجمالي = المبلغ المُدخل مباشرة (لقطة ثابتة)
+  const saveHistEntry = async () => {
+    if (!id) return;
+    const amount = histForm.entry_type === 'detailed'
+      ? (parseFloat(histForm.days) || 0) * (parseFloat(histForm.rate) || 0)
+      : (parseFloat(histForm.amount) || 0);
+    if (amount <= 0) { toast.error('أدخل مبلغاً صحيحاً (أو أيامًا وأجرًا)'); return; }
+    if (!histForm.worker_id && !histForm.worker_name.trim()) { toast.error('اختر عاملاً سابقاً أو اكتب اسماً'); return; }
+    if (!histForm.cost_date) { toast.error('أدخل تاريخ التكلفة'); return; }
+
+    setSavingHist(true);
+    const picked = formerWorkers.find(w => w.id === histForm.worker_id);
+    const { error } = await supabase.from('project_labor_entries').insert({
+      project_id: id,
+      worker_id: histForm.worker_id || null,
+      worker_name: picked ? (picked.name_en || picked.name) : histForm.worker_name.trim(),
+      worker_type: picked ? picked.worker_type : histForm.worker_type,
+      entry_type: histForm.entry_type,
+      days: histForm.entry_type === 'detailed' ? (parseFloat(histForm.days) || 0) : null,
+      rate: histForm.entry_type === 'detailed' ? (parseFloat(histForm.rate) || 0) : null,
+      amount,
+      cost_date: histForm.cost_date,
+      period_label: histForm.period_label.trim(),
+      notes: histForm.notes.trim(),
+    });
+    if (error) { toast.error('تعذّر الحفظ: ' + error.message); setSavingHist(false); return; }
+    toast.success('تمت إضافة تكلفة العمالة السابقة');
+    setHistForm({ ...emptyHistForm, cost_date: histForm.cost_date });
+    setShowHistForm(false);
+    setSavingHist(false);
+    load();
+  };
+
+  const deleteHistEntry = async (entryId: string) => {
+    await supabase.from('project_labor_entries').delete().eq('id', entryId);
+    setHistEntries(prev => prev.filter(e => e.id !== entryId));
+    toast.success('تم حذف السجل');
+  };
+
   if (loading) return <div className="p-12 text-center text-slate-400">جاري تحميل الحسابات المالية...</div>;
   if (!project) return <div className="p-12 text-center text-slate-400">المشروع غير موجود</div>;
 
@@ -379,8 +439,9 @@ export default function ProjectDetail() {
   const approvedVOs = vos.filter(v => v.status === 'approved' && v.billable).reduce((sum, v) => sum + Number(v.amount || 0), 0);
   const totalRevenue = contractValue + approvedVOs;
 
-  // المصاريف الفعلية: المدفوعة فعلاً + تكلفة العمالة الحقيقية + الأوفر تايم (الشيكات الآجلة لا تُخصم)
-  const laborTotal = workersLaborCost + overtimeCost;
+  // المصاريف الفعلية: المدفوعة فعلاً + تكلفة العمالة الحقيقية + الأوفر تايم + العمالة التاريخية (الشيكات الآجلة لا تُخصم)
+  const histLaborTotal = histEntries.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const laborTotal = workersLaborCost + overtimeCost + histLaborTotal;
   const totalExpenses = boxExpenses + purchasePaid + subcontractorPaidSum + rentalsPaidSum + laborTotal;
   const netProfit = totalRevenue - totalExpenses;
   const isProfitable = netProfit >= 0;
@@ -445,21 +506,21 @@ export default function ProjectDetail() {
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm space-y-1">
           <div className="text-xs text-slate-400 flex items-center gap-1"><Briefcase size={14} /> تكلفة العمالة</div>
           <div className="text-lg font-bold text-purple-600">{formatCurrency(laborTotal)}</div>
-          <div className="text-[10px] text-slate-400">{laborDetails.length > 0 ? `${laborDetails.length} عامل` : 'لم تُسجّل رواتب'}{overtimeCost > 0 ? ` · أوفر تايم ${formatCurrency(overtimeCost)}` : ''}</div>
+          <div className="text-[10px] text-slate-400">{(laborDetails.length + histEntries.length) > 0 ? `${laborDetails.length + histEntries.length} بند` : 'لم تُسجّل رواتب'}{overtimeCost > 0 ? ` · أوفر تايم ${formatCurrency(overtimeCost)}` : ''}{histLaborTotal > 0 ? ` · سابق ${formatCurrency(histLaborTotal)}` : ''}</div>
         </div>
       </div>
 
       {/* تفصيل تكلفة العمالة */}
-      {laborDetails.length > 0 && (
+      {(laborDetails.length > 0 || overtimeCost > 0 || histLaborTotal > 0) && (
         <details className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden group">
           <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors list-none">
             <div className="flex items-center gap-2">
               <Briefcase size={16} className="text-purple-600" />
               <span className="font-bold text-slate-700 text-sm">تفصيل تكلفة العمالة</span>
-              <span className="text-xs text-slate-400">({laborDetails.length} عامل · {laborDetails.reduce((s, w) => s + w.days, 0)} يوم عمل)</span>
+              <span className="text-xs text-slate-400">({laborDetails.length} عامل بالحضور{histEntries.length > 0 ? ` · ${histEntries.length} سجل سابق` : ''})</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-purple-600 text-sm">{formatCurrency(workersLaborCost)}</span>
+              <span className="font-bold text-purple-600 text-sm">{formatCurrency(laborTotal)}</span>
               <ChevronDown size={16} className="text-slate-400 group-open:rotate-180 transition-transform" />
             </div>
           </summary>
@@ -482,6 +543,12 @@ export default function ProjectDetail() {
                     <td className="p-3 font-bold text-purple-600">{formatCurrency(w.cost)}</td>
                   </tr>
                 ))}
+                {histLaborTotal > 0 && (
+                  <tr className="bg-red-50/40">
+                    <td className="p-3 font-medium text-red-800" colSpan={3}>عمالة سابقة / تاريخية (إدخال يدوي — {histEntries.length} سجل)</td>
+                    <td className="p-3 font-bold text-red-700">{formatCurrency(histLaborTotal)}</td>
+                  </tr>
+                )}
                 {overtimeCost > 0 && (
                   <tr className="bg-amber-50/40">
                     <td className="p-3 font-medium text-amber-800" colSpan={3}>إجمالي الأوفر تايم (من التقارير اليومية)</td>
@@ -497,11 +564,161 @@ export default function ProjectDetail() {
               </tfoot>
             </table>
             <p className="text-[11px] text-slate-400 px-4 py-2 bg-slate-50/50">
-              العامل الشهري: الراتب الكامل ÷ 26 يوم عمل × أيام حضوره بالموقع (الجمعة إجازة مدفوعة). العامل اليومي: الأجر اليومي × أيام حضوره. أيام الحضور تُؤخذ من التقارير اليومية.
+              العامل الشهري: الراتب الكامل ÷ 26 يوم عمل × أيام حضوره بالموقع (الجمعة إجازة مدفوعة). العامل اليومي: الأجر اليومي × أيام حضوره. أيام الحضور تُؤخذ من التقارير اليومية. «العمالة السابقة» مُدخلة يدوياً للمشاريع القديمة.
             </p>
           </div>
         </details>
       )}
+
+      {/* العمالة السابقة / التاريخية — إدخال يدوي للمشاريع القديمة */}
+      <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <History size={16} className="text-red-500" />
+            <span className="font-bold text-slate-700 text-sm">تكلفة العمالة السابقة (إدخال يدوي)</span>
+            {histLaborTotal > 0 && <span className="text-xs text-red-600 font-medium">{formatCurrency(histLaborTotal)}</span>}
+          </div>
+          <Button variant="secondary" icon={<Plus size={14} />} onClick={() => setShowHistForm(v => !v)}>
+            {showHistForm ? 'إغلاق' : 'إضافة'}
+          </Button>
+        </div>
+
+        {showHistForm && (
+          <div className="p-4 bg-slate-50/50 border-b border-slate-100 space-y-3">
+            {/* اختيار العامل: سابق مسجّل أو اسم حر */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-slate-600 block mb-1">العامل السابق</label>
+                <select value={histForm.worker_id}
+                  onChange={e => setHistForm(p => ({ ...p, worker_id: e.target.value }))}
+                  className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400 bg-white">
+                  <option value="">— اكتب اسماً يدوياً —</option>
+                  {formerWorkers.map(w => (
+                    <option key={w.id} value={w.id}>{(w.name_en || w.name)} ({w.worker_type === 'company' ? 'شركة' : 'LMRA'})</option>
+                  ))}
+                </select>
+              </div>
+              {!histForm.worker_id && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">اسم حر</label>
+                    <input value={histForm.worker_name} onChange={e => setHistForm(p => ({ ...p, worker_name: e.target.value }))}
+                      placeholder="اسم العامل أو المجموعة" className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">النوع</label>
+                    <select value={histForm.worker_type} onChange={e => setHistForm(p => ({ ...p, worker_type: e.target.value }))}
+                      className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400 bg-white">
+                      <option value="company">شركة</option>
+                      <option value="lmra">LMRA</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* طريقة الإدخال: تفصيلي (أيام × أجر) أو إجمالي (مبلغ) */}
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-lg w-fit">
+              {(['detailed', 'lump'] as const).map(m => (
+                <button key={m} type="button" onClick={() => setHistForm(p => ({ ...p, entry_type: m }))}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${histForm.entry_type === m ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>
+                  {m === 'detailed' ? 'تفصيلي (أيام × أجر)' : 'مبلغ إجمالي'}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {histForm.entry_type === 'detailed' ? (
+                <>
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">عدد الأيام</label>
+                    <input type="number" step="0.5" dir="ltr" value={histForm.days} onChange={e => setHistForm(p => ({ ...p, days: e.target.value }))}
+                      className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 block mb-1">الأجر اليومي (د.ب)</label>
+                    <input type="number" step="0.001" dir="ltr" value={histForm.rate} onChange={e => setHistForm(p => ({ ...p, rate: e.target.value }))}
+                      className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" />
+                  </div>
+                  <div className="col-span-2 flex items-end">
+                    <div className="text-xs text-slate-500">التكلفة المحسوبة: <span className="font-bold text-purple-600">{formatCurrency((parseFloat(histForm.days) || 0) * (parseFloat(histForm.rate) || 0))}</span></div>
+                  </div>
+                </>
+              ) : (
+                <div className="col-span-2">
+                  <label className="text-xs font-medium text-slate-600 block mb-1">المبلغ الإجمالي (د.ب)</label>
+                  <input type="number" step="0.001" dir="ltr" value={histForm.amount} onChange={e => setHistForm(p => ({ ...p, amount: e.target.value }))}
+                    className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" />
+                </div>
+              )}
+              <div>
+                <label className="text-xs font-medium text-slate-600 block mb-1">تاريخ التحميل</label>
+                <input type="date" dir="ltr" value={histForm.cost_date} onChange={e => setHistForm(p => ({ ...p, cost_date: e.target.value }))}
+                  className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-600 block mb-1">الفترة (وصفي)</label>
+                <input value={histForm.period_label} onChange={e => setHistForm(p => ({ ...p, period_label: e.target.value }))}
+                  placeholder="مثال: مارس–يونيو 2023" className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" />
+              </div>
+            </div>
+
+            <input value={histForm.notes} onChange={e => setHistForm(p => ({ ...p, notes: e.target.value }))}
+              placeholder="ملاحظات (اختياري)" className="w-full h-9 px-3 rounded-lg border border-slate-300 text-sm outline-none focus:border-amber-400" />
+
+            <div className="flex gap-2">
+              <Button loading={savingHist} onClick={saveHistEntry}>حفظ التكلفة</Button>
+              <Button variant="secondary" onClick={() => { setShowHistForm(false); setHistForm({ ...emptyHistForm, cost_date: histForm.cost_date }); }}>إلغاء</Button>
+            </div>
+          </div>
+        )}
+
+        {histEntries.length === 0 ? (
+          <p className="text-center text-slate-400 p-6 text-xs">لا توجد تكاليف عمالة سابقة مسجّلة. استخدم «إضافة» لتسجيل عمالة المشاريع القديمة (شركة أو LMRA) التي خرجت قبل النظام.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100 text-slate-500">
+                  <th className="p-3 font-semibold text-xs">العامل</th>
+                  <th className="p-3 font-semibold text-xs">التفصيل</th>
+                  <th className="p-3 font-semibold text-xs">الفترة / التاريخ</th>
+                  <th className="p-3 font-semibold text-xs">التكلفة</th>
+                  <th className="p-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {histEntries.map(e => (
+                  <tr key={e.id} className="hover:bg-slate-50/50">
+                    <td className="p-3 font-medium text-slate-800">
+                      {e.worker_name || '—'}
+                      {e.worker_type && <Badge color={e.worker_type === 'company' ? 'amber' : 'blue'}>{e.worker_type === 'company' ? 'شركة' : 'LMRA'}</Badge>}
+                    </td>
+                    <td className="p-3 text-slate-600 text-xs">
+                      {e.entry_type === 'detailed' && e.days != null
+                        ? `${e.days} يوم × ${Number(e.rate || 0).toFixed(3)} د.ب`
+                        : 'مبلغ إجمالي'}
+                      {e.notes ? ` — ${e.notes}` : ''}
+                    </td>
+                    <td className="p-3 text-slate-500 text-xs">{e.period_label || formatDate(e.cost_date)}</td>
+                    <td className="p-3 font-bold text-red-600">{formatCurrency(Number(e.amount))}</td>
+                    <td className="p-3">
+                      <button onClick={() => deleteHistEntry(e.id)} className="p-1 text-slate-400 hover:text-red-600" title="حذف"><Trash2 size={15} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-red-50 border-t border-red-100">
+                  <td className="p-3 font-bold text-slate-700" colSpan={3}>إجمالي العمالة السابقة</td>
+                  <td className="p-3 font-black text-red-700">{formatCurrency(histLaborTotal)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>
 
       <div className="flex gap-2 p-1 bg-slate-100 rounded-xl w-fit flex-wrap">
         {(['milestones', 'vos', 'logs', 'documents'] as const).map(t => (
