@@ -42,21 +42,25 @@ const EMPTY_REPORTS: ReportsData = {
 
 // جلب بيانات التقارير السنوية وحسابها (مصدر React Query — الحسابات منقولة حرفياً)
 async function fetchReportsData(year: number): Promise<ReportsData> {
-  const [projRes, milRes, expRes, wRes] = await Promise.all([
+  const [projRes, milRes, expRes, wRes, laborRes] = await Promise.all([
     supabase.from('projects').select('id, project_name, contract_value, status'),
     supabase.from('project_milestones').select('project_id, amount, status'),
     supabase.from('accounts_payable').select('amount, entry_date, category').gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`),
     supabase.from('workers').select('basic_salary, social_allowance, status').eq('status', 'active').eq('pay_type', 'monthly'),
+    supabase.from('project_labor_entries').select('amount, cost_date').gte('cost_date', `${year}-01-01`).lte('cost_date', `${year}-12-31`),
   ])
 
   const ps = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
   const ms = (milRes.data ?? []) as { project_id: string; amount: number; status: string }[]
   const exps = (expRes.data ?? []) as { amount: number; entry_date: string; category: string }[]
   const ws = (wRes.data ?? []) as { basic_salary: number; social_allowance: number }[]
+  // العمالة التاريخية/اليدوية للمشاريع القديمة تُدرَج ضمن مصروفات السنة حسب cost_date
+  const hist = (laborRes.data ?? []) as { amount: number; cost_date: string }[]
+  const histLabor = hist.reduce((s, h) => s + Number(h.amount), 0)
 
   const totalContracts = ps.reduce((s, p) => s + Number(p.contract_value), 0)
   const totalInv = ms.filter(m => ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0)
-  const totalExp = exps.reduce((s, e) => s + Number(e.amount), 0)
+  const totalExp = exps.reduce((s, e) => s + Number(e.amount), 0) + histLabor
   const monthlyPay = ws.reduce((s, w) => s + Number(w.basic_salary) + Number(w.social_allowance), 0)
   const annualPayroll = monthlyPay * 12
 
@@ -65,12 +69,17 @@ async function fetchReportsData(year: number): Promise<ReportsData> {
     const m = new Date(e.entry_date).getMonth()
     mExp[m] += Number(e.amount)
   })
+  hist.forEach(h => {
+    const m = new Date(h.cost_date).getMonth()
+    mExp[m] += Number(h.amount)
+  })
   const mPay = new Array(12).fill(monthlyPay)
 
   const catMap: Record<string, number> = {}
   exps.forEach(e => {
     catMap[e.category] = (catMap[e.category] || 0) + Number(e.amount)
   })
+  if (histLabor > 0) catMap['labor'] = (catMap['labor'] || 0) + histLabor
   const cats = Object.entries(catMap).map(([category, total]) => ({ category, total }))
     .sort((a, b) => b.total - a.total)
 
