@@ -269,6 +269,25 @@ export interface ProjectMilestone {
   created_at: string
 }
 
+// تكلفة عمالة تاريخية/يدوية لمشروع قديم — تفصيلية (عامل+أيام+أجر) أو إجمالية (مبلغ واحد)
+export type LaborEntryType = 'detailed' | 'lump'
+
+export interface ProjectLaborEntry {
+  id: string
+  project_id: string
+  worker_id: string | null      // عامل «سابق» عند الربط، null عند الإدخال الإجمالي
+  worker_name: string
+  worker_type: WorkerType | null
+  entry_type: LaborEntryType
+  days: number | null
+  rate: number | null
+  amount: number                // التكلفة النهائية (مصدر الحقيقة)
+  cost_date: string             // تاريخ التحميل في التقارير العامة (YYYY-MM-DD)
+  period_label: string
+  notes: string
+  created_at: string
+}
+
 // ═══════════════════════════════════════════
 //  الإيصالات
 // ═══════════════════════════════════════════
@@ -322,7 +341,7 @@ export interface Worker {
   join_date: string | null
   end_of_service_date: string | null
   visa_expiry: string | null
-  status: 'active' | 'inactive'
+  status: 'active' | 'inactive' | 'former'
   emergency_name: string
   emergency_phone: string
   emergency_relation: string
