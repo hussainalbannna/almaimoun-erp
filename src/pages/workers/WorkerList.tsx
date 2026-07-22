@@ -22,7 +22,7 @@ export default function WorkerList() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState<'all' | 'company' | 'lmra'>('all')
+  const [filter, setFilter] = useState<'all' | 'company' | 'lmra' | 'former'>('all')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const { data: workers = [], isLoading } = useQuery({ queryKey: ['workers-list'], queryFn: fetchWorkers })
@@ -38,15 +38,20 @@ export default function WorkerList() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
-    return workers.filter(w =>
-      (filter === 'all' || w.worker_type === filter) &&
-      ((w.name || '').toLowerCase().includes(q) || (w.cpr || '').includes(search))
-    )
+    return workers.filter(w => {
+      const matchesSearch = (w.name || '').toLowerCase().includes(q) || (w.cpr || '').includes(search)
+      if (!matchesSearch) return false
+      // تبويب «سابقون» يعرض من خرج فقط؛ بقية التبويبات تُخفيهم لتبقى نظيفة
+      if (filter === 'former') return w.status === 'former'
+      if (w.status === 'former') return false
+      return filter === 'all' || w.worker_type === filter
+    })
   }, [workers, filter, search])
 
-  const { companyCount, lmraCount } = useMemo(() => ({
-    companyCount: workers.filter(w => w.worker_type === 'company').length,
-    lmraCount: workers.filter(w => w.worker_type === 'lmra').length,
+  const { companyCount, lmraCount, formerCount } = useMemo(() => ({
+    companyCount: workers.filter(w => w.worker_type === 'company' && w.status !== 'former').length,
+    lmraCount: workers.filter(w => w.worker_type === 'lmra' && w.status !== 'former').length,
+    formerCount: workers.filter(w => w.status === 'former').length,
   }), [workers])
 
   return (
@@ -57,7 +62,8 @@ export default function WorkerList() {
           <p className="text-slate-500 text-sm mt-0.5">
             إجمالي: {workers.length} عامل —
             <span className="text-amber-700"> عمالة الشركة: {companyCount}</span> —
-            <span className="text-blue-600"> عمالة هيئة LMRA: {lmraCount}</span>
+            <span className="text-blue-600"> عمالة هيئة LMRA: {lmraCount}</span> —
+            <span className="text-red-600"> سابقون: {formerCount}</span>
           </p>
         </div>
         <div className="flex gap-2">
@@ -68,7 +74,7 @@ export default function WorkerList() {
 
       {/* Filter Tabs */}
       <div className="flex gap-1 mb-4 bg-slate-100 p-1 rounded-xl w-fit">
-        {([['all', 'الكل'], ['company', 'عمالة الشركة'], ['lmra', 'عمالة LMRA']] as const).map(([val, label]) => (
+        {([['all', 'الكل'], ['company', 'عمالة الشركة'], ['lmra', 'عمالة LMRA'], ['former', 'سابقون']] as const).map(([val, label]) => (
           <button key={val} onClick={() => setFilter(val)}
             className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${filter === val ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
           >{label}</button>
@@ -131,7 +137,9 @@ export default function WorkerList() {
                     </td>
                     <td className="px-4 py-3 text-slate-500">{w.pay_type === 'monthly' ? 'شهري' : 'يومي'}</td>
                     <td className="px-4 py-3">
-                      <Badge color={w.status === 'active' ? 'green' : 'gray'}>{w.status === 'active' ? 'نشط' : 'غير نشط'}</Badge>
+                      <Badge color={w.status === 'active' ? 'green' : w.status === 'former' ? 'red' : 'gray'}>
+                        {w.status === 'active' ? 'نشط' : w.status === 'former' ? 'سابق / خرج' : 'غير نشط'}
+                      </Badge>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-2">
