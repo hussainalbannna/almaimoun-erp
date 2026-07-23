@@ -13,6 +13,7 @@ import type {
 } from '../../types'
 import { formatDate } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { resolveAttachmentUrl, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -250,9 +251,14 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
 }) {
   const [previewImg, setPreviewImg] = useState<string | null>(null)
   const [customDocs, setCustomDocs] = useState<CustomDoc[]>([])
+  // روابط عرض المستندات المخصصة: base64 يُعرض كما هو، أو مسار Storage يُحلّ إلى رابط موقّع
+  const [customUrls, setCustomUrls] = useState<Record<string, string>>({})
   const [uploadingCustom, setUploadingCustom] = useState(false)
   const [customLabel, setCustomLabel] = useState('')
   const customRef = useRef<HTMLInputElement>(null)
+
+  // هل الرابط المحلول صورة؟ (Data URL صورة أو امتداد صورة في مسار Storage)
+  const urlIsImage = (url: string) => url.startsWith('data:image') || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url)
 
   // ذاكرة مؤقتة لمحتوى المستندات الثابتة (file_data) — لا يُجلب ضمن القائمة، بل عند الفتح فقط
   const [docDataCache, setDocDataCache] = useState<Record<string, string>>({})
@@ -267,11 +273,17 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
     return raw
   }
 
-  // تحميل المستندات المخصصة (من جدول documents العام)
+  // تحميل المستندات المخصصة (من جدول documents العام) + حلّ روابط عرضها
   useEffect(() => {
     supabase.from('documents').select('id,name,file_url,file_type,created_at')
       .eq('related_id', workerId).eq('related_type', 'worker').order('created_at', { ascending: false })
-      .then(({ data }) => setCustomDocs((data ?? []) as CustomDoc[]))
+      .then(async ({ data }) => {
+        const docs = (data ?? []) as CustomDoc[]
+        setCustomDocs(docs)
+        // توافق خلفي: base64 قديم يُعرض مباشرة، والمسار الجديد يُحوّل إلى رابط موقّع
+        const entries = await Promise.all(docs.map(async d => [d.id, (await resolveAttachmentUrl(d.file_url)) ?? ''] as const))
+        setCustomUrls(Object.fromEntries(entries))
+      })
   }, [workerId])
 
   // ── المستندات الثابتة (البطاقة، الجواز، الآيبان، العقد) ──
@@ -301,10 +313,13 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
   const viewFixedDoc = async (doc: WorkerDocument) => {
     setLoadingDocId(doc.id)
     try {
-      const data = await loadDocData(doc.id)
-      if (!data) { toast.error('تعذّر فتح المستند'); return }
-      if (data.startsWith('data:image')) setPreviewImg(data)
-      else openStoredFile(data, 'application/pdf')
+      const raw = await loadDocData(doc.id)
+      if (!raw) { toast.error('تعذّر فتح المستند'); return }
+      // توافق خلفي: base64 قديم يُعرض مباشرة، أو مسار Storage يُحلّ إلى رابط موقّع
+      const url = isDataUrl(raw) ? raw : (await resolveAttachmentUrl(raw)) ?? ''
+      if (!url) { toast.error('تعذّر فتح المستند'); return }
+      if (urlIsImage(url)) setPreviewImg(url)
+      else openStoredFile(url, 'application/pdf')
     } finally {
       setLoadingDocId(null)
     }
@@ -321,7 +336,11 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
         related_id: workerId, related_type: 'worker',
       }).select('id,name,file_url,file_type,created_at').single()
       if (error) throw error
-      setCustomDocs(prev => [data as CustomDoc, ...prev])
+      const created = data as CustomDoc
+      setCustomDocs(prev => [created, ...prev])
+      // حلّ رابط عرض المستند الجديد (يعمل مع base64 الحالي والمسار مستقبلاً)
+      const url = (await resolveAttachmentUrl(created.file_url)) ?? ''
+      setCustomUrls(prev => ({ ...prev, [created.id]: url }))
       setCustomLabel('')
       toast.success('تم رفع المستند')
     } catch (e) {
@@ -334,12 +353,16 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
   const deleteCustom = async (docId: string) => {
     await supabase.from('documents').delete().eq('id', docId)
     setCustomDocs(prev => prev.filter(d => d.id !== docId))
+    setCustomUrls(prev => { const next = { ...prev }; delete next[docId]; return next })
     toast.success('تم حذف المستند')
   }
 
   const viewCustom = (doc: CustomDoc) => {
-    if (isImg(doc.file_type) || doc.file_url.startsWith('data:image')) setPreviewImg(doc.file_url)
-    else openStoredFile(doc.file_url, doc.file_type || 'application/pdf')
+    // يستخدم الرابط المحلول (base64 مباشر أو رابط موقّع لمسار Storage)
+    const url = customUrls[doc.id] || ''
+    if (!url) { toast.error('تعذّر فتح المستند'); return }
+    if (isImg(doc.file_type) || urlIsImage(url)) setPreviewImg(url)
+    else openStoredFile(url, doc.file_type || 'application/pdf')
   }
 
   return (
@@ -429,12 +452,13 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
             {customDocs.map(doc => {
-              const isImage = isImg(doc.file_type) || doc.file_url.startsWith('data:image')
+              const url = customUrls[doc.id] || ''
+              const isImage = url ? (isImg(doc.file_type) || urlIsImage(url)) : false
               return (
                 <div key={doc.id} className="bg-white rounded-xl border border-slate-200 overflow-hidden group">
                   <button onClick={() => viewCustom(doc)} className="block w-full aspect-square bg-slate-50 relative">
                     {isImage ? (
-                      <img src={doc.file_url} alt={doc.name} className="w-full h-full object-cover" />
+                      <img src={url} alt={doc.name} className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center">
                         <FileText size={36} className="text-red-500" />
