@@ -465,9 +465,31 @@ export interface DailyLog {
   converted_to_lpo: boolean
   photos: string[]
   additional_notes: string
+  // وقت العمل الاعتيادي (وردية + بداية/نهاية) — نصّي HH:MM
+  shift_label: string
+  work_start_time: string
+  work_end_time: string
+  // إجمالي الأوفرتايم المحسوب من جلسات الصب (لقطة) + سببه
+  overtime_amount: number
+  overtime_notes: string
   created_at: string
   updated_at: string
   workers?: Worker[]
+}
+
+// عمل إضافي / صب: عامل بساعات محددة — يُحسب أوفرتايم دون احتساب يوم إضافي
+export interface DailyLogOvertime {
+  id: string
+  log_id: string
+  worker_id: string | null
+  worker_name: string
+  task: string            // مثل «صب»
+  start_time: string      // HH:MM
+  end_time: string
+  hours: number
+  hourly_rate: number     // لقطة سعر الساعة (من الراتب الحقيقي)
+  amount: number          // لقطة = hours × hourly_rate
+  created_at: string
 }
 
 // ═══════════════════════════════════════════
