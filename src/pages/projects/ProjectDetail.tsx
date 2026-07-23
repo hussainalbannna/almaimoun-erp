@@ -115,8 +115,10 @@ export default function ProjectDetail() {
       const [pRes, mRes, vRes, lRes] = await Promise.all([
         supabase.from('projects').select('*').eq('id', id).single(),
         supabase.from('project_milestones').select('*').eq('project_id', id).order('sort_order', { ascending: true }),
-        supabase.from('variation_orders').select('*').eq('project_id', id).order('created_at', { ascending: false }),
-        supabase.from('daily_logs').select('*').eq('project_id', id).order('log_date', { ascending: false })
+        // أعمدة خفيفة فقط — نستبعد photos_before/photos_after (base64 الثقيل) لأن الصفحة لا تعرضها
+        supabase.from('variation_orders').select('id, project_id, description, amount, status, billable, created_at').eq('project_id', id).order('created_at', { ascending: false }),
+        // أعمدة خفيفة فقط — نستبعد عمود photos (base64 الثقيل) لأن الصفحة لا تعرض الصور هنا
+        supabase.from('daily_logs').select('id, project_id, log_date, description, material_requests, inspector_meeting, overtime_amount').eq('project_id', id).order('log_date', { ascending: false })
       ]);
 
       if (pRes.data) setProject(pRes.data as Project);

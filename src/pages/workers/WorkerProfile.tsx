@@ -82,7 +82,8 @@ export default function WorkerProfile() {
         supabase.from('worker_loans').select('*').eq('worker_id', id).order('loan_date', { ascending: false }),
         supabase.from('worker_medical_records').select('*').eq('worker_id', id).order('visit_date', { ascending: false }),
         supabase.from('worker_travel_records').select('*').eq('worker_id', id).order('departure_date', { ascending: false }),
-        supabase.from('worker_documents').select('*').eq('worker_id', id),
+        // أعمدة خفيفة فقط — نستبعد file_data (base64 الثقيل)؛ يُحمّل محتواه عند الفتح فقط
+        supabase.from('worker_documents').select('id, worker_id, doc_type, file_name, uploaded_at').eq('worker_id', id),
         supabase.from('worker_disciplinary').select('*').eq('worker_id', id).order('record_date', { ascending: false }),
       ])
       setAttendance((attRes.data ?? []) as WorkerAttendance[])
@@ -253,6 +254,19 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
   const [customLabel, setCustomLabel] = useState('')
   const customRef = useRef<HTMLInputElement>(null)
 
+  // ذاكرة مؤقتة لمحتوى المستندات الثابتة (file_data) — لا يُجلب ضمن القائمة، بل عند الفتح فقط
+  const [docDataCache, setDocDataCache] = useState<Record<string, string>>({})
+  const [loadingDocId, setLoadingDocId] = useState<string | null>(null)
+
+  // جلب محتوى مستند ثابت واحد عند الطلب (base64) وتخزينه في الذاكرة المؤقتة
+  const loadDocData = async (docId: string): Promise<string> => {
+    if (docDataCache[docId] !== undefined) return docDataCache[docId]
+    const { data } = await supabase.from('worker_documents').select('file_data').eq('id', docId).maybeSingle()
+    const raw = (data as { file_data?: string } | null)?.file_data ?? ''
+    setDocDataCache(prev => ({ ...prev, [docId]: raw }))
+    return raw
+  }
+
   // تحميل المستندات المخصصة (من جدول documents العام)
   useEffect(() => {
     supabase.from('documents').select('id,name,file_url,file_type,created_at')
@@ -267,9 +281,12 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
       .upsert({ worker_id: workerId, doc_type: docType, file_data: fileData, file_name: file.name, file_type: file.type, uploaded_at: new Date().toISOString() }, { onConflict: 'worker_id,doc_type' })
       .select().single()
     if (error) { toast.error('حدث خطأ: ' + error.message); return }
+    const saved = data as WorkerDocument
+    // تخزين المحتوى في الذاكرة المؤقتة فوراً حتى تظهر المعاينة دون إعادة جلب
+    setDocDataCache(prev => ({ ...prev, [saved.id]: fileData }))
     setDocuments(prev => {
       const filtered = prev.filter(d => d.doc_type !== docType)
-      return [...filtered, data as WorkerDocument]
+      return [...filtered, saved]
     })
     toast.success('تم رفع المستند')
   }
@@ -280,13 +297,17 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
     toast.success('تم حذف المستند')
   }
 
-  // استعراض مستند ثابت (صورة fullscreen أو PDF)
-  const viewFixedDoc = (doc: WorkerDocument) => {
-    const ftype = (doc as WorkerDocument & { file_type?: string }).file_type || ''
-    const data = doc.file_data || ''
-    // لو نوع الملف صورة أو الداتا تبدأ بصورة
-    if (isImg(ftype) || data.startsWith('data:image')) setPreviewImg(data)
-    else openStoredFile(data, ftype || 'application/pdf')
+  // استعراض مستند ثابت — يحمّل المحتوى عند الفتح فقط (صورة fullscreen أو ملف)
+  const viewFixedDoc = async (doc: WorkerDocument) => {
+    setLoadingDocId(doc.id)
+    try {
+      const data = await loadDocData(doc.id)
+      if (!data) { toast.error('تعذّر فتح المستند'); return }
+      if (data.startsWith('data:image')) setPreviewImg(data)
+      else openStoredFile(data, 'application/pdf')
+    } finally {
+      setLoadingDocId(null)
+    }
   }
 
   // ── المستندات المخصصة (صورة شخصية، شهادات، أي مستند) ──
@@ -329,30 +350,33 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {(Object.keys(DOC_LABELS) as WorkerDocType[]).map(docType => {
             const doc = documents.find(d => d.doc_type === docType)
-            const data = doc?.file_data || ''
-            const isImage = data.startsWith('data:image')
+            // المحتوى لا يُجلب ضمن القائمة؛ الصورة المصغّرة تظهر فقط بعد تحميله عند الفتح
+            const cached = doc ? docDataCache[doc.id] : undefined
+            const isImage = !!cached && cached.startsWith('data:image')
             return (
               <div key={docType} className="bg-white rounded-xl border border-slate-200 p-4">
                 <h3 className="text-sm font-semibold text-slate-700 mb-3">{DOC_LABELS[docType]}</h3>
-                {data ? (
+                {doc ? (
                   <div className="space-y-2">
                     {isImage ? (
-                      <button onClick={() => setPreviewImg(data)}
+                      <button onClick={() => setPreviewImg(cached!)}
                         className="block w-full aspect-[4/3] rounded-lg overflow-hidden border border-slate-200 bg-slate-50 group relative">
-                        <img src={data} alt={DOC_LABELS[docType]} className="w-full h-full object-contain" />
+                        <img src={cached!} alt={DOC_LABELS[docType]} className="w-full h-full object-contain" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors">
                           <Eye size={24} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                         </div>
                       </button>
                     ) : (
-                      <button onClick={() => viewFixedDoc(doc!)}
-                        className="w-full aspect-[4/3] rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-2 hover:bg-slate-100 transition-colors">
-                        <FileText size={32} className="text-red-500" />
+                      <button onClick={() => viewFixedDoc(doc)} disabled={loadingDocId === doc.id}
+                        className="w-full aspect-[4/3] rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-2 hover:bg-slate-100 transition-colors disabled:opacity-60">
+                        {loadingDocId === doc.id
+                          ? <Loader2 size={28} className="text-slate-400 animate-spin" />
+                          : <FileText size={32} className="text-red-500" />}
                         <span className="text-xs text-slate-600 flex items-center gap-1"><Eye size={12} /> عرض الملف</span>
                       </button>
                     )}
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-500 truncate">{doc?.file_name}</span>
+                      <span className="text-xs text-slate-500 truncate">{doc.file_name}</span>
                       <button onClick={() => handleDelete(docType)} className="text-xs text-red-500 hover:text-red-700">حذف</button>
                     </div>
                   </div>
