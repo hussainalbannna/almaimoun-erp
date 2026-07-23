@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp, ShoppingCart, Sparkles, Loader2, Cloud, Users, Eye } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
-import { formatDate } from '../../lib/utils'
+import { formatDate, formatCurrency } from '../../lib/utils'
 import { readDocumentText, hasApiKey } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -16,6 +16,27 @@ import toast from 'react-hot-toast'
 
 const DAILY_LOGS_FOLDER = 'daily-logs'
 
+// أسس احتساب الأوفرتايم: العامل الشهري = الراتب الحقيقي ÷ 26 يوم، ثم ÷ ساعات الدوام لسعر الساعة
+const MONTHLY_WORK_DAYS = 26
+const STANDARD_DAY_HOURS = 8
+
+// ورديات العمل الاعتيادي (بأوقات افتراضية قابلة للتعديل) — مرتّبة حسب واقع الموقع
+const SHIFT_PRESETS: { label: string; start: string; end: string }[] = [
+  { label: 'فجر / بداية باكرة', start: '02:00', end: '12:00' },
+  { label: 'صباحي', start: '06:00', end: '12:00' },
+  { label: 'مسائي', start: '16:00', end: '20:00' },
+  { label: 'ليلي', start: '20:00', end: '02:00' },
+]
+
+// صف عمل إضافي/صب في النموذج (قيم نصّية لدعم الإدخال الجزئي)
+interface OvertimeRow {
+  worker_id: string
+  task: string
+  start_time: string
+  end_time: string
+  hours: string
+}
+
 const EMPTY_FORM = (projectId = '') => ({
   project_id: projectId,
   log_date: new Date().toISOString().slice(0, 10),
@@ -24,7 +45,9 @@ const EMPTY_FORM = (projectId = '') => ({
   inspector_meeting: false,
   additional_notes: '',
   weather: '',
-  overtime_amount: '',
+  shift_label: '',
+  work_start_time: '',
+  work_end_time: '',
   overtime_notes: '',
   photos: [] as string[],      // قيم العرض: روابط محلولة (تحرير) أو Data URL (جديدة)
   photoPaths: [] as string[],  // قيم الحفظ الموازية: مسارات Storage (تحرير) أو Data URL (جديدة)
@@ -267,11 +290,12 @@ function buildPrintHTML(logs: PrintLog[]): string {
 // نوع خفيف للقائمة: يستبعد عمود photos الثقيل (base64) — يُجلب عند الحاجة فقط
 type LightLog = Pick<DailyLog,
   'id' | 'project_id' | 'log_date' | 'description' | 'material_requests' |
-  'inspector_meeting' | 'weather' | 'workers_count' | 'additional_notes' | 'created_at'
+  'inspector_meeting' | 'weather' | 'workers_count' | 'additional_notes' | 'created_at' |
+  'shift_label' | 'work_start_time' | 'work_end_time' | 'overtime_amount' | 'overtime_notes'
 > & { project_name?: string }
 
 // حقول القائمة الخفيفة (بلا photos) — تُطلب صراحةً لتفادي جلب الصور الضخمة
-const LOG_LIST_COLUMNS = 'id, project_id, log_date, description, material_requests, inspector_meeting, weather, workers_count, additional_notes, created_at'
+const LOG_LIST_COLUMNS = 'id, project_id, log_date, description, material_requests, inspector_meeting, weather, workers_count, additional_notes, created_at, shift_label, work_start_time, work_end_time, overtime_amount, overtime_notes'
 
 interface DailyLogsData {
   logs: LightLog[]
@@ -286,7 +310,7 @@ const EMPTY_WORKERS: Worker[] = []
 async function fetchDailyLogsData(): Promise<DailyLogsData> {
   const [pRes, wRes, lRes] = await Promise.all([
     supabase.from('projects').select('id, project_name').order('project_name'),
-    supabase.from('workers').select('id, name, name_en, branch').eq('status', 'active').order('name'),
+    supabase.from('workers').select('id, name, name_en, branch, pay_type, daily_rate, actual_salary, basic_salary, social_allowance').eq('status', 'active').order('name'),
     supabase.from('daily_logs').select(LOG_LIST_COLUMNS).order('log_date', { ascending: false }).limit(200),
   ])
   const projects = (pRes.data ?? []) as Project[]
@@ -308,6 +332,7 @@ export default function DailyLogList() {
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [selectedWorkers, setSelectedWorkers] = useState<string[]>([])
+  const [overtimeRows, setOvertimeRows] = useState<OvertimeRow[]>([])
   const [expandedLog, setExpandedLog] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -332,6 +357,28 @@ export default function DailyLogList() {
   // أي حفظ/حذف يُبطِل الكاش فيُعاد الجلب تلقائياً
   const reload = () => queryClient.invalidateQueries({ queryKey: ['daily-logs-data'] })
 
+  // سعر ساعة العامل للأوفرتايم — من الراتب الحقيقي (actual_salary) لا راتب حماية الأجور
+  // شهري: (الراتب الحقيقي ÷ 26 يوم) ÷ ساعات الدوام. يومي: الأجر اليومي ÷ ساعات الدوام.
+  const workerHourly = (workerId: string): number => {
+    const w = workers.find(x => x.id === workerId)
+    if (!w) return 0
+    const dayCost = w.pay_type === 'daily'
+      ? Number(w.daily_rate || 0)
+      : (Number(w.actual_salary || 0) > 0
+        ? Number(w.actual_salary || 0)
+        : Number(w.basic_salary || 0) + Number(w.social_allowance || 0)) / MONTHLY_WORK_DAYS
+    return dayCost / STANDARD_DAY_HOURS
+  }
+
+  // تكلفة صف أوفرتايم واحد = الساعات × سعر الساعة (لقطة وقت الحفظ)
+  const overtimeRowAmount = (row: OvertimeRow): number => (parseFloat(row.hours) || 0) * workerHourly(row.worker_id)
+  const overtimeTotal = overtimeRows.reduce((s, r) => s + overtimeRowAmount(r), 0)
+
+  const addOvertimeRow = () => setOvertimeRows(prev => [...prev, { worker_id: '', task: 'صب', start_time: '16:00', end_time: '', hours: '' }])
+  const updateOvertimeRow = (i: number, patch: Partial<OvertimeRow>) =>
+    setOvertimeRows(prev => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r))
+  const removeOvertimeRow = (i: number) => setOvertimeRows(prev => prev.filter((_, idx) => idx !== i))
+
   // جلب صور تقرير واحد عند الحاجة (مع تخزينها مؤقتاً لتفادي إعادة الجلب)
   // تُرجع روابط عرض محلولة (رابط موقّع من Storage أو base64 قديم)، وتحتفظ بالقيم الخام للحفظ
   const fetchLogPhotos = async (logId: string): Promise<string[]> => {
@@ -349,6 +396,7 @@ export default function DailyLogList() {
   const resetForm = () => {
     setForm(EMPTY_FORM(prefillProject))
     setSelectedWorkers([])
+    setOvertimeRows([])
     setEditingId(null)
     setShowForm(false)
   }
@@ -372,13 +420,24 @@ export default function DailyLogList() {
       inspector_meeting: log.inspector_meeting ?? false,
       additional_notes: log.additional_notes ?? '',
       weather: log.weather ?? '',
-      overtime_amount: (log as LightLog & { overtime_amount?: number }).overtime_amount ? String((log as LightLog & { overtime_amount?: number }).overtime_amount) : '',
-      overtime_notes: (log as LightLog & { overtime_notes?: string }).overtime_notes ?? '',
+      shift_label: log.shift_label ?? '',
+      work_start_time: log.work_start_time ?? '',
+      work_end_time: log.work_end_time ?? '',
+      overtime_notes: log.overtime_notes ?? '',
       photos,
       photoPaths,
     })
     const { data: wData } = await supabase.from('daily_log_workers').select('worker_id').eq('log_id', log.id)
     setSelectedWorkers((wData ?? []).map((r: { worker_id: string }) => r.worker_id))
+    // تحميل جلسات الأوفرتايم/الصب
+    const { data: otData } = await supabase.from('daily_log_overtime').select('*').eq('log_id', log.id)
+    setOvertimeRows((otData ?? []).map((r: { worker_id: string | null; task?: string; start_time?: string; end_time?: string; hours?: number }) => ({
+      worker_id: r.worker_id ?? '',
+      task: r.task ?? '',
+      start_time: r.start_time ?? '',
+      end_time: r.end_time ?? '',
+      hours: r.hours != null ? String(r.hours) : '',
+    })))
     setEditingId(log.id)
     setShowForm(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -488,6 +547,7 @@ export default function DailyLogList() {
         if (removed.length) await deleteAttachment(removed)
       }
 
+      // الأوفرتايم الإجمالي = مجموع جلسات الصب (لقطة) — يُخزَّن في overtime_amount ليظهر في تكلفة المشروع
       const payload = {
         project_id: form.project_id,
         log_date: form.log_date,
@@ -496,7 +556,10 @@ export default function DailyLogList() {
         inspector_meeting: form.inspector_meeting,
         additional_notes: form.additional_notes,
         weather: form.weather,
-        overtime_amount: Number(form.overtime_amount) || 0,
+        shift_label: form.shift_label,
+        work_start_time: form.work_start_time,
+        work_end_time: form.work_end_time,
+        overtime_amount: Number(overtimeTotal.toFixed(3)),
         overtime_notes: form.overtime_notes,
         workers_count: selectedWorkers.length,
         photos: finalPaths,   // مصفوفة مسارات Storage (خفيفة) بدل base64
@@ -516,6 +579,28 @@ export default function DailyLogList() {
         await supabase.from('daily_log_workers').insert({ log_id: logId, worker_id: wid })
       }
       await syncAttendance(logId, form.log_date, form.project_id, selectedWorkers)
+
+      // حفظ جلسات الأوفرتايم/الصب (لقطة سعر الساعة والتكلفة) — استبدال كامل عند التحرير
+      await supabase.from('daily_log_overtime').delete().eq('log_id', logId)
+      const otToInsert = overtimeRows
+        .filter(r => r.worker_id && (parseFloat(r.hours) || 0) > 0)
+        .map(r => {
+          const w = workers.find(x => x.id === r.worker_id)
+          const hourly = workerHourly(r.worker_id)
+          const hours = parseFloat(r.hours) || 0
+          return {
+            log_id: logId,
+            worker_id: r.worker_id,
+            worker_name: (w as (Worker & { name_en?: string }) | undefined)?.name_en || w?.name || '',
+            task: r.task,
+            start_time: r.start_time,
+            end_time: r.end_time,
+            hours,
+            hourly_rate: Number(hourly.toFixed(3)),
+            amount: Number((hours * hourly).toFixed(3)),
+          }
+        })
+      if (otToInsert.length) await supabase.from('daily_log_overtime').insert(otToInsert)
       // تحديث الكاش: الخام = المسارات النهائية، والعرض = روابط محلولة جاهزة
       const resolved = (await Promise.all(finalPaths.map(p => resolveAttachmentUrl(p)))).filter((u): u is string => !!u)
       setRawPhotosCache(prev => ({ ...prev, [logId]: finalPaths }))
@@ -728,26 +813,92 @@ export default function DailyLogList() {
                 التنسيق مع الاستشاري لموعد الفحص
               </label>
 
-              {/* الأوفر تايم */}
-              <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-4">
-                <label className="block text-sm font-semibold text-amber-800 mb-2">أوفر تايم (اختياري)</label>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* وقت العمل الاعتيادي (وردية + بداية/نهاية) */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">وقت العمل الاعتيادي</label>
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {SHIFT_PRESETS.map(s => (
+                    <button key={s.label} type="button"
+                      onClick={() => setForm(p => ({ ...p, shift_label: s.label, work_start_time: s.start, work_end_time: s.end }))}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${form.shift_label === s.label ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-slate-600 border-slate-200 hover:border-amber-400'}`}>
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">المبلغ الإجمالي (د.ب)</label>
-                    <input type="number" step="0.001" min="0" value={form.overtime_amount} dir="ltr"
-                      onChange={e => setForm(p => ({ ...p, overtime_amount: e.target.value }))}
-                      placeholder="0.000"
+                    <label className="block text-xs font-medium text-slate-500 mb-1">الوردية</label>
+                    <input value={form.shift_label} onChange={e => setForm(p => ({ ...p, shift_label: e.target.value }))}
+                      placeholder="صباحي / مسائي..." className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">من</label>
+                    <input type="time" dir="ltr" value={form.work_start_time} onChange={e => setForm(p => ({ ...p, work_start_time: e.target.value }))}
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
                   </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-xs font-medium text-slate-500 mb-1">السبب / التفاصيل</label>
-                    <input type="text" value={form.overtime_notes}
-                      onChange={e => setForm(p => ({ ...p, overtime_notes: e.target.value }))}
-                      placeholder="مثال: عمل يوم الجمعة، ساعات إضافية..."
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">إلى</label>
+                    <input type="time" dir="ltr" value={form.work_end_time} onChange={e => setForm(p => ({ ...p, work_end_time: e.target.value }))}
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
                   </div>
                 </div>
-                <p className="text-xs text-amber-600/70 mt-1.5">يُضاف لتكلفة العمالة في حساب ربح المشروع المرتبط</p>
+              </div>
+
+              {/* عمل إضافي / صب — أوفرتايم بالساعات لعمّال محددين */}
+              <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                  <div>
+                    <label className="block text-sm font-semibold text-amber-800">عمل إضافي / صب (أوفر تايم بالساعات)</label>
+                    <p className="text-xs text-amber-600/70">لعمّال أنهوا دوامهم — يُحسب بالساعات دون احتساب يوم إضافي. سعر الساعة من الراتب الحقيقي ÷ {MONTHLY_WORK_DAYS} ÷ {STANDARD_DAY_HOURS} ساعات.</p>
+                  </div>
+                  <Button type="button" variant="secondary" icon={<Plus size={14} />} onClick={addOvertimeRow}>إضافة عامل</Button>
+                </div>
+                {overtimeRows.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-2">لا يوجد عمل إضافي. اضغط «إضافة عامل» لتسجيل ساعات الصب.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {overtimeRows.map((row, i) => (
+                      <div key={i} className="grid grid-cols-12 gap-2 items-end bg-white rounded-lg p-2 border border-amber-100">
+                        <div className="col-span-12 md:col-span-3">
+                          <label className="block text-[11px] text-slate-500 mb-1">العامل</label>
+                          <select value={row.worker_id} onChange={e => updateOvertimeRow(i, { worker_id: e.target.value })}
+                            className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30">
+                            <option value="">اختر عاملاً</option>
+                            {workers.map(w => <option key={w.id} value={w.id}>{(w as Worker & { name_en?: string }).name_en || w.name}</option>)}
+                          </select>
+                        </div>
+                        <div className="col-span-6 md:col-span-2">
+                          <label className="block text-[11px] text-slate-500 mb-1">العمل</label>
+                          <input value={row.task} onChange={e => updateOvertimeRow(i, { task: e.target.value })} placeholder="صب"
+                            className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
+                        </div>
+                        <div className="col-span-3 md:col-span-2">
+                          <label className="block text-[11px] text-slate-500 mb-1">من الساعة</label>
+                          <input type="time" dir="ltr" value={row.start_time} onChange={e => updateOvertimeRow(i, { start_time: e.target.value })}
+                            className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
+                        </div>
+                        <div className="col-span-3 md:col-span-1">
+                          <label className="block text-[11px] text-slate-500 mb-1">ساعات</label>
+                          <input type="number" step="0.5" min="0" dir="ltr" value={row.hours} onChange={e => updateOvertimeRow(i, { hours: e.target.value })}
+                            className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
+                        </div>
+                        <div className="col-span-4 md:col-span-2">
+                          <label className="block text-[11px] text-slate-500 mb-1">التكلفة</label>
+                          <div className="h-9 flex items-center font-bold text-amber-700 text-sm">{formatCurrency(overtimeRowAmount(row))}</div>
+                        </div>
+                        <div className="col-span-2 md:col-span-2 flex justify-end">
+                          <button type="button" onClick={() => removeOvertimeRow(i)} className="p-2 text-slate-400 hover:text-red-600" title="حذف"><Trash2 size={16} /></button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-xs text-slate-500">إجمالي الأوفر تايم (يُضاف لتكلفة عمالة المشروع)</span>
+                      <span className="font-bold text-amber-700">{formatCurrency(overtimeTotal)}</span>
+                    </div>
+                    <input type="text" value={form.overtime_notes} onChange={e => setForm(p => ({ ...p, overtime_notes: e.target.value }))}
+                      placeholder="ملاحظات الأوفر تايم (اختياري)" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
+                  </div>
+                )}
               </div>
 
               <div>
