@@ -24,14 +24,23 @@ import { createClient } from '@supabase/supabase-js'
 
 const BUCKET = 'attachments'
 
-// ─── قراءة .env يدوياً (بلا أي تبعية) ────────────────────────────────
+// ─── قراءة متغيّرات البيئة يدوياً (بلا أي تبعية) ──────────────────────
+//  يقرأ من .env.local أولاً ثم .env (كلاهما متجاهَل في git).
 function loadEnv() {
   let text = ''
-  try {
-    text = readFileSync(new URL('./.env', import.meta.url), 'utf8')
-  } catch {
-    fail('لم يُعثر على ملف .env في جذر المشروع. أنشئه وضع فيه SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY.')
+  const candidates = ['./.env.local', './.env']
+  let usedFile = ''
+  for (const file of candidates) {
+    try {
+      text = readFileSync(new URL(file, import.meta.url), 'utf8')
+      usedFile = file
+      break
+    } catch { /* جرّب الملف التالي */ }
   }
+  if (!usedFile) {
+    fail('لم يُعثر على .env.local أو .env في جذر المشروع. ضع فيه SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY.')
+  }
+  console.log(`🔐 قراءة المتغيّرات من ${usedFile}`)
   const env = {}
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim()
@@ -257,7 +266,7 @@ async function migrateTable(supabase, name, cfg, batch) {
             const path = await uploadDataUrl(supabase, v, cfg.folder)
             update[t.pathCol] = path
             update[t.dataCol] = ''
-            if (t.flag) update[t.flag] = true
+            // ملاحظة: أعمدة has_* محسوبة (GENERATED) وتتحدّث تلقائياً — لا نكتب عليها.
             counters.migrated++
           } else if (t.type === 'array-pg' || t.type === 'array-jsonb') {
             const arr = Array.isArray(row[t.col]) ? row[t.col] : []
@@ -284,7 +293,7 @@ async function migrateTable(supabase, name, cfg, batch) {
             if (changed) {
               update[t.pathCol] = JSON.stringify(out)
               update[t.dataCol] = ''
-              if (t.flag) update[t.flag] = true
+              // ملاحظة: أعمدة has_* محسوبة (GENERATED) وتتحدّث تلقائياً — لا نكتب عليها.
             }
           }
         } catch (e) {
