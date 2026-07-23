@@ -469,7 +469,11 @@ export interface DailyLog {
   shift_label: string
   work_start_time: string
   work_end_time: string
-  // إجمالي الأوفرتايم المحسوب من جلسات الصب (لقطة) + سببه
+  // عمل إضافي / صب مشترك: وصف + وقت البدء + ساعات (تُدخل مرة واحدة لكل العمال المحددين)
+  overtime_task: string
+  overtime_start: string
+  overtime_hours: number
+  // إجمالي الأوفرتايم المحسوب (لقطة) + سببه
   overtime_amount: number
   overtime_notes: string
   created_at: string
