@@ -57,12 +57,11 @@ const DOC_TYPE_LABEL = (t: string): string => {
   return map[t] || t || 'مستند';
 };
 
-// مستند موحّد للعرض (file_url = مسار Storage أو Data URL قديم) مع مصدره (مشروع/عميل)
+// مستند موحّد للعرض (بلا محتوى؛ file_url يُجلب عند الفتح فقط) مع مصدره (مشروع/عميل)
 interface ProjectDoc {
   id: string;
   name: string;
   doc_type: string;
-  file_url: string;
   file_type: string;
   source: 'project' | 'customer';
 }
@@ -112,53 +111,94 @@ export default function ProjectDetail() {
     if (!id) return;
     setLoading(true);
     try {
-      const [pRes, mRes, vRes, lRes] = await Promise.all([
+      // ── الموجة الأولى: كل الاستعلامات المستقلة (تحتاج معرّف المشروع فقط) تُنفَّذ بالتوازي ──
+      const [
+        pRes, mRes, vRes, lRes,
+        projDocsRes,
+        expRes, piRes, subPayRes,
+        rentalsRes, attRes,
+        histRes, formerRes,
+      ] = await Promise.all([
         supabase.from('projects').select('*').eq('id', id).single(),
         supabase.from('project_milestones').select('*').eq('project_id', id).order('sort_order', { ascending: true }),
         // أعمدة خفيفة فقط — نستبعد photos_before/photos_after (base64 الثقيل) لأن الصفحة لا تعرضها
         supabase.from('variation_orders').select('id, project_id, description, amount, status, billable, created_at').eq('project_id', id).order('created_at', { ascending: false }),
         // أعمدة خفيفة فقط — نستبعد عمود photos (base64 الثقيل) لأن الصفحة لا تعرض الصور هنا
-        supabase.from('daily_logs').select('id, project_id, log_date, description, material_requests, inspector_meeting, overtime_amount').eq('project_id', id).order('log_date', { ascending: false })
+        supabase.from('daily_logs').select('id, project_id, log_date, description, material_requests, inspector_meeting, overtime_amount').eq('project_id', id).order('log_date', { ascending: false }),
+        // مستندات المشروع — بلا file_url (قد يحمل base64 ثقيلاً)؛ يُجلب محتواه عند الفتح فقط
+        supabase.from('documents').select('id, name, doc_type, file_type').eq('related_id', id).eq('related_type', 'project').order('created_at', { ascending: false }),
+        supabase.from('accounts_payable').select('amount').eq('project_id', id),
+        supabase.from('purchase_invoices').select('amount, payment_method, check_due_date').eq('project_id', id),
+        supabase.from('subcontractor_payments').select('amount, payment_method, check_due_date').eq('project_id', id),
+        supabase.from('rentals').select('id').eq('project_id', id),
+        supabase.from('worker_attendance').select('worker_id, status').eq('project_id', id),
+        supabase.from('project_labor_entries').select('*').eq('project_id', id).order('cost_date', { ascending: false }),
+        supabase.from('workers').select('id, name, name_en, worker_type').eq('status', 'former').order('name'),
       ]);
 
       if (pRes.data) setProject(pRes.data as Project);
       if (mRes.data) setMilestones(mRes.data as ProjectMilestone[]);
       if (vRes.data) setVos(vRes.data as VariationOrder[]);
       if (lRes.data) setLogs(lRes.data as DailyLog[]);
+      setHistEntries((histRes.data ?? []) as ProjectLaborEntry[]);
+      setFormerWorkers((formerRes.data ?? []) as { id: string; name: string; name_en: string; worker_type: string }[]);
 
-      // مستندات المشروع + مستندات العميل معاً (file_url مسار خفيف؛ يُحلّ عند الفتح فقط)
-      const clientId = (pRes.data as Project | null)?.client_id;
-      const projDocsRes = await supabase.from('documents')
-        .select('id, name, doc_type, file_url, file_type')
-        .eq('related_id', id).eq('related_type', 'project')
-        .order('created_at', { ascending: false });
+      // مستندات المشروع (بلا محتوى) — تُدمج مع مستندات العميل بعد الموجة الثانية
       const projDocs: ProjectDoc[] = ((projDocsRes.data ?? []) as DocRow[]).map(d => ({ ...d, source: 'project' }));
-      let custDocs: ProjectDoc[] = [];
-      if (clientId) {
-        const custDocsRes = await supabase.from('documents')
-          .select('id, name, doc_type, file_url, file_type')
-          .eq('related_id', clientId).eq('related_type', 'customer')
-          .order('created_at', { ascending: false });
-        custDocs = ((custDocsRes.data ?? []) as DocRow[]).map(d => ({ ...d, source: 'customer' }));
+
+      // ── مدخلات الموجة الثانية (تعتمد على نتائج الأولى) ──
+      const clientId = (pRes.data as Project | null)?.client_id;
+      const rentalIds = ((rentalsRes.data ?? []) as Array<{ id: string }>).map(r => r.id);
+
+      // عدّ أيام حضور كل عامل في هذا الموقع (من بيانات الموجة الأولى)
+      const MONTHLY_WORK_DAYS = 26;
+      const daysByWorker = new Map<string, number>();
+      for (const a of ((attRes.data ?? []) as Array<{ worker_id: string; status?: string }>)) {
+        if (a.status && a.status !== 'present') continue; // نحسب الحضور فقط
+        daysByWorker.set(a.worker_id, (daysByWorker.get(a.worker_id) || 0) + 1);
       }
-      setDocs([...projDocs, ...custDocs]);
+      const workerIds = Array.from(daysByWorker.keys());
+
+      // ── الموجة الثانية: الاستعلامات المعتمدة على الأولى — بالتوازي أيضاً ──
+      const [custDocs, rentalPayData, workersData] = await Promise.all([
+        (async () => {
+          if (!clientId) return [] as DocRow[];
+          const { data } = await supabase.from('documents')
+            .select('id, name, doc_type, file_type')
+            .eq('related_id', clientId).eq('related_type', 'customer')
+            .order('created_at', { ascending: false });
+          return (data ?? []) as DocRow[];
+        })(),
+        (async () => {
+          if (rentalIds.length === 0) return [] as Array<{ amount: number }>;
+          const { data } = await supabase.from('rental_payments').select('amount').in('rental_id', rentalIds);
+          return (data ?? []) as Array<{ amount: number }>;
+        })(),
+        (async () => {
+          type WorkerRow = {
+            id: string; name: string; name_en?: string; pay_type?: string;
+            daily_rate?: number; actual_salary?: number; basic_salary?: number; social_allowance?: number;
+          };
+          if (workerIds.length === 0) return [] as WorkerRow[];
+          const { data } = await supabase.from('workers')
+            .select('id, name, name_en, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')
+            .in('id', workerIds);
+          return (data ?? []) as WorkerRow[];
+        })(),
+      ]);
+
+      // دمج مستندات المشروع + العميل
+      const custDocList: ProjectDoc[] = custDocs.map(d => ({ ...d, source: 'customer' }));
+      setDocs([...projDocs, ...custDocList]);
 
       // 1. نثريات الصندوق (كلها مدفوعة فعلاً)
-      const { data: expensesData } = await supabase
-        .from('accounts_payable')
-        .select('amount')
-        .eq('project_id', id);
-      const totalBox = (expensesData || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const totalBox = ((expRes.data ?? []) as Array<{ amount: number }>).reduce((sum, item) => sum + Number(item.amount || 0), 0);
       setBoxExpenses(totalBox);
 
       // 2. فواتير الموردين — نفصل المدفوع فعلاً عن الشيكات الآجلة
-      const { data: piData } = await supabase
-        .from('purchase_invoices')
-        .select('amount, payment_method, check_due_date')
-        .eq('project_id', id);
       let paid = 0, deferred = 0;
       const t = today();
-      for (const pi of (piData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
+      for (const pi of ((piRes.data ?? []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>)) {
         const amt = Number(pi.amount || 0);
         // شيك آجل لم يحل موعده بعد = لم يُصرف فعلياً → لا يُحسب مصروفاً
         if (pi.payment_method === 'deferred_cheque' && pi.check_due_date && pi.check_due_date > t) {
@@ -171,12 +211,8 @@ export default function ProjectDetail() {
       setPurchaseDeferred(deferred);
 
       // 3. مقاولو الباطن — المدفوع فعلاً فقط (من جدول المدفوعات، باستثناء الشيكات الآجلة)
-      const { data: subPayData } = await supabase
-        .from('subcontractor_payments')
-        .select('amount, payment_method, check_due_date')
-        .eq('project_id', id);
       let subPaid = 0;
-      for (const sp of (subPayData || []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>) {
+      for (const sp of ((subPayRes.data ?? []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>)) {
         const amt = Number(sp.amount || 0);
         if (sp.payment_method === 'cheque' && sp.check_due_date && sp.check_due_date > t) {
           // شيك مقاول باطن آجل لم يُصرف → لا يُحسب
@@ -186,21 +222,8 @@ export default function ProjectDetail() {
       }
       setSubcontractorPaidSum(subPaid);
 
-      // 4. الإيجارات والمصاريف الثابتة المرتبطة بهذا المشروع — الدفعات الفعلية المدفوعة
-      // نجلب إيجارات المشروع ثم دفعاتها (المدفوع فعلاً يُحسب مصروفاً، حسب رؤية السيولة)
-      const { data: projectRentals } = await supabase
-        .from('rentals')
-        .select('id')
-        .eq('project_id', id);
-      let rentalsPaid = 0;
-      const rentalIds = (projectRentals || []).map(r => (r as { id: string }).id);
-      if (rentalIds.length > 0) {
-        const { data: rentalPayData } = await supabase
-          .from('rental_payments')
-          .select('amount')
-          .in('rental_id', rentalIds);
-        rentalsPaid = (rentalPayData || []).reduce((sum, p) => sum + Number((p as { amount: number }).amount || 0), 0);
-      }
+      // 4. الإيجارات المرتبطة بالمشروع — الدفعات الفعلية المدفوعة (رؤية السيولة)
+      const rentalsPaid = rentalPayData.reduce((sum, p) => sum + Number(p.amount || 0), 0);
       setRentalsPaidSum(rentalsPaid);
 
       // 5. تكلفة العمالة الفعلية على هذا الموقع (تُخصم من الربح)
@@ -208,69 +231,37 @@ export default function ProjectDetail() {
       //   - شهري: (الراتب الكامل ÷ 26 يوم عمل) × أيام حضوره  [الجمعة إجازة مدفوعة]
       //   - يومي: الأجر اليومي × أيام حضوره
       // الراتب الكامل = actual_salary، وإن كان صفراً نرجع لـ basic_salary + social_allowance
-      const MONTHLY_WORK_DAYS = 26;
-      const { data: attendanceData } = await supabase
-        .from('worker_attendance')
-        .select('worker_id, status')
-        .eq('project_id', id);
-
-      // عدّ أيام حضور كل عامل في هذا الموقع
-      const daysByWorker = new Map<string, number>();
-      for (const a of (attendanceData || []) as Array<{ worker_id: string; status?: string }>) {
-        if (a.status && a.status !== 'present') continue; // نحسب الحضور فقط
-        daysByWorker.set(a.worker_id, (daysByWorker.get(a.worker_id) || 0) + 1);
-      }
-
       let laborTotal = 0;
       const details: { name: string; days: number; cost: number; type: string }[] = [];
-      if (daysByWorker.size > 0) {
-        const workerIds = Array.from(daysByWorker.keys());
-        const { data: workersData } = await supabase
-          .from('workers')
-          .select('id, name, name_en, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')
-          .in('id', workerIds);
-
-        for (const w of (workersData || []) as Array<{
-          id: string; name: string; name_en?: string; pay_type?: string;
-          daily_rate?: number; actual_salary?: number; basic_salary?: number; social_allowance?: number;
-        }>) {
-          const days = daysByWorker.get(w.id) || 0;
-          let dayCost = 0;
-          let type = '';
-          if (w.pay_type === 'daily') {
-            dayCost = Number(w.daily_rate || 0);
-            type = 'يومي';
-          } else {
-            // شهري: الراتب الكامل ÷ 26
-            const fullSalary = Number(w.actual_salary || 0) > 0
-              ? Number(w.actual_salary || 0)
-              : Number(w.basic_salary || 0) + Number(w.social_allowance || 0);
-            dayCost = fullSalary / MONTHLY_WORK_DAYS;
-            type = 'شهري';
-          }
-          const cost = dayCost * days;
-          laborTotal += cost;
-          details.push({ name: w.name_en || w.name, days, cost, type });
+      for (const w of workersData) {
+        const days = daysByWorker.get(w.id) || 0;
+        let dayCost = 0;
+        let type = '';
+        if (w.pay_type === 'daily') {
+          dayCost = Number(w.daily_rate || 0);
+          type = 'يومي';
+        } else {
+          // شهري: الراتب الكامل ÷ 26
+          const fullSalary = Number(w.actual_salary || 0) > 0
+            ? Number(w.actual_salary || 0)
+            : Number(w.basic_salary || 0) + Number(w.social_allowance || 0);
+          dayCost = fullSalary / MONTHLY_WORK_DAYS;
+          type = 'شهري';
         }
-        // ترتيب تنازلي حسب التكلفة
-        details.sort((a, b) => b.cost - a.cost);
+        const cost = dayCost * days;
+        laborTotal += cost;
+        details.push({ name: w.name_en || w.name, days, cost, type });
       }
+      // ترتيب تنازلي حسب التكلفة
+      details.sort((a, b) => b.cost - a.cost);
       setWorkersLaborCost(laborTotal);
       setLaborDetails(details);
 
       // 6. الأوفر تايم من التقارير اليومية لهذا المشروع
-      const overtimeSum = (lRes.data || []).reduce(
-        (sum, log) => sum + Number((log as DailyLog & { overtime_amount?: number }).overtime_amount || 0), 0
+      const overtimeSum = ((lRes.data ?? []) as Array<DailyLog & { overtime_amount?: number }>).reduce(
+        (sum, log) => sum + Number(log.overtime_amount || 0), 0
       );
       setOvertimeCost(overtimeSum);
-
-      // 7. العمالة التاريخية/اليدوية + قائمة العمال السابقين للاختيار
-      const [histRes, formerRes] = await Promise.all([
-        supabase.from('project_labor_entries').select('*').eq('project_id', id).order('cost_date', { ascending: false }),
-        supabase.from('workers').select('id, name, name_en, worker_type').eq('status', 'former').order('name'),
-      ]);
-      setHistEntries((histRes.data ?? []) as ProjectLaborEntry[]);
-      setFormerWorkers((formerRes.data ?? []) as { id: string; name: string; name_en: string; worker_type: string }[]);
 
     } catch (error) {
       toast.error('حدث خطأ أثناء تحميل البيانات المالية للمشروع');
@@ -377,19 +368,23 @@ export default function ProjectDetail() {
     }
   };
 
-  // فتح المستند: يحلّ مساره إلى رابط موقّع (أو base64 قديم) ثم يعرض الصورة أو يفتح الملف
+  // فتح المستند: يُجلب file_url عند الطلب فقط، ثم يُحلّ إلى رابط موقّع (أو base64 قديم) ويُعرض
   const openDoc = async (doc: ProjectDoc) => {
-    const url = await resolveAttachmentUrl(doc.file_url);
+    const { data } = await supabase.from('documents').select('file_url').eq('id', doc.id).maybeSingle();
+    const fileUrl = (data as { file_url?: string } | null)?.file_url ?? '';
+    const url = await resolveAttachmentUrl(fileUrl);
     if (!url) { toast.error('تعذّر فتح المستند'); return; }
     if (doc.file_type?.startsWith('image/')) setPreviewImg(url);
     else if (url.startsWith('data:')) openStoredFile(url, doc.file_type);
     else window.open(url, '_blank', 'noopener');
   };
 
-  // حذف مستند المشروع (يحذف الملف من Storage أيضاً ويتجاهل base64 القديم)
+  // حذف مستند المشروع (يجلب المسار أولاً لحذف الملف من Storage، ويتجاهل base64 القديم)
   const deleteDoc = async (doc: ProjectDoc) => {
+    const { data } = await supabase.from('documents').select('file_url').eq('id', doc.id).maybeSingle();
     await supabase.from('documents').delete().eq('id', doc.id);
-    deleteAttachment(doc.file_url).catch(() => {});
+    const fileUrl = (data as { file_url?: string } | null)?.file_url ?? '';
+    deleteAttachment(fileUrl).catch(() => {});
     setDocs(prev => prev.filter(d => d.id !== doc.id));
     toast.success('تم حذف المستند');
   };
