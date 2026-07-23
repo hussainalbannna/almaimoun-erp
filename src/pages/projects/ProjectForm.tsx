@@ -8,7 +8,8 @@ import {
 import { supabase } from '../../lib/supabase'
 import type { Project, ProjectMilestone, Customer } from '../../types'
 import { nextSerial, formatCurrency } from '../../lib/utils'
-import { readDocumentText, extractJSON, compressImage, fileToDataUrl, openStoredFile, hasApiKey } from '../../lib/ai'
+import { readDocumentText, extractJSON, compressImage, openStoredFile, hasApiKey } from '../../lib/ai'
+import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -120,6 +121,7 @@ export default function ProjectForm() {
   const [docType, setDocType] = useState('contract')
   const [docUploading, setDocUploading] = useState(false)
   const [viewerDoc, setViewerDoc] = useState<ProjectDoc | null>(null)
+  const [viewerUrl, setViewerUrl] = useState<string>('')  // رابط العرض المحلول (مسار → موقّع، أو base64 قديم)
 
   // ─── التحميل ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -131,7 +133,7 @@ export default function ProjectForm() {
       supabase.from('project_milestones').select('*').eq('project_id', id).order('sort_order').then(({ data }) => {
         if (data && data.length > 0) setMilestones((data as ProjectMilestone[]).map(m => ({ ...m, _uid: makeUid() })))
       })
-      supabase.from('documents').select('*').eq('related_id', id).eq('related_type', 'project').order('created_at', { ascending: false }).then(({ data }) => {
+      supabase.from('documents').select('id, name, doc_type, file_url, file_type, created_at').eq('related_id', id).eq('related_type', 'project').order('created_at', { ascending: false }).then(({ data }) => {
         if (data) setDocs((data as ProjectDoc[]).map(d => ({ id: d.id, name: d.name, doc_type: d.doc_type, file_url: d.file_url, file_type: d.file_type, created_at: d.created_at })))
       })
     } else {
@@ -195,6 +197,12 @@ export default function ProjectForm() {
     [milestones]
   )
 
+  // رفع ملف مستند إلى Storage وإرجاع مساره (الصور تُضغط أولاً) — بدل base64
+  const uploadDocFile = async (file: File): Promise<string> =>
+    file.type.startsWith('image/')
+      ? await uploadDataUrl(await compressImage(file), 'documents')
+      : await uploadAttachment(file, 'documents')
+
   // ─── قراءة العقد بالذكاء الاصطناعي ───────────────────────────────────
   const handleContractScan = async (file: File) => {
     if (!hasApiKey()) {
@@ -235,9 +243,9 @@ export default function ProjectForm() {
         })))
       }
 
-      // تخزين العقد نفسه كمستند مرفق
-      const dataUrl = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
-      setDocs(prev => [{ name: file.name || 'العقد', doc_type: 'contract', file_url: dataUrl, file_type: file.type }, ...prev])
+      // تخزين العقد نفسه كمستند مرفق — يُرفع إلى Storage ويُحفظ مساره فقط (لا base64)
+      const path = await uploadDocFile(file)
+      setDocs(prev => [{ name: file.name || 'العقد', doc_type: 'contract', file_url: path, file_type: file.type }, ...prev])
 
       toast.success('تم قراءة العقد وتعبئة الحقول تلقائياً', { id: 'contract' })
     } catch (e) {
@@ -253,8 +261,8 @@ export default function ProjectForm() {
     try {
       const sizeMB = file.size / (1024 * 1024)
       if (sizeMB > 8) { toast.error('حجم الملف كبير جداً (الحد 8 ميجا)'); setDocUploading(false); return }
-      const dataUrl = file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
-      const newDoc: ProjectDoc = { name: file.name, doc_type: docType, file_url: dataUrl, file_type: file.type }
+      const path = await uploadDocFile(file)  // يُرفع إلى Storage، ويُحفظ المسار فقط (لا base64)
+      const newDoc: ProjectDoc = { name: file.name, doc_type: docType, file_url: path, file_type: file.type }
 
       if (isEdit && id) {
         const { data, error } = await supabase.from('documents').insert({
@@ -279,6 +287,7 @@ export default function ProjectForm() {
     if (doc.id) {
       await supabase.from('documents').delete().eq('id', doc.id)
     }
+    deleteAttachment(doc.file_url).catch(() => {})  // يحذف ملف Storage (يتجاهل base64 القديم)
     setDocs(prev => prev.filter((_, i) => i !== idx))
     toast.success('تم حذف المستند')
   }
@@ -348,6 +357,16 @@ export default function ProjectForm() {
   }
 
   const docIsImage = (d: ProjectDoc) => d.file_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(d.name)
+
+  // فتح المستند: يحلّ file_url (مسار Storage أو base64 قديم) إلى رابط عرض، بلا عرض base64 مباشرة
+  const openDoc = async (doc: ProjectDoc) => {
+    const url = await resolveAttachmentUrl(doc.file_url)
+    if (!url) { toast.error('تعذّر فتح المستند'); return }
+    if (docIsImage(doc)) { setViewerDoc(doc); setViewerUrl(url) }
+    else if (url.startsWith('data:')) openStoredFile(url, doc.file_type)
+    else window.open(url, '_blank', 'noopener')
+  }
+  const closeViewer = () => { setViewerDoc(null); setViewerUrl('') }
 
   return (
     <div className="p-6 max-w-4xl mx-auto" dir="rtl">
@@ -481,7 +500,7 @@ export default function ProjectForm() {
                     <div className="text-sm font-medium text-slate-800 truncate">{doc.name}</div>
                     <div className="text-xs text-slate-400">{DOC_TYPE_LABEL[doc.doc_type] ?? doc.doc_type}{!doc.id && ' • غير محفوظ'}</div>
                   </div>
-                  <button onClick={() => docIsImage(doc) ? setViewerDoc(doc) : openStoredFile(doc.file_url, doc.file_type)}
+                  <button onClick={() => openDoc(doc)}
                     className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-amber-50" title="عرض">
                     <Eye size={16} />
                   </button>
@@ -592,12 +611,12 @@ export default function ProjectForm() {
 
       {/* ═══ عارض الصور ═══ */}
       {viewerDoc && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setViewerDoc(null)}>
-          <button className="absolute top-4 left-4 text-white/80 hover:text-white p-2" onClick={() => setViewerDoc(null)}>
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={closeViewer}>
+          <button className="absolute top-4 left-4 text-white/80 hover:text-white p-2" onClick={closeViewer}>
             <X size={24} />
           </button>
           <div className="max-w-3xl max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
-            <img src={viewerDoc.file_url} alt={viewerDoc.name} className="rounded-lg max-w-full" />
+            <img src={viewerUrl} alt={viewerDoc.name} className="rounded-lg max-w-full" />
             <div className="text-center text-white/80 text-sm mt-3">{viewerDoc.name}</div>
           </div>
         </div>
