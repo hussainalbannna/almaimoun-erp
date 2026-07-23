@@ -191,9 +191,12 @@ async function dryRunTable(supabase, name, cfg, batch) {
   const stats = {}
   for (const t of cfg.targets) stats[t.col || t.dataCol] = { rows: 0, items: 0, chars: 0 }
 
-  let from = 0, scanned = 0
+  // ترقيم بمفتاح id (keyset) — يزور كل صف مرة واحدة بالضبط، ثابت حتى مع تعديل الصفوف
+  let cursor = '', scanned = 0
   for (;;) {
-    const { data, error } = await supabase.from(name).select(select).range(from, from + batch - 1)
+    let q = supabase.from(name).select(select).order('id', { ascending: true }).limit(batch)
+    if (cursor) q = q.gt('id', cursor)
+    const { data, error } = await q
     if (error) { console.error(`   ⚠️  خطأ في القراءة: ${error.message}`); return }
     if (!data || data.length === 0) break
     scanned += data.length
@@ -218,8 +221,8 @@ async function dryRunTable(supabase, name, cfg, batch) {
         }
       }
     }
+    cursor = data[data.length - 1].id
     if (data.length < batch) break
-    from += batch
   }
 
   console.log(`   صفوف مفحوصة: ${scanned}`)
@@ -244,9 +247,12 @@ async function migrateTable(supabase, name, cfg, batch) {
   const select = selectColumnsFor(cfg)
   const counters = { migrated: 0, skipped: 0, errors: 0, rowsUpdated: 0 }
 
-  let from = 0
+  // ترقيم بمفتاح id (keyset) — يزور كل صف مرة واحدة بالضبط رغم تعديل الصفوف in-place
+  let cursor = '', processed = 0
   for (;;) {
-    const { data, error } = await supabase.from(name).select(select).range(from, from + batch - 1)
+    let q = supabase.from(name).select(select).order('id', { ascending: true }).limit(batch)
+    if (cursor) q = q.gt('id', cursor)
+    const { data, error } = await q
     if (error) fail(`خطأ في قراءة ${name}: ${error.message}`)
     if (!data || data.length === 0) break
 
@@ -313,9 +319,10 @@ async function migrateTable(supabase, name, cfg, batch) {
       }
     }
 
-    console.log(`   ...عولجت الدفعة حتى الصف ${from + data.length}`)
+    cursor = data[data.length - 1].id
+    processed += data.length
+    console.log(`   ...عولجت ${processed} صف`)
     if (data.length < batch) break
-    from += batch
   }
 
   console.log(`\n✅ انتهى ${name}: رُحّل ${counters.migrated} ملف · تُخطّي ${counters.skipped} · أخطاء ${counters.errors} · صفوف حُدّثت ${counters.rowsUpdated}`)
