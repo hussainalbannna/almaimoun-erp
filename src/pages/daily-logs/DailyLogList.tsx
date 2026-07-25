@@ -561,6 +561,34 @@ export default function DailyLogList() {
   const handleSave = async () => {
     if (!form.project_id) { toast.error('يجب اختيار المشروع'); return }
     if (!form.description.trim()) { toast.error('يجب إدخال وصف الأعمال'); return }
+
+    // تنبيه: هل أحد العمّال المحدّدين مسجّل حضورًا عاديًا اليوم في تقرير مشروع آخر؟
+    // (يمنع نقله الصامت وفقدان ذلك المشروع تكلفة اليوم — العمل الإضافي في مشروع آخر يُسجَّل عبر قائمة الأوفرتايم)
+    if (selectedWorkers.length) {
+      const { data: clash } = await supabase
+        .from('worker_attendance')
+        .select('worker_id, project_id, log_id')
+        .eq('attendance_date', form.log_date)
+        .in('worker_id', selectedWorkers)
+      const conflicts = (clash ?? []).filter(
+        (r: { worker_id: string; project_id: string; log_id: string }) =>
+          r.log_id !== editingId && r.project_id !== form.project_id,
+      )
+      if (conflicts.length) {
+        const lines = conflicts.map(r => {
+          const wn = workers.find(x => x.id === r.worker_id)
+          const pn = projects.find(p => p.id === r.project_id)
+          return `• ${wn?.name_en || wn?.name || 'عامل'} — ${pn?.project_name || 'مشروع آخر'}`
+        })
+        const proceed = window.confirm(
+          `تنبيه: العمّال التالون مسجّلون اليوم في مشروع آخر:\n${lines.join('\n')}\n\n` +
+          `حفظ هذا التقرير سينقلهم إلى هذا المشروع ويزيل حضورهم من المشروع الآخر (فيفقد تكلفتهم لهذا اليوم).\n\n` +
+          `إن كان العامل يعمل هنا كعمل إضافي فأضِفه لقائمة الأوفرتايم لا لقائمة العمّال. هل تريد المتابعة؟`,
+        )
+        if (!proceed) return
+      }
+    }
+
     setSaving(true)
     try {
       // ── رفع الصور الجديدة (Data URL) إلى Storage؛ المسارات الموجودة تبقى ──
