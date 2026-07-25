@@ -31,14 +31,23 @@ const EMPTY_STATEMENT_DATA: StatementData = { customer: null, invoices: [], rece
 async function fetchClientStatement(customerId: string): Promise<StatementData> {
   const [custRes, invRes, recRes, projRes] = await Promise.all([
     supabase.from('customers').select('*').eq('id', customerId).maybeSingle(),
-    supabase.from('invoices').select('*').eq('customer_id', customerId).neq('status', 'cancelled').order('issue_date'),
+    // تُجلب كل الفواتير (بما فيها الملغاة) لنعرف أي إيصال يتبع فاتورة ملغاة فنستبعده أيضاً
+    supabase.from('invoices').select('*').eq('customer_id', customerId).order('issue_date'),
     supabase.from('receipts').select('*').eq('customer_id', customerId).order('receipt_date'),
     supabase.from('projects').select('id, project_name').eq('client_id', customerId),
   ])
+
+  const allInvoices = (invRes.data ?? []) as Invoice[]
+  const cancelledIds = new Set(allInvoices.filter(i => i.status === 'cancelled').map(i => i.id))
+  // إيصال مرتبط بفاتورة ملغاة لا يُحتسب دائنية (وإلا ظهر رصيد سالب وهمي)؛
+  // الإيصالات غير المرتبطة بفاتورة أو المرتبطة بفاتورة نشطة تبقى
+  const activeReceipts = ((recRes.data ?? []) as Receipt[])
+    .filter(r => !(r.invoice_id && cancelledIds.has(r.invoice_id)))
+
   return {
     customer: (custRes.data as Customer) ?? null,
-    invoices: (invRes.data ?? []) as Invoice[],
-    receipts: (recRes.data ?? []) as Receipt[],
+    invoices: allInvoices.filter(i => i.status !== 'cancelled'),
+    receipts: activeReceipts,
     projects: (projRes.data ?? []) as Project[],
   }
 }

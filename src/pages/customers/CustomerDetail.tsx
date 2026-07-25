@@ -91,7 +91,11 @@ async function fetchCustomerDetail(id: string): Promise<CustomerDetailData> {
   // الإجماليات تستبعد الفواتير الملغاة (متوافق مع منطق كشف الحساب)
   const active = invoices.filter(i => i.status !== 'cancelled')
   const totalInvoiced = active.reduce((s, i) => s + i.total, 0)
-  const totalPaid = receipts.reduce((s, r) => s + Number(r.amount || 0), 0)
+  // ...وكذلك إيصالاتها؛ الإيصالات غير المرتبطة بفاتورة أو المرتبطة بفاتورة نشطة تبقى محسوبة
+  const cancelledIds = new Set(rawInvoices.filter(i => i.status === 'cancelled').map(i => i.id))
+  const totalPaid = receipts
+    .filter(r => !(r.invoice_id && cancelledIds.has(r.invoice_id)))
+    .reduce((s, r) => s + Number(r.amount || 0), 0)
 
   return {
     customer,
