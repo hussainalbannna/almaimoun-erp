@@ -8,6 +8,7 @@ import {
 import { supabase } from '../lib/supabase'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { fetchAllAlerts, type AlertLevel } from '../lib/notifications'
+import { fetchCheques, computePendingChequeSets, computeProjectProfit, type WorkerPayLike } from '../lib/finance'
 
 interface ProjectFin {
   id: string
@@ -58,7 +59,8 @@ async function fetchDashboardStats(): Promise<Stats> {
 
   const [
     projRes, workRes, expRes, lpoRes, milRes, logRes,
-    allMilRes, apRes, piAllRes, subPayRes, subAssignRes
+    allMilRes, apRes, piAllRes, subPayRes, subAssignRes,
+    attRes, workersPayRes, otRes, histRes, rentalsRes, rentalPayRes, voRes
   ] = await Promise.all([
     safe(supabase.from('projects').select('id, project_name, contract_value, status').eq('status', 'active')),
     safe(supabase.from('workers').select('id').eq('status', 'active')),
@@ -68,32 +70,73 @@ async function fetchDashboardStats(): Promise<Stats> {
     safe(supabase.from('daily_logs').select('id, project_id, log_date, description').order('log_date', { ascending: false }).limit(5)),
     safe(supabase.from('project_milestones').select('project_id, amount, status')),
     safe(supabase.from('accounts_payable').select('project_id, amount')),
-    safe(supabase.from('purchase_invoices').select('project_id, amount')),
-    safe(supabase.from('subcontractor_payments').select('project_id, amount')),
+    safe(supabase.from('purchase_invoices').select('id, project_id, amount, payment_method, check_due_date')),
+    safe(supabase.from('subcontractor_payments').select('id, project_id, amount, payment_method, check_due_date')),
     safe(supabase.from('subcontractor_assignments').select('agreed_amount, paid_amount')),
+    safe(supabase.from('worker_attendance').select('project_id, worker_id, status')),
+    safe(supabase.from('workers').select('id, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')),
+    safe(supabase.from('daily_logs').select('project_id, overtime_amount')),
+    safe(supabase.from('project_labor_entries').select('project_id, amount')),
+    safe(supabase.from('rentals').select('id, project_id')),
+    safe(supabase.from('rental_payments').select('rental_id, amount')),
+    safe(supabase.from('variation_orders').select('project_id, status, billable, amount')),
   ])
+  const cheques = await fetchCheques()
 
   const projects = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
   const milestones = (milRes.data ?? []) as { id: string; project_id: string; name: string; amount: number; status: string }[]
   const logs = (logRes.data ?? []) as { id: string; project_id: string; log_date: string; description: string }[]
   const allMilestones = (allMilRes.data ?? []) as { project_id: string; amount: number; status: string }[]
   const ap = (apRes.data ?? []) as { project_id: string | null; amount: number }[]
-  const piAll = (piAllRes.data ?? []) as { project_id: string | null; amount: number }[]
-  const subPay = (subPayRes.data ?? []) as { project_id: string | null; amount: number }[]
+  const piAll = (piAllRes.data ?? []) as { id?: string; project_id: string | null; amount: number | null; payment_method: string | null; check_due_date: string | null }[]
+  const subPay = (subPayRes.data ?? []) as { id?: string; project_id: string | null; amount: number | null; payment_method: string | null; check_due_date: string | null }[]
   const subAssign = (subAssignRes.data ?? []) as { agreed_amount: number; paid_amount: number }[]
+  const attendance = (attRes.data ?? []) as { project_id: string | null; worker_id: string; status: string | null }[]
+  const workersPay = (workersPayRes.data ?? []) as WorkerPayLike[]
+  const overtimeRows = (otRes.data ?? []) as { project_id: string | null; overtime_amount: number | null }[]
+  const histRows = (histRes.data ?? []) as { project_id: string | null; amount: number | null }[]
+  const rentals = (rentalsRes.data ?? []) as { id: string; project_id: string | null }[]
+  const rentalPays = (rentalPayRes.data ?? []) as { rental_id: string; amount: number | null }[]
+  const vos = (voRes.data ?? []) as { project_id: string | null; status: string | null; billable: boolean | null; amount: number | null }[]
 
   const monthExpenses = (expRes.data ?? []).reduce((s, e: { amount: number }) => s + Number(e.amount), 0)
   const supplierPayables = (lpoRes.data ?? []).reduce((s, l: { total: number }) => s + Number(l.total), 0)
   const subcontractorDue = subAssign.reduce((s, a) => s + (Number(a.agreed_amount) - Number(a.paid_amount)), 0)
 
+  const pending = computePendingChequeSets(cheques)
+  const workersById = new Map<string, WorkerPayLike>(workersPay.map(w => [w.id, w]))
+  const rentalProject = new Map(rentals.map(r => [r.id, r.project_id]))
+  const rentalsPaidByProject = new Map<string, number>()
+  for (const rp of rentalPays) {
+    const proj = rentalProject.get(rp.rental_id)
+    if (proj) rentalsPaidByProject.set(proj, (rentalsPaidByProject.get(proj) ?? 0) + Number(rp.amount || 0))
+  }
+  const sumByProject = <T extends { project_id: string | null }>(rows: T[], val: (r: T) => number): Map<string, number> => {
+    const m = new Map<string, number>()
+    for (const r of rows) { if (r.project_id) m.set(r.project_id, (m.get(r.project_id) ?? 0) + val(r)) }
+    return m
+  }
+  const boxByProject = sumByProject(ap, r => Number(r.amount || 0))
+  const overtimeByProject = sumByProject(overtimeRows, r => Number(r.overtime_amount || 0))
+  const histByProject = sumByProject(histRows, r => Number(r.amount || 0))
+
   const projectFin: ProjectFin[] = projects.map(p => {
     const invoiced = allMilestones.filter(m => m.project_id === p.id && ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0)
-    const costs =
-      ap.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0) +
-      piAll.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0) +
-      subPay.filter(x => x.project_id === p.id).reduce((s, x) => s + Number(x.amount), 0)
-    const revenue = Number(p.contract_value)
-    return { id: p.id, project_name: p.project_name, contract_value: revenue, revenue, costs, profit: revenue - costs, invoiced }
+    const fin = computeProjectProfit({
+      contractValue: Number(p.contract_value || 0),
+      vos: vos.filter(v => v.project_id === p.id),
+      boxExpenses: boxByProject.get(p.id) ?? 0,
+      purchases: piAll.filter(x => x.project_id === p.id),
+      subPayments: subPay.filter(x => x.project_id === p.id),
+      rentalsPaid: rentalsPaidByProject.get(p.id) ?? 0,
+      attendance: attendance.filter(a => a.project_id === p.id),
+      workersById,
+      overtime: overtimeByProject.get(p.id) ?? 0,
+      histLabor: histByProject.get(p.id) ?? 0,
+      pendingPurchaseIds: pending.purchaseIds,
+      pendingSubIds: pending.subPaymentIds,
+    })
+    return { id: p.id, project_name: p.project_name, contract_value: Number(p.contract_value || 0), revenue: fin.revenue, costs: fin.totalExpenses, profit: fin.netProfit, invoiced }
   })
 
   const upcomingMilestones = milestones.map(m => ({

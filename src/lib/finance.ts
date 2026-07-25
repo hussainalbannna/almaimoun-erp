@@ -241,3 +241,77 @@ export function computeCashPosition(cheques: ChequeRow[], today: string = todayS
 export async function fetchCashPosition(): Promise<CashPosition> {
   return computeCashPosition(await fetchCheques())
 }
+
+// ====================================================================
+//  ربحية المشروع — المحرك الموحّد (نسخة طبق الأصل من منطق صفحة المشروع)
+// ====================================================================
+export interface ProjectProfitInput {
+  contractValue: number
+  vos: Array<{ status?: string | null; billable?: boolean | null; amount: number | null }>
+  boxExpenses: number
+  purchases: Array<PurchaseLike & { id?: string }>
+  subPayments: Array<SubPaymentLike & { id?: string }>
+  rentalsPaid: number
+  attendance: Array<{ worker_id: string; status?: string | null }>
+  workersById: Map<string, WorkerPayLike>
+  overtime: number
+  histLabor: number
+  pendingPurchaseIds?: Set<string>
+  pendingSubIds?: Set<string>
+  today?: string
+}
+
+export interface ProjectProfitResult {
+  revenue: number
+  boxExpenses: number
+  purchasePaid: number
+  purchaseDeferred: number
+  subPaid: number
+  rentalsPaid: number
+  laborCost: number
+  overtime: number
+  histLabor: number
+  totalExpenses: number
+  netProfit: number
+}
+
+export function computeProjectProfit(inp: ProjectProfitInput): ProjectProfitResult {
+  const approvedVOs = (inp.vos || [])
+    .filter(v => v.status === 'approved' && !!v.billable)
+    .reduce((s, v) => s + Number(v.amount || 0), 0)
+  const revenue = Number(inp.contractValue || 0) + approvedVOs
+
+  const ps = splitPurchases(inp.purchases || [], inp.pendingPurchaseIds, inp.today)
+  const ss = splitSubPayments(inp.subPayments || [], inp.pendingSubIds, inp.today)
+
+  const days = new Map<string, number>()
+  for (const a of inp.attendance || []) {
+    if (a.status && a.status !== 'present') continue
+    days.set(a.worker_id, (days.get(a.worker_id) || 0) + 1)
+  }
+  let laborCost = 0
+  days.forEach((d, wid) => {
+    const w = inp.workersById.get(wid)
+    if (w && d > 0) laborCost += workerDayCost(w) * d
+  })
+
+  const boxExpenses = Number(inp.boxExpenses || 0)
+  const rentalsPaid = Number(inp.rentalsPaid || 0)
+  const overtime = Number(inp.overtime || 0)
+  const histLabor = Number(inp.histLabor || 0)
+  const totalExpenses = boxExpenses + ps.paidTotal + ss.paidTotal + rentalsPaid + laborCost + overtime + histLabor
+
+  return {
+    revenue,
+    boxExpenses,
+    purchasePaid: ps.paidTotal,
+    purchaseDeferred: ps.deferredTotal,
+    subPaid: ss.paidTotal,
+    rentalsPaid,
+    laborCost,
+    overtime,
+    histLabor,
+    totalExpenses,
+    netProfit: revenue - totalExpenses,
+  }
+}
