@@ -464,15 +464,33 @@ export default function SubcontractorDetail() {
         invoice_copy_data: '',           // إفراغ القديم
       }
       if (editPayId) {
-        // عند التعديل: نحسب فرق المبلغ لتحديث paid_amount
+        // عند التعديل: صحّح paid_amount مع مراعاة نقل الدفعة لتكليف آخر
         const oldPay = payments.find(p => p.id === editPayId)
-        const diff = Number(payForm.amount) - Number(oldPay?.amount ?? 0)
+        const oldAmount = Number(oldPay?.amount ?? 0)
+        const oldAssignId = oldPay?.assignment_id
         const { error } = await supabase.from('subcontractor_payments').update(payload).eq('id', editPayId)
         if (error) throw error
-        if (assign && diff !== 0) {
-          await supabase.from('subcontractor_assignments').update({
-            paid_amount: Number(assign.paid_amount) + diff
-          }).eq('id', payForm.assignment_id)
+        if (oldAssignId && oldAssignId !== payForm.assignment_id) {
+          // نُقلت الدفعة لتكليف مختلف: اطرح كامل المبلغ القديم من التكليف القديم، وأضف الجديد للجديد
+          const oldAssign = assignments.find(a => a.id === oldAssignId)
+          if (oldAssign) {
+            await supabase.from('subcontractor_assignments').update({
+              paid_amount: Math.max(0, Number(oldAssign.paid_amount) - oldAmount)
+            }).eq('id', oldAssignId)
+          }
+          if (assign) {
+            await supabase.from('subcontractor_assignments').update({
+              paid_amount: Number(assign.paid_amount) + Number(payForm.amount)
+            }).eq('id', payForm.assignment_id)
+          }
+        } else if (assign) {
+          // نفس التكليف: طبّق فرق المبلغ فقط
+          const diff = Number(payForm.amount) - oldAmount
+          if (diff !== 0) {
+            await supabase.from('subcontractor_assignments').update({
+              paid_amount: Number(assign.paid_amount) + diff
+            }).eq('id', payForm.assignment_id)
+          }
         }
         toast.success('تم تحديث الدفعة')
       } else {
