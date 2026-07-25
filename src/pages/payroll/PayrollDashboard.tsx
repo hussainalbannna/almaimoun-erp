@@ -232,7 +232,7 @@ export default function PayrollDashboard() {
     const newAdvance = parseFloat(e.newAdvance) || 0
     const pendingAdv = w.advances.reduce((s, a) => s + Number(a.amount), 0)
     // الأجر اليومي مصدره سجل العامل — نفس القيمة التي يستخدمها workerDayCost لتكلفة المشروع
-    const base = isLmra ? Number(w.daily_rate || 0) * e.presentDays.length : Number(w.actual_salary)
+    const base = isLmra ? (parseFloat(e.dailyRate) || Number(w.daily_rate) || 0) * e.presentDays.length : Number(w.actual_salary)
     const net = base + overtime - deduction - pendingAdv - newAdvance
     return { e, isLmra, overtime, deduction, newAdvance, pendingAdv, base, net }
   }
