@@ -532,8 +532,9 @@ export default function QuotationView() {
           .page-break { page-break-before: always; }
           .quote-page { border: 0 !important; box-shadow: none !important; padding: 0 !important; }
 
-          /* الجدول وصفوفه تتدفق طبيعياً بين الصفحات */
-          table, tr, tbody { page-break-inside: auto; }
+          /* الجدول يتدفق، لكن كل بند (رقمه + عنوانه + شرحه) يبقى متماسكاً فلا ينقسم بين صفحتين */
+          table, tbody { page-break-inside: auto; }
+          tr { page-break-inside: avoid; break-inside: avoid; }
           thead { display: table-header-group; }
 
           /* الوحدات الصغيرة تبقى متماسكة (لا تنقسم) */

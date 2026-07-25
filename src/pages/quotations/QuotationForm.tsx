@@ -177,11 +177,11 @@ export default function QuotationForm() {
         building_type: form.building_type,
         price_per_meter: parseFloat(form.price_per_meter) || 0,
         status: form.status,
-        subtotal: grandTotal,
+        subtotal: grandTotal + optSum,
         discount: 0,
         tax_rate: 0,
         tax_amount: 0,
-        total: grandTotal,
+        total: grandTotal + optSum,
         notes: form.notes,
         updated_at: new Date().toISOString(),
       }
@@ -366,7 +366,7 @@ export default function QuotationForm() {
             <div className="text-xs text-slate-400 bg-slate-50 rounded-lg p-2">السعر الإجمالي فقط يظهر في العرض (بدون سعر لكل بند). الضريبة: معفى (صفر).</div>
             <div className="border-t border-slate-200 pt-3 flex justify-between items-center">
               <span className="font-semibold text-slate-700">الإجمالي النهائي</span>
-              <span className="text-2xl font-bold" dir="ltr" style={{ color: '#c4925a' }}>{fmt(grandTotal)} <span className="text-base">د.ب</span></span>
+              <span className="text-2xl font-bold" dir="ltr" style={{ color: '#c4925a' }}>{fmt(grandTotal + optSum)} <span className="text-base">د.ب</span></span>
             </div>
           </div>
         </div>
