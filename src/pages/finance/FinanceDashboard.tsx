@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { TrendingUp, TrendingDown, PieChart, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
 import { safeSelect } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
+import { workerDayCost } from '../../lib/finance'
 
 interface Row { amount: number; date: string; category?: string; label?: string }
 
@@ -32,23 +33,38 @@ interface ReceiptRow { amount: number | null; receipt_date: string | null }
 interface CashbookRow { amount: number | null; entry_date: string | null; category: string | null }
 interface PurchaseRow { amount: number | null; created_at: string | null }
 interface SubPayRow { amount: number | null; payment_date: string | null }
+interface AttendRow { worker_id: string | null; attendance_date: string | null }
+interface WorkerRow { id: string; pay_type: string | null; daily_rate: number | null; actual_salary: number | null; basic_salary: number | null; social_allowance: number | null }
+interface OtRow { amount: number | null; created_at: string | null }
 
 interface FinanceData { income: Row[]; expenses: Row[] }
 const EMPTY_DATA: FinanceData = { income: [], expenses: [] }
 
-// جلب وبناء الإيرادات (المقبوضات) والمصروفات (الصندوق + المشتريات + الباطن) — مصدر React Query
+// جلب وبناء الإيرادات (المقبوضات) والمصروفات (الصندوق + المشتريات + الباطن + رواتب العمالة من الحضور + الأوفرتايم) — مصدر React Query
 async function fetchFinanceData(): Promise<FinanceData> {
-  const [receipts, cashbook, purchases, subPay] = await Promise.all([
+  const [receipts, cashbook, purchases, subPay, attendance, workers, overtime] = await Promise.all([
     safeSelect<ReceiptRow>('receipts', 'amount,receipt_date'),
     safeSelect<CashbookRow>('accounts_payable', 'amount,entry_date,category'),
     safeSelect<PurchaseRow>('purchase_invoices', 'amount,created_at'),
     safeSelect<SubPayRow>('subcontractor_payments', 'amount,payment_date'),
+    safeSelect<AttendRow>('worker_attendance', 'worker_id,attendance_date'),
+    safeSelect<WorkerRow>('workers', 'id,pay_type,daily_rate,actual_salary,basic_salary,social_allowance'),
+    safeSelect<OtRow>('daily_log_overtime', 'amount,created_at'),
   ])
+
+  // تكلفة يوم العمل لكل عامل (اليومي: أجر اليوم · الشهري: الراتب الكامل ÷ 26) — المصدر الموحّد finance.ts
+  const dayCostById = new Map<string, number>()
+  for (const w of workers) dayCostById.set(w.id, workerDayCost(w))
+
   const income: Row[] = receipts.map(r => ({ amount: Number(r.amount) || 0, date: r.receipt_date || '', label: 'مقبوضات' }))
   const expenses: Row[] = [
     ...cashbook.map(c => ({ amount: Number(c.amount) || 0, date: c.entry_date || '', category: c.category || 'general' })),
     ...purchases.map(p => ({ amount: Number(p.amount) || 0, date: p.created_at || '', category: 'supplier' })),
     ...subPay.map(s => ({ amount: Number(s.amount) || 0, date: s.payment_date || '', category: 'subcontractor' })),
+    // رواتب العمالة: كل يوم حضور × تكلفة يوم العامل (يشمل عمال الشركة والهيئة، ولكل الأشهر)
+    ...attendance.map(a => ({ amount: (a.worker_id ? dayCostById.get(a.worker_id) : 0) || 0, date: a.attendance_date || '', category: 'salaries' })),
+    // العمل الإضافي (الأوفرتايم) المسجّل في التقارير اليومية
+    ...overtime.map(o => ({ amount: Number(o.amount) || 0, date: (o.created_at || '').slice(0, 10), category: 'salaries' })),
   ]
   return { income, expenses }
 }
