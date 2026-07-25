@@ -277,11 +277,9 @@ export default function ProjectDetail() {
   const generateInvoice = async (milestone: ProjectMilestone) => {
     if (!project) return;
     try {
-      const { data: existing } = await supabase
-        .from('invoices')
-        .select('invoice_number');
-
-      const nextNum = 'INV-' + String((existing?.length || 0) + 1).padStart(4, '0');
+      const { data: gen, error: genErr } = await supabase.rpc('next_invoice_number', { p_prefix: 'INV' });
+      if (genErr || !gen) throw new Error('تعذّر توليد رقم الفاتورة');
+      const nextNum = String(gen);
 
       const amount = Number(milestone.amount);
 
