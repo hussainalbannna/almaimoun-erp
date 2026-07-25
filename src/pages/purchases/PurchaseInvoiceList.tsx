@@ -39,8 +39,8 @@ type InvoiceRow = PurchaseInvoice & {
 const invoiceDate = (inv: InvoiceRow): string => inv.entry_date || inv.created_at || ''
 
 // ── حساب تفصيل الضريبة لكل فاتورة (amount = المجموع الشامل) ──
-// إن كان subtotal مخزّناً نستخدمه؛ وإلا نحسب من amount والنسبة (افتراض 10% للقديمة)
-const invTaxRate = (inv: InvoiceRow): number => inv.tax_rate != null ? Number(inv.tax_rate) : 10
+// إن كان subtotal مخزّناً نستخدمه؛ وإلا نحسب من amount والنسبة (افتراض 0% عند الغياب — مطابق للنموذج)
+const invTaxRate = (inv: InvoiceRow): number => inv.tax_rate != null ? Number(inv.tax_rate) : 0
 const invTotal = (inv: InvoiceRow): number => Number(inv.amount) || 0
 const invSubtotal = (inv: InvoiceRow): number => {
   if (inv.subtotal != null && Number(inv.subtotal) > 0) return Number(inv.subtotal)

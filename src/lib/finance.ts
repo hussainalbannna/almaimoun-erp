@@ -141,7 +141,7 @@ export function splitPurchases(
   for (const inv of invoices) {
     const amt = Number(inv.amount || 0)
     const sub = Number(inv.subtotal || 0)
-    const rate = Number(inv.tax_rate ?? 10)
+    const rate = Number(inv.tax_rate ?? 0)
     taxRecoverable += sub > 0 ? amt - sub : (rate > 0 ? amt - amt / (1 + rate / 100) : 0)
     const isPending = pendingPurchaseIds && inv.id
       ? pendingPurchaseIds.has(inv.id)
