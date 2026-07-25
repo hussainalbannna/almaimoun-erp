@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
@@ -48,6 +48,8 @@ export default function InvoiceForm() {
   const [selectedCustomerId, setSelectedCustomerId] = useState(searchParams.get('customer') ?? '')
   const [selectedProjectId, setSelectedProjectId] = useState(searchParams.get('project') ?? '')
   const [selectedMilestoneId, setSelectedMilestoneId] = useState(searchParams.get('milestone') ?? '')
+  // التعبئة التلقائية مسلَّحة فقط بعد اختيار المستخدم؛ مطفأة عند تحميل فاتورة للتعديل (كي لا تُدهس بياناتها المحفوظة)
+  const autoFillArmed = useRef(!isEdit)
   const [items, setItems] = useState<ItemRow[]>([newItemRow(0)])
   const [form, setForm] = useState({
     invoice_number: '',
@@ -138,7 +140,7 @@ export default function InvoiceForm() {
 
   // تعبئة تلقائية من المشروع المختار
   useEffect(() => {
-    if (!selectedProjectId) return
+    if (!autoFillArmed.current || !selectedProjectId) return
     const p = projects.find(x => x.id === selectedProjectId)
     if (!p) return
     setForm(prev => ({
@@ -153,7 +155,7 @@ export default function InvoiceForm() {
 
   // تعبئة تلقائية من العميل المختار
   useEffect(() => {
-    if (!selectedCustomerId) return
+    if (!autoFillArmed.current || !selectedCustomerId) return
     const c = customers.find(x => x.id === selectedCustomerId)
     if (!c) return
     setForm(prev => ({
@@ -167,7 +169,7 @@ export default function InvoiceForm() {
 
   // تعبئة المبلغ تلقائياً من مرحلة الدفع
   useEffect(() => {
-    if (!selectedMilestoneId) return
+    if (!autoFillArmed.current || !selectedMilestoneId) return
     const m = milestones.find(x => x.id === selectedMilestoneId)
     if (!m) return
     setItems([{ _uid: makeUid(), description: m.name || m.description, quantity: 1, unit_price: Number(m.amount), total: Number(m.amount), sort_order: 0 }])
@@ -371,13 +373,13 @@ export default function InvoiceForm() {
             <Select
               label="المشروع"
               value={selectedProjectId}
-              onChange={e => { setSelectedProjectId(e.target.value); setSelectedMilestoneId('') }}
+              onChange={e => { autoFillArmed.current = true; setSelectedProjectId(e.target.value); setSelectedMilestoneId('') }}
               options={projectOptions}
             />
             <Select
               label="مرحلة الدفع"
               value={selectedMilestoneId}
-              onChange={e => setSelectedMilestoneId(e.target.value)}
+              onChange={e => { autoFillArmed.current = true; setSelectedMilestoneId(e.target.value) }}
               options={milestoneOptions}
             />
           </div>
@@ -398,7 +400,7 @@ export default function InvoiceForm() {
             <Select
               label="اختر عميل موجود"
               value={selectedCustomerId}
-              onChange={e => setSelectedCustomerId(e.target.value)}
+              onChange={e => { autoFillArmed.current = true; setSelectedCustomerId(e.target.value) }}
               options={customerOptions}
             />
             <Input label="اسم العميل *" value={form.customer_name} onChange={setField('customer_name')} placeholder="أو اكتب اسم العميل مباشرة" />
