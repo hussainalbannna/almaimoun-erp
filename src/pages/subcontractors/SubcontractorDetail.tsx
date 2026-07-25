@@ -387,6 +387,15 @@ export default function SubcontractorDetail() {
   const handleDeleteAssignment = async () => {
     if (!deleteAssignId) return
     try {
+      // حذف دفعات التكليف ومرفقاتها أولاً (وإلا بقيت دفعات يتيمة تُحتسب في المدفوع)
+      const { data: payRows } = await supabase.from('subcontractor_payments')
+        .select('payment_proof_path, invoice_copy_path').eq('assignment_id', deleteAssignId)
+      const payList = (payRows ?? []) as { payment_proof_path?: string; invoice_copy_path?: string }[]
+      if (payList.length) {
+        await deleteAttachment(payList.flatMap(p => [p.payment_proof_path, p.invoice_copy_path]))
+        await supabase.from('subcontractor_payments').delete().eq('assignment_id', deleteAssignId)
+      }
+
       // تنظيف مرفقات التكليف من Storage قبل حذفه
       const { data: row } = await supabase.from('subcontractor_assignments')
         .select('contract_path, work_images_paths').eq('id', deleteAssignId).maybeSingle()
@@ -535,8 +544,15 @@ export default function SubcontractorDetail() {
     } catch { toast.error('حدث خطأ في الحذف') }
   }
 
+  // المدفوع يُحتسب من جدول الدفعات نفسه (مصدر الحقيقة) لا من عمود paid_amount المشتق
+  const paidByAssignment = new Map<string, number>()
+  for (const p of payments) {
+    if (!p.assignment_id) continue
+    paidByAssignment.set(p.assignment_id, (paidByAssignment.get(p.assignment_id) ?? 0) + Number(p.amount || 0))
+  }
+
   const totalAgreed = assignments.reduce((s, a) => s + Number(a.agreed_amount), 0)
-  const totalPaid = assignments.reduce((s, a) => s + Number(a.paid_amount), 0)
+  const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0)
   const totalRemaining = totalAgreed - totalPaid
 
   if (loading) return <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
@@ -659,8 +675,9 @@ export default function SubcontractorDetail() {
           ) : (
             <div className="space-y-3">
               {assignments.map(a => {
-                const rem = Number(a.agreed_amount) - Number(a.paid_amount)
-                const pct = Number(a.agreed_amount) > 0 ? Math.round((Number(a.paid_amount) / Number(a.agreed_amount)) * 100) : 0
+                const aPaid = paidByAssignment.get(a.id) ?? 0
+                const rem = Number(a.agreed_amount) - aPaid
+                const pct = Number(a.agreed_amount) > 0 ? Math.round((aPaid / Number(a.agreed_amount)) * 100) : 0
                 return (
                   <div key={a.id} className="bg-white rounded-xl border border-slate-200 p-4">
                     <div className="flex justify-between items-start">
@@ -691,7 +708,7 @@ export default function SubcontractorDetail() {
                       <div className="text-left shrink-0">
                         <div className="text-xs text-slate-400">المتفق</div>
                         <div className="font-bold text-slate-700">{formatCurrency(Number(a.agreed_amount))}</div>
-                        <div className="text-xs text-slate-400 mt-0.5">مدفوع: {formatCurrency(Number(a.paid_amount))}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">مدفوع: {formatCurrency(aPaid)}</div>
                         <div className={`text-xs font-medium mt-0.5 ${rem > 0 ? 'text-red-600' : 'text-green-600'}`}>
                           {rem > 0 ? `متبقي: ${formatCurrency(rem)}` : '✓ مكتمل'}
                         </div>
@@ -854,7 +871,7 @@ export default function SubcontractorDetail() {
       )}
 
       {/* حوارات الحذف */}
-      <ConfirmDialog open={!!deleteAssignId} title="حذف التكليف" message="هل أنت متأكد من حذف هذا التكليف؟ سيتم حذف بياناته نهائياً." confirmLabel="حذف" danger onConfirm={handleDeleteAssignment} onCancel={() => setDeleteAssignId(null)} />
+      <ConfirmDialog open={!!deleteAssignId} title="حذف التكليف" message="هل أنت متأكد من حذف هذا التكليف؟ سيتم حذف بياناته وكل دفعاته المرتبطة نهائياً." confirmLabel="حذف" danger onConfirm={handleDeleteAssignment} onCancel={() => setDeleteAssignId(null)} />
       <ConfirmDialog open={!!deletePayId} title="حذف الدفعة" message="هل أنت متأكد من حذف هذه الدفعة؟ سيُخصم مبلغها من إجمالي المدفوع." confirmLabel="حذف" danger onConfirm={handleDeletePayment} onCancel={() => setDeletePayId(null)} />
     </div>
   )
