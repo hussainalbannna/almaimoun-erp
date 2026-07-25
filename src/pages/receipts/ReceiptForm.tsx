@@ -159,10 +159,11 @@ export default function ReceiptForm() {
       let newStatus: string
       if (newRemaining <= 0) {
         newStatus = 'paid'
-      } else if (selectedInvoice.total_receipts + Number(form.amount) > 0) {
-        newStatus = 'sent' // partially paid - keep as 'sent' since there's no 'partial' status
       } else {
-        newStatus = selectedInvoice.status
+        // دفعة جزئية: لا نُلغي تأخّر الفاتورة — تبقى 'overdue' إن كانت متأخرة أو حلّ موعدها
+        const today = new Date().toISOString().slice(0, 10)
+        const isOverdue = selectedInvoice.status === 'overdue' || (!!selectedInvoice.due_date && selectedInvoice.due_date < today)
+        newStatus = isOverdue ? 'overdue' : 'sent'
       }
       await supabase.from('invoices').update({ status: newStatus }).eq('id', form.invoice_id)
 
