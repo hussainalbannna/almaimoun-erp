@@ -33,6 +33,7 @@ type PayrollWorker = Worker & {
   overtime: number
   deduction: number
   presentDays: number[]      // أيام الحضور المحفوظة لهذا الشهر
+  monthDailyRate: number | null // أجر اليوم المحفوظ لهذا الشهر (من payroll_adjustments) — مستقل عن الأجر الحالي
 }
 
 // حالة تحرير الحقول لكل عامل في الجدول (نصّية لدعم الإدخال الجزئي)
@@ -105,6 +106,7 @@ async function fetchPayrollData(monthIndex: number, year: number): Promise<Payro
       overtime: adj ? Number(adj.overtime) : 0,
       deduction: adj ? Number(adj.deduction) : 0,
       presentDays: adj && Array.isArray(adj.present_days) ? adj.present_days.map(Number) : [],
+      monthDailyRate: adj && adj.daily_rate != null ? Number(adj.daily_rate) : null,
     }
   })
 }
@@ -155,8 +157,8 @@ export default function PayrollDashboard() {
     const next: Record<string, RowEdit> = {}
     for (const w of workers) {
       next[w.id] = {
-        // الأجر اليومي مصدره سجل العامل نفسه (workers.daily_rate) — لا الشهر
-        dailyRate: w.worker_type === 'lmra' ? String(Number(w.daily_rate) || '') : '',
+        // الأجر اليومي: أجر هذا الشهر المحفوظ إن وُجد، وإلا الأجر الحالي من سجل العامل (كافتراضي لشهر جديد)
+        dailyRate: w.worker_type === 'lmra' ? String((w.monthDailyRate ?? Number(w.daily_rate)) || '') : '',
         presentDays: w.presentDays,
         overtime: String(w.overtime || 0),
         deduction: String(w.deduction || 0),
@@ -266,18 +268,21 @@ export default function PayrollDashboard() {
     const payload: Record<string, unknown> = {
       worker_id: w.id, month: month + 1, year, overtime, deduction, updated_at: new Date().toISOString(),
     }
+    const rate = parseFloat(e.dailyRate) || 0
     if (isLmra) {
       payload.present_days = e.presentDays
+      payload.daily_rate = rate // أجر هذا الشهر يُخزَّن مع صف الشهر — لا يتأثر بتغيير الأجر لاحقًا
     } else {
       payload.manual_salary = null
     }
     setSavingId(w.id)
     try {
-      // الأجر اليومي مصدر واحد على سجل العامل — يستفيد منه الراتب وتكلفة المشروع معًا
-      if (isLmra) {
+      // نحدّث "الأجر الحالي" على سجل العامل فقط عند حفظ الشهر الجاري (كي لا يغيّر تعديل شهر ماضٍ الأجر الحالي وتكلفة المشاريع)
+      const isCurrentMonth = month === new Date().getMonth() && year === new Date().getFullYear()
+      if (isLmra && isCurrentMonth) {
         const { error: rateError } = await supabase
           .from('workers')
-          .update({ daily_rate: parseFloat(e.dailyRate) || 0 })
+          .update({ daily_rate: rate })
           .eq('id', w.id)
         if (rateError) throw rateError
       }
