@@ -13,6 +13,7 @@ import type {
 import { formatCurrency, formatDate } from '../../lib/utils';
 import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage';
 import { compressImage, openStoredFile } from '../../lib/ai';
+import { fetchCheques, computePendingChequeSets, splitPurchases, splitSubPayments } from '../../lib/finance';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import { toast } from 'react-hot-toast';
@@ -128,8 +129,8 @@ export default function ProjectDetail() {
         // مستندات المشروع — بلا file_url (قد يحمل base64 ثقيلاً)؛ يُجلب محتواه عند الفتح فقط
         supabase.from('documents').select('id, name, doc_type, file_type').eq('related_id', id).eq('related_type', 'project').order('created_at', { ascending: false }),
         supabase.from('accounts_payable').select('amount').eq('project_id', id),
-        supabase.from('purchase_invoices').select('amount, payment_method, check_due_date').eq('project_id', id),
-        supabase.from('subcontractor_payments').select('amount, payment_method, check_due_date').eq('project_id', id),
+        supabase.from('purchase_invoices').select('id, amount, payment_method, check_due_date').eq('project_id', id),
+        supabase.from('subcontractor_payments').select('id, amount, payment_method, check_due_date').eq('project_id', id),
         supabase.from('rentals').select('id').eq('project_id', id),
         supabase.from('worker_attendance').select('worker_id, status').eq('project_id', id),
         supabase.from('project_labor_entries').select('*').eq('project_id', id).order('cost_date', { ascending: false }),
@@ -160,7 +161,7 @@ export default function ProjectDetail() {
       const workerIds = Array.from(daysByWorker.keys());
 
       // ── الموجة الثانية: الاستعلامات المعتمدة على الأولى — بالتوازي أيضاً ──
-      const [custDocs, rentalPayData, workersData] = await Promise.all([
+      const [custDocs, rentalPayData, workersData, cheques] = await Promise.all([
         (async () => {
           if (!clientId) return [] as DocRow[];
           const { data } = await supabase.from('documents')
@@ -185,7 +186,10 @@ export default function ProjectDetail() {
             .in('id', workerIds);
           return (data ?? []) as WorkerRow[];
         })(),
+        // الشيكات تُجلب مرة واحدة — مصدر الحقيقة لفصل المعلّق عن المصروف
+        fetchCheques(),
       ]);
+      const pending = computePendingChequeSets(cheques);
 
       // دمج مستندات المشروع + العميل
       const custDocList: ProjectDoc[] = custDocs.map(d => ({ ...d, source: 'customer' }));
@@ -196,31 +200,13 @@ export default function ProjectDetail() {
       setBoxExpenses(totalBox);
 
       // 2. فواتير الموردين — نفصل المدفوع فعلاً عن الشيكات الآجلة
-      let paid = 0, deferred = 0;
-      const t = today();
-      for (const pi of ((piRes.data ?? []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>)) {
-        const amt = Number(pi.amount || 0);
-        // شيك آجل لم يحل موعده بعد = لم يُصرف فعلياً → لا يُحسب مصروفاً
-        if (pi.payment_method === 'deferred_cheque' && pi.check_due_date && pi.check_due_date > t) {
-          deferred += amt;
-        } else {
-          paid += amt;
-        }
-      }
-      setPurchasePaid(paid);
-      setPurchaseDeferred(deferred);
+      const ps = splitPurchases((piRes.data ?? []), pending.purchaseIds);
+      setPurchasePaid(ps.paidTotal);
+      setPurchaseDeferred(ps.deferredTotal);
 
       // 3. مقاولو الباطن — المدفوع فعلاً فقط (من جدول المدفوعات، باستثناء الشيكات الآجلة)
-      let subPaid = 0;
-      for (const sp of ((subPayRes.data ?? []) as Array<{ amount: number; payment_method: string; check_due_date: string | null }>)) {
-        const amt = Number(sp.amount || 0);
-        if (sp.payment_method === 'cheque' && sp.check_due_date && sp.check_due_date > t) {
-          // شيك مقاول باطن آجل لم يُصرف → لا يُحسب
-          continue;
-        }
-        subPaid += amt;
-      }
-      setSubcontractorPaidSum(subPaid);
+      const ss = splitSubPayments((subPayRes.data ?? []), pending.subPaymentIds);
+      setSubcontractorPaidSum(ss.paidTotal);
 
       // 4. الإيجارات المرتبطة بالمشروع — الدفعات الفعلية المدفوعة (رؤية السيولة)
       const rentalsPaid = rentalPayData.reduce((sum, p) => sum + Number(p.amount || 0), 0);
