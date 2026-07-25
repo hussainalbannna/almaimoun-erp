@@ -48,7 +48,9 @@ const EMPTY_STATS: Stats = {
 async function fetchDashboardStats(): Promise<Stats> {
   const now = new Date()
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10)
+  // آخر يوم في الشهر كرقم ثم نصّ محلّي — toISOString يحوّل لـ UTC فينزاح ليوم أسبق شرق غرينتش
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const monthEnd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
 
   const safe = async <T,>(p: PromiseLike<{ data: T[] | null }>): Promise<{ data: T[] | null }> => {
     try { return await p } catch { return { data: [] } }
