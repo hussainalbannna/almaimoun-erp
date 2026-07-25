@@ -83,6 +83,23 @@ export default function QuotationForm() {
       const loadQuote = async () => {
         const { data: q } = await supabase.from('quotations').select('*').eq('id', id).single()
         if (q) {
+          // البنود الاختيارية تُجلب أولًا لطرح مجموعها من الإجمالي (نُخزّن الأساس فقط) — منعًا لمضاعفتها عند الحفظ
+          const { data: its } = await supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order')
+          const newOpt = { excavation: { enabled: false, price: 0 }, gypsum: { enabled: false, price: 0 }, painting: { enabled: false, price: 0 }, insulation: { enabled: false, price: 0 } }
+          let optSumLoaded = 0
+          if (its && its.length) {
+            its.filter(it => it.category === 'optional').forEach(it => {
+              const d = (it.description || '') + ' ' + (it.description_en || '').toLowerCase()
+              let k: keyof typeof newOpt = 'excavation'
+              if (d.includes('جبس') || d.includes('gypsum')) k = 'gypsum'
+              else if (d.includes('صباغة') || d.includes('دهان') || d.includes('painting')) k = 'painting'
+              else if (d.includes('عزل') || d.includes('waterproof') || d.includes('insulation') || d.includes('thermal')) k = 'insulation'
+              const price = Number(it.unit_price) || 0
+              newOpt[k] = { enabled: true, price }
+              optSumLoaded += price
+            })
+          }
+          const baseTotal = (Number(q.total) || 0) - optSumLoaded
           setForm(f => ({
             ...f,
             quote_number: q.quote_number ?? '',
@@ -99,22 +116,10 @@ export default function QuotationForm() {
             building_type: (q.building_type as 'post_tension' | 'precast') ?? 'precast',
             price_per_meter: q.price_per_meter ? String(q.price_per_meter) : '',
             status: q.status ?? 'draft',
-            grand_total: q.total ? String(q.total) : '',
+            grand_total: baseTotal > 0 ? String(baseTotal) : '',
             notes: q.notes ?? '',
           }))
-          const { data: its } = await supabase.from('quotation_items').select('*').eq('quotation_id', id).order('sort_order')
-          if (its && its.length) {
-            const newOpt = { excavation: { enabled: false, price: 0 }, gypsum: { enabled: false, price: 0 }, painting: { enabled: false, price: 0 }, insulation: { enabled: false, price: 0 } }
-            its.filter(it => it.category === 'optional').forEach(it => {
-              const d = (it.description || '') + ' ' + (it.description_en || '').toLowerCase()
-              let k: keyof typeof newOpt = 'excavation'
-              if (d.includes('جبس') || d.includes('gypsum')) k = 'gypsum'
-              else if (d.includes('صباغة') || d.includes('دهان') || d.includes('painting')) k = 'painting'
-              else if (d.includes('عزل') || d.includes('waterproof') || d.includes('insulation') || d.includes('thermal')) k = 'insulation'
-              newOpt[k] = { enabled: true, price: Number(it.unit_price) || 0 }
-            })
-            setOptionals(newOpt)
-          }
+          setOptionals(newOpt)
         }
       }
       loadQuote()
