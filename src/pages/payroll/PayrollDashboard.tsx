@@ -44,11 +44,12 @@ interface RowEdit {
 const EMPTY_WORKERS: PayrollWorker[] = []
 const EMPTY_EDIT: RowEdit = { manualSalary: '', overtime: '0', deduction: '0', newAdvance: '' }
 
-// تحقّق أن تاريخ 'YYYY-MM-DD' يقع ضمن شهر/سنة محددين (month هنا 1..12)
-function isInPeriod(dateStr: string | null, month: number, year: number): boolean {
+// السلفة معلّقة ضمن الفترة إن كان تاريخها في الشهر المحدّد أو أي شهر سابق
+// (تُرحَّل السلف غير المخصومة حتى تُخصم فعليًا — month هنا 1..12)
+function isOutstandingByPeriod(dateStr: string | null, month: number, year: number): boolean {
   if (!dateStr) return false
   const [y, m] = dateStr.split('-').map(Number)
-  return m === month && y === year
+  return y < year || (y === year && m <= month)
 }
 
 // تاريخ السلفة: اليوم إن كان الشهر المعروض هو الشهر الحالي، وإلا منتصف الشهر المختار
@@ -96,7 +97,7 @@ async function fetchPayrollData(monthIndex: number, year: number): Promise<Payro
     const adj = adjustments.find(a => a.worker_id === w.id)
     return {
       ...w,
-      advances: advances.filter(a => a.worker_id === w.id && isInPeriod(a.advance_date, month, year)),
+      advances: advances.filter(a => a.worker_id === w.id && isOutstandingByPeriod(a.advance_date, month, year)),
       overtime: adj ? Number(adj.overtime) : 0,
       deduction: adj ? Number(adj.deduction) : 0,
       manualSalary: adj && adj.manual_salary != null ? Number(adj.manual_salary) : null,
