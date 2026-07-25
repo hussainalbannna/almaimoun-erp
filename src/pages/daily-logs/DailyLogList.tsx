@@ -409,16 +409,17 @@ export default function DailyLogList() {
 
   // جلب صور تقرير واحد عند الحاجة (مع تخزينها مؤقتاً لتفادي إعادة الجلب)
   // تُرجع روابط عرض محلولة (رابط موقّع من Storage أو base64 قديم)، وتحتفظ بالقيم الخام للحفظ
-  const fetchLogPhotos = async (logId: string): Promise<string[]> => {
-    const cached = photosCache[logId]
-    if (cached) return cached
+  const fetchLogPhotos = async (logId: string): Promise<{ raw: string[]; resolved: string[] }> => {
+    const cachedResolved = photosCache[logId]
+    const cachedRaw = rawPhotosCache[logId]
+    if (cachedResolved && cachedRaw) return { raw: cachedRaw, resolved: cachedResolved }
     const { data: row } = await supabase.from('daily_logs').select('photos').eq('id', logId).maybeSingle()
     const raw = ((row as { photos?: string[] } | null)?.photos ?? [])
     // حلّ كل قيمة لرابط عرض (المسارات → روابط موقّعة، base64 يبقى كما هو)
     const resolved = (await Promise.all(raw.map(v => resolveAttachmentUrl(v)))).filter((u): u is string => !!u)
     setRawPhotosCache(prev => ({ ...prev, [logId]: raw }))
     setPhotosCache(prev => ({ ...prev, [logId]: resolved }))
-    return resolved
+    return { raw, resolved }
   }
 
   const resetForm = () => {
@@ -439,8 +440,8 @@ export default function DailyLogList() {
 
   const openEdit = async (log: LightLog) => {
     // جلب الصور الحالية للتقرير لعرضها في النموذج (غير محمّلة في القائمة)
-    const photos = await fetchLogPhotos(log.id)          // روابط محلولة للعرض
-    const photoPaths = rawPhotosCache[log.id] ?? photos  // المسارات الخام للحفظ (بعد الجلب أعلاه)
+    // المسارات الخام تُؤخذ مباشرة من نتيجة الجلب (لا من الحالة، تفاديًا لحفظ روابط موقّتة تنتهي صلاحيتها)
+    const { raw: photoPaths, resolved: photos } = await fetchLogPhotos(log.id)
     setForm({
       project_id: log.project_id,
       log_date: log.log_date,
@@ -766,10 +767,10 @@ export default function DailyLogList() {
 
   // بناء تقرير طباعة كامل (يجلب أسماء العمال + الصور + الأوفرتايم عند الحاجة)
   const buildFullPrintLog = async (log: LightLog): Promise<PrintLog> => {
-    const [worker_names, photos, overtime] = await Promise.all([
+    const [worker_names, photoData, overtime] = await Promise.all([
       resolveWorkerNames(log.id), fetchLogPhotos(log.id), resolveOvertime(log.id),
     ])
-    return { ...log, worker_names, photos, overtime }
+    return { ...log, worker_names, photos: photoData.resolved, overtime }
   }
 
   const handlePreviewSingle = async (log: LightLog) => {
