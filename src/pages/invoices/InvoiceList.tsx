@@ -95,9 +95,24 @@ export default function InvoiceList() {
 
   const handleDelete = async () => {
     if (!deleteId) return
+    // اجلب مرحلة الفاتورة وإيصالاتها قبل الحذف
+    const { data: inv } = await supabase.from('invoices').select('milestone_id').eq('id', deleteId).maybeSingle()
+    const milestoneId = (inv as { milestone_id: string | null } | null)?.milestone_id ?? null
+    const { data: recs } = await supabase.from('receipts').select('id, amount').eq('invoice_id', deleteId)
+    const recList = (recs ?? []) as { id: string; amount: number }[]
+    if (recList.length) {
+      const paid = recList.reduce((s, r) => s + Number(r.amount || 0), 0)
+      if (!window.confirm(`لهذه الفاتورة ${recList.length} إيصال بمجموع ${paid.toFixed(3)} د.ب — سيُحذفون معها. هل تريد المتابعة؟`)) return
+      const { error: recErr } = await supabase.from('receipts').delete().eq('invoice_id', deleteId)
+      if (recErr) { toast.error('تعذّر حذف الإيصالات المرتبطة'); return }
+    }
     await supabase.from('invoice_items').delete().eq('invoice_id', deleteId)
     const { error } = await supabase.from('invoices').delete().eq('id', deleteId)
     if (error) { toast.error('حدث خطأ أثناء الحذف'); return }
+    // أعِد المرحلة المرتبطة إلى "مكتمل" لتُفوتَر من جديد
+    if (milestoneId) {
+      await supabase.from('project_milestones').update({ status: 'completed', invoice_id: null }).eq('id', milestoneId)
+    }
     toast.success('تم حذف الفاتورة')
     setDeleteId(null)
     reload()

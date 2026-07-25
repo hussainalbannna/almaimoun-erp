@@ -25,10 +25,31 @@ export default function ReceiptList() {
 
   const handleDelete = async () => {
     if (!deleteId) return
-    await supabase.from('receipts').delete().eq('id', deleteId)
+    // اجلب فاتورة الإيصال قبل الحذف لإعادة احتساب حالتها
+    const { data: rec } = await supabase.from('receipts').select('invoice_id').eq('id', deleteId).maybeSingle()
+    const invoiceId = (rec as { invoice_id: string | null } | null)?.invoice_id ?? null
+    const { error } = await supabase.from('receipts').delete().eq('id', deleteId)
+    if (error) { toast.error('تعذّر حذف الإيصال'); return }
+    // إعادة احتساب حالة الفاتورة والمرحلة بعد إزالة الإيصال
+    if (invoiceId) {
+      const { data: inv } = await supabase.from('invoices').select('total, due_date, milestone_id').eq('id', invoiceId).maybeSingle()
+      const invRow = inv as { total: number; due_date: string | null; milestone_id: string | null } | null
+      if (invRow) {
+        const { data: rem } = await supabase.from('receipts').select('amount').eq('invoice_id', invoiceId)
+        const paid = ((rem ?? []) as { amount: number }[]).reduce((s, r) => s + Number(r.amount || 0), 0)
+        const total = Number(invRow.total || 0)
+        const today = new Date().toISOString().slice(0, 10)
+        const newStatus = paid >= total && total > 0
+          ? 'paid'
+          : (invRow.due_date && invRow.due_date < today ? 'overdue' : 'sent')
+        await supabase.from('invoices').update({ status: newStatus }).eq('id', invoiceId)
+        if (invRow.milestone_id) {
+          await supabase.from('project_milestones').update({ status: newStatus === 'paid' ? 'paid' : 'invoiced' }).eq('id', invRow.milestone_id)
+        }
+      }
+    }
     toast.success('تم حذف الإيصال')
     setDeleteId(null)
-    // حذف الإيصال يغيّر متبقّي الفاتورة → تحديث القائمتين
     queryClient.invalidateQueries({ queryKey: ['receipts-list'] })
     queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
   }
