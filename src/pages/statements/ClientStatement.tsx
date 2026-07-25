@@ -58,7 +58,13 @@ export default function ClientStatement() {
   const { customer, invoices, receipts, projects } = data
 
   // بناء كشف الحساب (يُعاد فقط عند تغيّر البيانات أو الفترة)
-  const statement = useMemo<StatementLine[]>(() => {
+  // الرصيد الافتتاحي = صافي كل الحركات قبل تاريخ "من" حتى لا يضيع عند الترشيح
+  const { statement, openingBalance } = useMemo<{ statement: StatementLine[]; openingBalance: number }>(() => {
+    let opening = 0
+    if (dateFrom) {
+      invoices.forEach(inv => { if (inv.issue_date < dateFrom) opening += Number(inv.total) })
+      receipts.forEach(rec => { if (rec.receipt_date < dateFrom) opening -= Number(rec.amount) })
+    }
     const lines: StatementLine[] = []
     invoices.forEach(inv => {
       if (dateFrom && inv.issue_date < dateFrom) return
@@ -80,13 +86,17 @@ export default function ClientStatement() {
       })
     })
     lines.sort((a, b) => a.date.localeCompare(b.date))
-    let running = 0
+    let running = opening
     lines.forEach(l => { running += l.debit - l.credit; l.balance = running })
-    return lines
+    return { statement: lines, openingBalance: opening }
   }, [invoices, receipts, projects, dateFrom, dateTo])
 
-  const totalDebit = statement.reduce((s, l) => s + l.debit, 0)
-  const totalCredit = statement.reduce((s, l) => s + l.credit, 0)
+  // مجاميع الفترة (للتذييل) والمجاميع الكلية للحساب (للبطاقات والرسائل)
+  const periodDebit = statement.reduce((s, l) => s + l.debit, 0)
+  const periodCredit = statement.reduce((s, l) => s + l.credit, 0)
+  const closingBalance = openingBalance + periodDebit - periodCredit
+  const totalDebit = useMemo(() => invoices.reduce((s, i) => s + Number(i.total), 0), [invoices])
+  const totalCredit = useMemo(() => receipts.reduce((s, r) => s + Number(r.amount), 0), [receipts])
   const balance = totalDebit - totalCredit
 
   const overdueInvoices = useMemo(() => invoices.filter(inv =>
@@ -199,7 +209,19 @@ export default function ClientStatement() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
-            {statement.length === 0 ? (
+            {openingBalance !== 0 && (
+              <tr className="bg-amber-50/40">
+                <td className="px-4 py-3 text-slate-600">{formatDate(dateFrom)}</td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-400">—</td>
+                <td className="px-4 py-3 font-semibold text-slate-700">رصيد افتتاحي (ما قبل الفترة)</td>
+                <td className="px-4 py-3 text-slate-400">—</td>
+                <td className="px-4 py-3 text-slate-400">—</td>
+                <td className={`px-4 py-3 font-bold ${openingBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {formatCurrency(Math.abs(openingBalance))}
+                </td>
+              </tr>
+            )}
+            {statement.length === 0 && openingBalance === 0 ? (
               <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">لا توجد حركات</td></tr>
             ) : (
               statement.map((line, i) => (
@@ -220,11 +242,11 @@ export default function ClientStatement() {
           </tbody>
           <tfoot className="bg-slate-50 border-t-2 border-slate-200">
             <tr>
-              <td colSpan={3} className="px-4 py-3 font-bold text-slate-800">الإجمالي</td>
-              <td className="px-4 py-3 font-bold text-red-600">{formatCurrency(totalDebit)}</td>
-              <td className="px-4 py-3 font-bold text-green-600">{formatCurrency(totalCredit)}</td>
-              <td className={`px-4 py-3 font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {formatCurrency(Math.abs(balance))} {balance > 0 ? '(مستحق)' : '(صافي)'}
+              <td colSpan={3} className="px-4 py-3 font-bold text-slate-800">إجمالي الفترة</td>
+              <td className="px-4 py-3 font-bold text-red-600">{formatCurrency(periodDebit)}</td>
+              <td className="px-4 py-3 font-bold text-green-600">{formatCurrency(periodCredit)}</td>
+              <td className={`px-4 py-3 font-bold ${closingBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {formatCurrency(Math.abs(closingBalance))} {closingBalance > 0 ? '(مستحق)' : '(صافي)'}
               </td>
             </tr>
           </tfoot>
