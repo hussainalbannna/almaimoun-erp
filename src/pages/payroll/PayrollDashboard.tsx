@@ -27,49 +27,24 @@ interface PayrollAdjustment {
   notes: string
 }
 
-// صف عامل مؤقت في تبويب الهيئة (المصدر: جدول payroll_lmra_extra) — بلا ملف عامل ولا سلف
-interface LmraExtra {
-  id: string
-  name: string
-  month: number
-  year: number
-  daily_rate: number
-  present_days: number[] | null
-  overtime: number
-  deduction: number
-}
-
 // عامل مع تعديلات الشهر المحدّد وسلفه المعلّقة ضمن ذلك الشهر
 type PayrollWorker = Worker & {
   advances: WorkerAdvance[] // سلف معلّقة (غير مخصومة) تقع ضمن الشهر المحدّد
   overtime: number
   deduction: number
-  dailyRate: number | null   // من payroll_adjustments — لعمال الهيئة فقط
   presentDays: number[]      // أيام الحضور المحفوظة لهذا الشهر
 }
 
 // حالة تحرير الحقول لكل عامل في الجدول (نصّية لدعم الإدخال الجزئي)
 interface RowEdit {
-  dailyRate: string     // أجر اليوم لهذا الشهر (يُستخدم فقط لعمال الهيئة)
+  dailyRate: string     // أجر اليوم على سجل العامل (يُستخدم فقط لعمال الهيئة)
   presentDays: number[] // أيام الحضور المحدّدة بالنقر في الشبكة
   overtime: string
   deduction: string
   newAdvance: string   // سلفة جديدة تُضاف لهذا الشهر (تُسجَّل في worker_advances)
 }
 
-// صف عامل مؤقت أثناء التحرير (id = null قبل أول حفظ)
-interface ExtraRow {
-  key: string
-  id: string | null
-  name: string
-  dailyRate: string
-  presentDays: number[]
-  overtime: string
-  deduction: string
-}
-
 const EMPTY_WORKERS: PayrollWorker[] = []
-const EMPTY_EXTRA: LmraExtra[] = []
 const EMPTY_EDIT: RowEdit = { dailyRate: '', presentDays: [], overtime: '0', deduction: '0', newAdvance: '' }
 
 // السلفة معلّقة ضمن الفترة إن كان تاريخها في الشهر المحدّد أو أي شهر سابق
@@ -129,21 +104,9 @@ async function fetchPayrollData(monthIndex: number, year: number): Promise<Payro
       advances: advances.filter(a => a.worker_id === w.id && isOutstandingByPeriod(a.advance_date, month, year)),
       overtime: adj ? Number(adj.overtime) : 0,
       deduction: adj ? Number(adj.deduction) : 0,
-      dailyRate: adj && adj.daily_rate != null ? Number(adj.daily_rate) : null,
       presentDays: adj && Array.isArray(adj.present_days) ? adj.present_days.map(Number) : [],
     }
   })
-}
-
-// عمال تبويب الهيئة المؤقتون للشهر المحدّد (جدول مستقل — لا ملفات عمال ولا سلف)
-async function fetchLmraExtra(monthIndex: number, year: number): Promise<LmraExtra[]> {
-  const { data } = await supabase
-    .from('payroll_lmra_extra')
-    .select('id, name, month, year, daily_rate, present_days, overtime, deduction')
-    .eq('month', monthIndex + 1)
-    .eq('year', year)
-    .order('created_at')
-  return (data ?? []) as LmraExtra[]
 }
 
 export default function PayrollDashboard() {
@@ -160,9 +123,7 @@ export default function PayrollDashboard() {
   const [month, setMonth] = useState(today.getMonth())
   const [year, setYear] = useState(today.getFullYear())
 
-  // صفوف العمال المؤقتين (تُزامَن من الخادم مع الحفاظ على المسودات غير المحفوظة)
-  const [extraRows, setExtraRows] = useState<ExtraRow[]>([])
-  const [draftSeq, setDraftSeq] = useState(0)
+  const [addingTemp, setAddingTemp] = useState(false)
 
   const isLmraTab = branch === 'lmra'
 
@@ -172,11 +133,6 @@ export default function PayrollDashboard() {
   const { data: workers = EMPTY_WORKERS, isLoading } = useQuery({
     queryKey: ['payroll-data', month, year],
     queryFn: () => fetchPayrollData(month, year),
-  })
-
-  const { data: extraData = EMPTY_EXTRA } = useQuery({
-    queryKey: ['lmra-extra', month, year],
-    queryFn: () => fetchLmraExtra(month, year),
   })
 
   // عمال الشركة الشهريون حسب الفرع (المسار الأصلي — بلا أي تغيير في سلوكه)
@@ -199,7 +155,8 @@ export default function PayrollDashboard() {
     const next: Record<string, RowEdit> = {}
     for (const w of workers) {
       next[w.id] = {
-        dailyRate: w.dailyRate != null ? String(w.dailyRate) : '',
+        // الأجر اليومي مصدره سجل العامل نفسه (workers.daily_rate) — لا الشهر
+        dailyRate: w.worker_type === 'lmra' ? String(Number(w.daily_rate) || '') : '',
         presentDays: w.presentDays,
         overtime: String(w.overtime || 0),
         deduction: String(w.deduction || 0),
@@ -208,22 +165,6 @@ export default function PayrollDashboard() {
     }
     setEdits(next)
   }, [workers])
-
-  // مزامنة صفوف المؤقتين من الخادم مع إبقاء المسودات التي لم تُحفظ بعد
-  useEffect(() => {
-    setExtraRows(prev => [
-      ...extraData.map(r => ({
-        key: r.id,
-        id: r.id,
-        name: r.name ?? '',
-        dailyRate: r.daily_rate != null ? String(r.daily_rate) : '',
-        presentDays: Array.isArray(r.present_days) ? r.present_days.map(Number) : [],
-        overtime: String(r.overtime || 0),
-        deduction: String(r.deduction || 0),
-      })),
-      ...prev.filter(r => r.id === null),
-    ])
-  }, [extraData])
 
   const setEdit = (id: string, field: 'dailyRate' | 'overtime' | 'deduction' | 'newAdvance', value: string) =>
     setEdits(prev => ({ ...prev, [id]: { ...(prev[id] ?? EMPTY_EDIT), [field]: value } }))
@@ -237,20 +178,48 @@ export default function PayrollDashboard() {
       return { ...prev, [workerId]: { ...cur, presentDays } }
     })
 
-  const setExtraField = (key: string, field: 'name' | 'dailyRate' | 'overtime' | 'deduction', value: string) =>
-    setExtraRows(prev => prev.map(r => (r.key === key ? { ...r, [field]: value } : r)))
+  // إضافة عامل مؤقت = إنشاء سجل عامل حقيقي خفيف (يظهر في التقارير اليومية ويُربط بالمشاريع)
+  const addTemporaryWorker = async () => {
+    const name = window.prompt('اسم العامل المؤقت:')?.trim()
+    if (!name) return
+    const rateInput = window.prompt('الأجر اليومي (اختياري):')?.trim()
+    const daily_rate = rateInput ? (parseFloat(rateInput) || 0) : 0
+    setAddingTemp(true)
+    try {
+      const { error } = await supabase.from('workers').insert({
+        name,
+        name_en: name,
+        worker_type: 'lmra',
+        pay_type: 'daily',
+        daily_rate,
+        status: 'active',
+        is_temporary: true,
+        branch: null,
+      })
+      if (error) throw error
+      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
+      toast.success(`تمت إضافة ${name}`)
+    } catch (err) {
+      toast.error('تعذّرت الإضافة: ' + ((err as Error)?.message ?? ''))
+    } finally {
+      setAddingTemp(false)
+    }
+  }
 
-  const toggleExtraDay = (key: string, day: number) =>
-    setExtraRows(prev => prev.map(r => {
-      if (r.key !== key) return r
-      const has = r.presentDays.includes(day)
-      return { ...r, presentDays: has ? r.presentDays.filter(d => d !== day) : [...r.presentDays, day].sort((a, b) => a - b) }
-    }))
-
-  const addExtraRow = () => {
-    const key = `draft-${draftSeq}`
-    setDraftSeq(n => n + 1)
-    setExtraRows(prev => [...prev, { key, id: null, name: '', dailyRate: '', presentDays: [], overtime: '0', deduction: '0' }])
+  // أرشفة عامل هيئة: ينتقل إلى "سابق" فيختفي من القوائم النشطة مع بقاء سجله وتاريخه
+  const archiveWorker = async (w: PayrollWorker) => {
+    if (!window.confirm(`أرشفة ${w.name_en || w.name}؟ سينتقل إلى العمال السابقين ويختفي من كشف الرواتب.`)) return
+    setSavingId(w.id)
+    try {
+      const { error } = await supabase.from('workers').update({ status: 'former' }).eq('id', w.id)
+      if (error) throw error
+      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
+      toast.success('تمت الأرشفة')
+    } catch (err) {
+      toast.error('تعذّرت الأرشفة: ' + ((err as Error)?.message ?? ''))
+    } finally {
+      setSavingId(null)
+    }
   }
 
   // القيم الحيّة لعامل واحد (تشمل ما يكتبه المستخدم قبل الحفظ) — مصدر واحد للحساب والعرض
@@ -262,29 +231,11 @@ export default function PayrollDashboard() {
     const deduction = parseFloat(e.deduction) || 0
     const newAdvance = parseFloat(e.newAdvance) || 0
     const pendingAdv = w.advances.reduce((s, a) => s + Number(a.amount), 0)
-    const base = isLmra ? (parseFloat(e.dailyRate) || 0) * e.presentDays.length : Number(w.actual_salary)
+    // الأجر اليومي مصدره سجل العامل — نفس القيمة التي يستخدمها workerDayCost لتكلفة المشروع
+    const base = isLmra ? Number(w.daily_rate || 0) * e.presentDays.length : Number(w.actual_salary)
     const net = base + overtime - deduction - pendingAdv - newAdvance
     return { e, isLmra, overtime, deduction, newAdvance, pendingAdv, base, net }
   }
-
-  // القيم الحيّة لصف عامل مؤقت (بلا سلف)
-  const liveExtra = (r: ExtraRow) => {
-    const rate = parseFloat(r.dailyRate) || 0
-    const overtime = parseFloat(r.overtime) || 0
-    const deduction = parseFloat(r.deduction) || 0
-    const base = rate * r.presentDays.length
-    return { rate, overtime, deduction, base, net: base + overtime - deduction }
-  }
-
-  // إجماليات العمال المؤقتين (تدخل في المجموع الكلي والتصدير)
-  const extraTotals = useMemo(() => {
-    const t = { base: 0, overtime: 0, deduction: 0, net: 0 }
-    for (const r of extraRows) {
-      const { base, overtime, deduction, net } = liveExtra(r)
-      t.base += base; t.overtime += overtime; t.deduction += deduction; t.net += net
-    }
-    return t
-  }, [extraRows])
 
   // الإجماليات الحيّة للمجموعة النشطة (تعتمد على قيم التحرير الحالية)
   const totals = useMemo(() => {
@@ -308,21 +259,29 @@ export default function PayrollDashboard() {
 
   const branchTag = isLmraTab ? 'LMRA' : (branch === 'all' ? 'AllBranches' : 'Branch' + branch)
 
-  // حفظ صف عامل: upsert لتعديلات الشهر (ساعات إضافية/خصم + الراتب اليدوي للهيئة) + تسجيل سلفة جديدة إن وُجدت
+  // حفظ صف عامل: upsert لتعديلات الشهر (ساعات إضافية/خصم + أيام حضور الهيئة) + تسجيل سلفة جديدة إن وُجدت
   const saveRow = async (w: PayrollWorker) => {
     const { e, overtime, deduction, newAdvance, isLmra } = liveRow(w)
-    // عامل الهيئة: يُحفظ الأجر اليومي وأيام الحضور · عامل الشركة: المسار الأصلي بلا تغيير
+    // عامل الهيئة: أيام الحضور شهرية · عامل الشركة: المسار الأصلي بلا تغيير
     const payload: Record<string, unknown> = {
       worker_id: w.id, month: month + 1, year, overtime, deduction, updated_at: new Date().toISOString(),
     }
     if (isLmra) {
-      payload.daily_rate = parseFloat(e.dailyRate) || 0
       payload.present_days = e.presentDays
     } else {
       payload.manual_salary = null
     }
     setSavingId(w.id)
     try {
+      // الأجر اليومي مصدر واحد على سجل العامل — يستفيد منه الراتب وتكلفة المشروع معًا
+      if (isLmra) {
+        const { error: rateError } = await supabase
+          .from('workers')
+          .update({ daily_rate: parseFloat(e.dailyRate) || 0 })
+          .eq('id', w.id)
+        if (rateError) throw rateError
+      }
+
       const { error: adjError } = await supabase
         .from('payroll_adjustments')
         .upsert(payload, { onConflict: 'worker_id,month,year' })
@@ -345,44 +304,6 @@ export default function PayrollDashboard() {
       toast.error('تعذّر الحفظ: ' + ((err as Error)?.message ?? ''))
     } finally {
       setSavingId(null)
-    }
-  }
-
-  // حفظ صف عامل مؤقت (upsert في payroll_lmra_extra) — لا سلف لهؤلاء
-  const saveExtra = async (r: ExtraRow) => {
-    if (!r.name.trim()) { toast.error('أدخل اسم العامل المؤقت'); return }
-    const { rate, overtime, deduction } = liveExtra(r)
-    setSavingId(r.key)
-    try {
-      const payload: Record<string, unknown> = {
-        name: r.name.trim(), month: month + 1, year,
-        daily_rate: rate, present_days: r.presentDays, overtime, deduction,
-        updated_at: new Date().toISOString(),
-      }
-      if (r.id) payload.id = r.id
-      const { data, error } = await supabase.from('payroll_lmra_extra').upsert(payload).select('id').single()
-      if (error) throw error
-      // ترقية المسودة إلى صف محفوظ حتى لا تتكرّر عند إعادة الجلب
-      if (!r.id && data?.id) setExtraRows(prev => prev.map(x => (x.key === r.key ? { ...x, id: data.id, key: data.id } : x)))
-      await queryClient.invalidateQueries({ queryKey: ['lmra-extra', month, year] })
-      toast.success(`تم حفظ ${r.name.trim()}`)
-    } catch (err) {
-      toast.error('تعذّر الحفظ: ' + ((err as Error)?.message ?? ''))
-    } finally {
-      setSavingId(null)
-    }
-  }
-
-  const deleteExtra = async (r: ExtraRow) => {
-    if (r.id && !window.confirm(`حذف العامل المؤقت ${r.name || ''}؟`)) return
-    if (r.id) {
-      const { error } = await supabase.from('payroll_lmra_extra').delete().eq('id', r.id)
-      if (error) { toast.error('تعذّر الحذف: ' + error.message); return }
-    }
-    setExtraRows(prev => prev.filter(x => x.key !== r.key))
-    if (r.id) {
-      await queryClient.invalidateQueries({ queryKey: ['lmra-extra', month, year] })
-      toast.success('تم الحذف')
     }
   }
 
@@ -435,13 +356,13 @@ export default function PayrollDashboard() {
 
   // تصدير 3: شبكة حضور عمال الهيئة (timesheet شهري — عمود لكل يوم، ثم المجموع والصافي)
   const exportLmra = () => {
-    if (lmraWorkers.length === 0 && extraRows.length === 0) { toast.error('لا يوجد عمال هيئة للتصدير'); return }
+    if (lmraWorkers.length === 0) { toast.error('لا يوجد عمال هيئة للتصدير'); return }
     const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
     const rows: (string | number)[][] = [
       ['اسم العامل', 'الأجر اليومي', ...days, 'المجموع', 'ساعات إضافية', 'خصم', 'الصافي'],
       ...lmraWorkers.map(w => {
         const { e, overtime, deduction, base, net } = liveRow(w)
-        const rate = parseFloat(e.dailyRate) || 0
+        const rate = Number(w.daily_rate || 0)
         return [
           w.name_en || w.name,
           rate.toFixed(3),
@@ -452,26 +373,14 @@ export default function PayrollDashboard() {
           net.toFixed(3),
         ]
       }),
-      ...extraRows.map(r => {
-        const { rate, overtime, deduction, base, net } = liveExtra(r)
-        return [
-          r.name || 'عامل مؤقت',
-          rate.toFixed(3),
-          ...days.map(d => (r.presentDays.includes(d) ? rate.toFixed(3) : 0)),
-          base.toFixed(3),
-          overtime.toFixed(3),
-          deduction.toFixed(3),
-          net.toFixed(3),
-        ]
-      }),
       [
         'المجموع الكلي',
         '',
         ...days.map(() => ''),
-        (totals.base + extraTotals.base).toFixed(3),
-        (totals.overtime + extraTotals.overtime).toFixed(3),
-        (totals.deduction + extraTotals.deduction).toFixed(3),
-        (totals.net + extraTotals.net).toFixed(3),
+        totals.base.toFixed(3),
+        totals.overtime.toFixed(3),
+        totals.deduction.toFixed(3),
+        totals.net.toFixed(3),
       ],
     ]
     downloadCsv(rows, `LMRA_Timesheet_${MONTHS[month]}_${year}.csv`)
@@ -550,7 +459,7 @@ export default function PayrollDashboard() {
       {/* Note */}
       {isLmraTab ? (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-5 text-xs text-blue-800">
-          عمال <strong>الهيئة</strong> ليسوا على حماية الأجور. أدخل <strong>الأجر اليومي</strong> لكل عامل، ثم انقر أيام حضوره في الشبكة (تبدأ فارغة — لا أيام مفترضة). المجموع = الأجر اليومي × عدد أيام الحضور. أضف الساعات الإضافية والخصم والسلفة ثم احفظ صفّه. يمكنك أيضًا إضافة <strong>عمال مؤقتين</strong> بلا ملف عامل، ويدخلون في المجموع الكلي والتصدير.
+          عمال <strong>الهيئة</strong> ليسوا على حماية الأجور. أدخل <strong>الأجر اليومي</strong> لكل عامل، ثم انقر أيام حضوره في الشبكة (تبدأ فارغة — لا أيام مفترضة). المجموع = الأجر اليومي × عدد أيام الحضور. أضف الساعات الإضافية والخصم والسلفة ثم احفظ صفّه. زر <strong>إضافة عامل مؤقت</strong> يُنشئ سجل عامل حقيقي (هيئة/يومي) فيظهر في التقارير اليومية وتُربط تكلفته بالمشاريع. وعند انتهاء عمله استخدم <strong>أرشفة</strong>.
         </div>
       ) : (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5 text-xs text-amber-800">
@@ -562,9 +471,9 @@ export default function PayrollDashboard() {
       <div className="grid grid-cols-3 gap-4 mb-6">
         {[
           isLmraTab
-            ? { label: 'إجمالي رواتب الهيئة', value: formatCurrency(totals.base + extraTotals.base), color: '#7b4a2d', sub: `${activeWorkers.length} مسجّل + ${extraRows.length} مؤقت` }
+            ? { label: 'إجمالي رواتب الهيئة', value: formatCurrency(totals.base), color: '#7b4a2d', sub: `${activeWorkers.length} عامل` }
             : { label: 'إجمالي حماية الأجور (WPS)', value: formatCurrency(totals.wps), color: '#7b4a2d', sub: `${activeWorkers.length} موظف` },
-          { label: 'إجمالي الصافي المستحق', value: formatCurrency(isLmraTab ? totals.net + extraTotals.net : totals.net), color: '#2563eb', sub: `تم الصرف: ${paidCount} / ${activeWorkers.length}` },
+          { label: 'إجمالي الصافي المستحق', value: formatCurrency(totals.net), color: '#2563eb', sub: `تم الصرف: ${paidCount} / ${activeWorkers.length}` },
           { label: 'السلف المعلقة', value: formatCurrency(totals.advances), color: '#dc2626', sub: `زيادة: ${totals.overtime.toFixed(3)} — خصم: ${totals.deduction.toFixed(3)}` },
         ].map(kpi => (
           <div key={kpi.label} className="bg-white rounded-xl border border-slate-200 p-4">
@@ -659,6 +568,8 @@ export default function PayrollDashboard() {
                         <div className="flex flex-col items-center gap-1">
                           <Button size="sm" variant="secondary" icon={<Save size={14} />}
                             loading={savingId === w.id} onClick={() => saveRow(w)}>حفظ</Button>
+                          <button type="button" onClick={() => archiveWorker(w)}
+                            className="text-xs text-slate-500 hover:text-red-600 hover:underline">أرشفة</button>
                           {paid && (
                             <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">تم الصرف</span>
                           )}
@@ -669,86 +580,29 @@ export default function PayrollDashboard() {
                 })}
                 {lmraWorkers.length === 0 && (
                   <tr>
-                    <td colSpan={daysInMonth + 8} className="px-4 py-4 text-center text-slate-400">لا يوجد عمال هيئة مسجّلون</td>
+                    <td colSpan={daysInMonth + 8} className="px-4 py-4 text-center text-slate-400">لا يوجد عمال هيئة</td>
                   </tr>
                 )}
-              </tbody>
-
-              {/* عمال مؤقتون (بلا ملف عامل ولا سلف) */}
-              <tbody className="divide-y divide-slate-50 border-t-2 border-slate-200">
+                {/* إضافة عامل مؤقت = سجل عامل حقيقي يظهر فورًا في الشبكة أعلاه */}
                 <tr className="bg-amber-50/40">
                   <td colSpan={daysInMonth + 8} className="px-3 py-2">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-semibold text-amber-800">عمال مؤقتون</span>
-                      <button type="button" onClick={addExtraRow}
-                        className="text-xs font-semibold text-amber-800 border border-amber-300 bg-white rounded-lg px-2.5 py-1 hover:bg-amber-100">
-                        ＋ إضافة عامل مؤقت
-                      </button>
-                    </div>
+                    <button type="button" onClick={addTemporaryWorker} disabled={addingTemp}
+                      className="text-xs font-semibold text-amber-800 border border-amber-300 bg-white rounded-lg px-2.5 py-1 hover:bg-amber-100 disabled:opacity-50">
+                      {addingTemp ? 'جارٍ الإضافة...' : '＋ إضافة عامل مؤقت'}
+                    </button>
                   </td>
                 </tr>
-                {extraRows.map(r => {
-                  const { rate, base, net } = liveExtra(r)
-                  return (
-                    <tr key={r.key} className="hover:bg-slate-50/50">
-                      <td className="px-3 py-2 sticky right-0 z-10 bg-white">
-                        <input type="text" placeholder="اسم العامل" value={r.name}
-                          onChange={ev => setExtraField(r.key, 'name', ev.target.value)}
-                          className="w-32 border border-slate-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
-                        <div className="text-xs text-slate-400 mt-0.5">{r.presentDays.length} يوم حضور</div>
-                      </td>
-                      <td className="px-2 py-2 text-center">
-                        <input type="number" step="0.001" dir="ltr" placeholder="الأجر" value={r.dailyRate}
-                          onChange={ev => setExtraField(r.key, 'dailyRate', ev.target.value)}
-                          className={rateCellClass} />
-                      </td>
-                      {dayNumbers.map(d => {
-                        const on = r.presentDays.includes(d)
-                        return (
-                          <td key={d} className="p-0.5 text-center">
-                            <button type="button" onClick={() => toggleExtraDay(r.key, d)}
-                              title={`يوم ${d}`}
-                              className={dayCellClass(on)}>
-                              {on ? (rate > 0 ? rate.toFixed(1) : '✓') : ''}
-                            </button>
-                          </td>
-                        )
-                      })}
-                      <td className="px-3 py-2 text-center font-bold text-blue-700">{base.toFixed(3)}</td>
-                      <td className="px-2 py-2 text-center">
-                        <input type="number" step="0.001" dir="ltr" value={r.overtime}
-                          onChange={ev => setExtraField(r.key, 'overtime', ev.target.value)}
-                          className={numCellClass} />
-                      </td>
-                      <td className="px-2 py-2 text-center">
-                        <input type="number" step="0.001" dir="ltr" value={r.deduction}
-                          onChange={ev => setExtraField(r.key, 'deduction', ev.target.value)}
-                          className={numCellClass} />
-                      </td>
-                      <td className="px-2 py-2 text-center text-slate-300">—</td>
-                      <td className={`px-3 py-2 font-bold ${net < 0 ? 'text-red-600' : 'text-slate-800'}`}>{net.toFixed(3)}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-col items-center gap-1">
-                          <Button size="sm" variant="secondary" icon={<Save size={14} />}
-                            loading={savingId === r.key} onClick={() => saveExtra(r)}>حفظ</Button>
-                          <button type="button" onClick={() => deleteExtra(r)}
-                            className="text-xs text-red-600 hover:underline">حذف</button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
               </tbody>
 
               <tfoot className="bg-slate-50 border-t-2 border-slate-300 font-bold">
                 <tr>
                   <td className="px-3 py-2.5 sticky right-0 bg-slate-50 z-10" colSpan={2}>المجموع الكلي</td>
                   <td colSpan={daysInMonth}></td>
-                  <td className="px-3 py-2.5 text-center text-blue-700">{(totals.base + extraTotals.base).toFixed(3)}</td>
-                  <td className="px-2 py-2.5 text-center text-green-700">{(totals.overtime + extraTotals.overtime).toFixed(3)}</td>
-                  <td className="px-2 py-2.5 text-center text-red-600">{(totals.deduction + extraTotals.deduction).toFixed(3)}</td>
+                  <td className="px-3 py-2.5 text-center text-blue-700">{totals.base.toFixed(3)}</td>
+                  <td className="px-2 py-2.5 text-center text-green-700">{totals.overtime.toFixed(3)}</td>
+                  <td className="px-2 py-2.5 text-center text-red-600">{totals.deduction.toFixed(3)}</td>
                   <td className="px-2 py-2.5 text-center text-red-600">{totals.advances.toFixed(3)}</td>
-                  <td className="px-3 py-2.5">{(totals.net + extraTotals.net).toFixed(3)}</td>
+                  <td className="px-3 py-2.5">{totals.net.toFixed(3)}</td>
                   <td></td>
                 </tr>
               </tfoot>

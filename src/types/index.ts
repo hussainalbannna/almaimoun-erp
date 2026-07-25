@@ -332,6 +332,7 @@ export interface Worker {
   worker_type: WorkerType
   pay_type: PayType
   branch: string
+  is_temporary: boolean // عامل هيئة مؤقت أُنشئ سريعًا من كشف الرواتب (سجل عامل حقيقي خفيف)
   basic_salary: number
   social_allowance: number
   actual_salary: number

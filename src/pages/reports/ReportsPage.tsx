@@ -42,22 +42,20 @@ const EMPTY_REPORTS: ReportsData = {
 
 // جلب بيانات التقارير السنوية وحسابها (مصدر React Query — الحسابات منقولة حرفياً)
 async function fetchReportsData(year: number): Promise<ReportsData> {
-  const [projRes, milRes, expRes, wRes, laborRes, adjRes, extraRes] = await Promise.all([
+  const [projRes, milRes, expRes, wRes, laborRes, adjRes] = await Promise.all([
     supabase.from('projects').select('id, project_name, contract_value, status'),
     supabase.from('project_milestones').select('project_id, amount, status'),
     supabase.from('accounts_payable').select('amount, entry_date, category').gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`),
-    supabase.from('workers').select('id, worker_type, actual_salary').eq('status', 'active'),
+    supabase.from('workers').select('id, worker_type, actual_salary, daily_rate').eq('status', 'active'),
     supabase.from('project_labor_entries').select('amount, cost_date').gte('cost_date', `${year}-01-01`).lte('cost_date', `${year}-12-31`),
-    supabase.from('payroll_adjustments').select('worker_id, month, overtime, daily_rate, present_days').eq('year', year),
-    supabase.from('payroll_lmra_extra').select('month, daily_rate, present_days, overtime').eq('year', year),
+    supabase.from('payroll_adjustments').select('worker_id, month, overtime, present_days').eq('year', year),
   ])
 
   const ps = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
   const ms = (milRes.data ?? []) as { project_id: string; amount: number; status: string }[]
   const exps = (expRes.data ?? []) as { amount: number; entry_date: string; category: string }[]
-  const ws = (wRes.data ?? []) as { id: string; worker_type: string; actual_salary: number }[]
-  const adjs = (adjRes.data ?? []) as { worker_id: string; month: number; overtime: number; daily_rate: number | null; present_days: number[] | null }[]
-  const lmraExtra = (extraRes.data ?? []) as { month: number; daily_rate: number; present_days: number[] | null; overtime: number }[]
+  const ws = (wRes.data ?? []) as { id: string; worker_type: string; actual_salary: number; daily_rate: number }[]
+  const adjs = (adjRes.data ?? []) as { worker_id: string; month: number; overtime: number; present_days: number[] | null }[]
   // العمالة التاريخية/اليدوية للمشاريع القديمة تُدرَج ضمن مصروفات السنة حسب cost_date
   const hist = (laborRes.data ?? []) as { amount: number; cost_date: string }[]
   const histLabor = hist.reduce((s, h) => s + Number(h.amount), 0)
@@ -66,15 +64,9 @@ async function fetchReportsData(year: number): Promise<ReportsData> {
   const totalInv = ms.filter(m => ['invoiced', 'paid'].includes(m.status)).reduce((s, m) => s + Number(m.amount), 0)
   const totalExp = exps.reduce((s, e) => s + Number(e.amount), 0) + histLabor
   // رواتب السنة من الجداول المُعدّة شهريًا (كشف الرواتب): لكل شهر مضى، مجموع (الأساس + الإضافي) لكل عامل
-  //   عامل الشركة = actual_salary الثابت · عامل الهيئة = الأجر اليومي × عدد أيام الحضور المسجّلة لذلك الشهر
-  const adjMap = new Map<string, { overtime: number; daily_rate: number | null; present_days: number[] | null }>()
+  //   عامل الشركة = actual_salary الثابت · عامل الهيئة = أجره اليومي (من سجله) × عدد أيام الحضور المسجّلة لذلك الشهر
+  const adjMap = new Map<string, { overtime: number; present_days: number[] | null }>()
   for (const a of adjs) adjMap.set(`${a.worker_id}-${a.month}`, a)
-  // العمال المؤقتون في تبويب الهيئة — مجاميعهم تُضاف لشهرها (لا ملفات عمال لهم)
-  const extraByMonth = new Array(12).fill(0)
-  for (const x of lmraExtra) {
-    const days = Array.isArray(x.present_days) ? x.present_days.length : 0
-    if (x.month >= 1 && x.month <= 12) extraByMonth[x.month - 1] += Number(x.daily_rate || 0) * days + Number(x.overtime || 0)
-  }
   const now = new Date()
   const lastMonth = year < now.getFullYear() ? 12 : (year === now.getFullYear() ? now.getMonth() + 1 : 0)
   const mPay = new Array(12).fill(0)
@@ -83,11 +75,11 @@ async function fetchReportsData(year: number): Promise<ReportsData> {
     for (const w of ws) {
       const adj = adjMap.get(`${w.id}-${m}`)
       const base = w.worker_type === 'lmra'
-        ? Number(adj?.daily_rate ?? 0) * (Array.isArray(adj?.present_days) ? adj.present_days.length : 0)
+        ? Number(w.daily_rate || 0) * (Array.isArray(adj?.present_days) ? adj.present_days.length : 0)
         : Number(w.actual_salary || 0)
       monthTotal += base + Number(adj?.overtime ?? 0)
     }
-    mPay[m - 1] = monthTotal + extraByMonth[m - 1]
+    mPay[m - 1] = monthTotal
   }
   const annualPayroll = mPay.reduce((s, v) => s + v, 0)
 
