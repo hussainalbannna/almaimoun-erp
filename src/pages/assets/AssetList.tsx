@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2,
-  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X,
+  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
@@ -29,6 +29,10 @@ interface Asset {
   registration_expiry: string | null
   notes: string
   cover_image_path: string | null
+  custodian: string | null
+  inspection_expiry: string | null
+  warranty_expiry: string | null
+  current_project_id: string | null
   payment_method: string
   bank_name: string
   finance_amount: number
@@ -113,6 +117,7 @@ const emptyForm = {
   name: '', asset_type: 'heavy_equipment', plate_number: '', serial_number: '',
   purchase_date: '', purchase_value: '', current_location: '', status: 'available',
   insurance_expiry: '', registration_expiry: '', notes: '',
+  custodian: '', inspection_expiry: '', warranty_expiry: '', current_project_id: '',
   payment_method: 'cash', bank_name: '', finance_amount: '', down_payment: '',
   monthly_installment: '', total_installments: '', paid_installments: '', next_installment_date: '',
 }
@@ -127,6 +132,12 @@ async function fetchDocCounts(): Promise<Record<string, number>> {
   const m: Record<string, number> = {}
   for (const r of (data ?? []) as { related_id: string }[]) m[r.related_id] = (m[r.related_id] ?? 0) + 1
   return m
+}
+
+// المشاريع النشطة (لربط الأصل بمشروع حالي)
+async function fetchActiveProjects(): Promise<{ id: string; project_name: string }[]> {
+  const { data } = await supabase.from('projects').select('id, project_name').eq('status', 'active').order('project_name')
+  return (data ?? []) as { id: string; project_name: string }[]
 }
 
 const fileToData = async (f: File): Promise<string> => (f.type.startsWith('image/') ? compressImage(f) : fileToDataUrl(f))
@@ -156,6 +167,9 @@ export default function AssetList() {
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
+  const { data: projects = [] } = useQuery({ queryKey: ['assets-projects'], queryFn: fetchActiveProjects })
+  const projectOptions = useMemo(() => [{ value: '', label: '— بدون مشروع —' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))], [projects])
+  const projectName = (id: string | null) => projects.find(p => p.id === id)?.project_name ?? ''
   const reload = () => {
     queryClient.invalidateQueries({ queryKey: ['assets'] })
     queryClient.invalidateQueries({ queryKey: ['asset-doc-counts'] })
@@ -199,6 +213,7 @@ export default function AssetList() {
       serial_number: a.serial_number ?? '', purchase_date: a.purchase_date ?? '', purchase_value: a.purchase_value ? String(a.purchase_value) : '',
       current_location: a.current_location ?? '', status: a.status ?? 'available',
       insurance_expiry: a.insurance_expiry ?? '', registration_expiry: a.registration_expiry ?? '', notes: a.notes ?? '',
+      custodian: a.custodian ?? '', inspection_expiry: a.inspection_expiry ?? '', warranty_expiry: a.warranty_expiry ?? '', current_project_id: a.current_project_id ?? '',
       payment_method: a.payment_method ?? 'cash', bank_name: a.bank_name ?? '',
       finance_amount: a.finance_amount ? String(a.finance_amount) : '', down_payment: a.down_payment ? String(a.down_payment) : '',
       monthly_installment: a.monthly_installment ? String(a.monthly_installment) : '', total_installments: a.total_installments ? String(a.total_installments) : '',
@@ -221,10 +236,14 @@ export default function AssetList() {
       const payload = {
         name: form.name, asset_type: form.asset_type, plate_number: form.plate_number, serial_number: form.serial_number,
         current_location: form.current_location, status: form.status, notes: form.notes,
+        custodian: form.custodian || null,
+        current_project_id: form.current_project_id || null,
         purchase_value: Number(form.purchase_value) || 0,
         purchase_date: form.purchase_date || null,
         insurance_expiry: form.insurance_expiry || null,
         registration_expiry: form.registration_expiry || null,
+        inspection_expiry: form.inspection_expiry || null,
+        warranty_expiry: form.warranty_expiry || null,
         payment_method: form.payment_method,
         bank_name: form.payment_method === 'installment' ? form.bank_name : '',
         finance_amount: form.payment_method === 'installment' ? (Number(form.finance_amount) || 0) : 0,
@@ -486,6 +505,12 @@ export default function AssetList() {
           </div>
           <div className="grid grid-cols-3 gap-3">
             <Input label="انتهاء التسجيل / الاستمارة" type="date" value={form.registration_expiry} onChange={e => setForm(f => ({ ...f, registration_expiry: e.target.value }))} />
+            <Input label="انتهاء الفحص الدوري" type="date" value={form.inspection_expiry} onChange={e => setForm(f => ({ ...f, inspection_expiry: e.target.value }))} />
+            <Input label="انتهاء الضمان" type="date" value={form.warranty_expiry} onChange={e => setForm(f => ({ ...f, warranty_expiry: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Input placeholder="مسؤول العهدة (من بحوزته الأصل)" value={form.custodian} onChange={e => setForm(f => ({ ...f, custodian: e.target.value }))} />
+            <Select label="المشروع الحالي" options={projectOptions} value={form.current_project_id} onChange={e => setForm(f => ({ ...f, current_project_id: e.target.value }))} />
           </div>
 
           <div className="border-t border-slate-100 pt-4">
@@ -783,6 +808,12 @@ export default function AssetList() {
 
                   {asset.insurance_expiry && !isInstAsset && (
                     <div className="text-xs text-slate-400 mt-1">التأمين: {formatDate(asset.insurance_expiry)}</div>
+                  )}
+                  {asset.custodian && (
+                    <div className="text-xs text-slate-500 mt-1 flex items-center gap-1"><User size={11} /> {asset.custodian}</div>
+                  )}
+                  {projectName(asset.current_project_id) && (
+                    <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1"><Building2 size={11} /> {projectName(asset.current_project_id)}</div>
                   )}
                 </div>
               </div>
