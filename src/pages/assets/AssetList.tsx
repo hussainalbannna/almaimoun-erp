@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
+import { QRCodeSVG } from 'qrcode.react'
 import {
   Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2,
-  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench, Fuel, Disc,
+  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench, Fuel, Disc, QrCode,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
@@ -330,6 +332,9 @@ export default function AssetList() {
   const [coverPath, setCoverPath] = useState<string | null>(null)
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const [showQr, setShowQr] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const deepLinkedRef = useRef(false)
 
   // ── المصاريف المرتبطة بالأصل ──
   const [expenses, setExpenses] = useState<AssetExpense[]>([])
@@ -1114,6 +1119,21 @@ export default function AssetList() {
       setPayingId(null)
     }
   }
+
+  useEffect(() => {
+    if (deepLinkedRef.current) return
+    const target = searchParams.get('asset')
+    if (!target || assets.length === 0) return
+    const asset = assets.find(a => a.id === target)
+    if (asset) {
+      deepLinkedRef.current = true
+      openEdit(asset)
+      const next = new URLSearchParams(searchParams)
+      next.delete('asset')
+      setSearchParams(next, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets, searchParams])
 
   const filtered = useMemo(() =>
     assets.filter(a =>
@@ -1988,11 +2008,42 @@ export default function AssetList() {
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
             <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setDisposal(null); setShowDisposeForm(false); setParts([]); setShowPartForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
             {editId && (
+              <button type="button" onClick={() => setShowQr(true)}
+                className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-amber-700 px-3 py-2 rounded-lg hover:bg-amber-50 border border-slate-200">
+                <QrCode size={15} /> ملصق QR
+              </button>
+            )}
+            {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
                 <Trash2 size={15} /> حذف الأصل
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {showQr && editId && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowQr(false)}>
+          <style>{`@media print { body * { visibility: hidden !important; } #asset-qr-print, #asset-qr-print * { visibility: visible !important; } #asset-qr-print { position: absolute; top: 0; right: 0; left: 0; } .no-print { display: none !important; } }`}</style>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-xs" onClick={e => e.stopPropagation()} dir="rtl">
+            <div className="flex items-center justify-between p-3 border-b border-slate-100 no-print">
+              <span className="text-sm font-bold text-slate-800">ملصق الأصل</span>
+              <div className="flex items-center gap-1">
+                <Button variant="secondary" onClick={() => window.print()}>طباعة</Button>
+                <button onClick={() => setShowQr(false)} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"><X size={16} /></button>
+              </div>
+            </div>
+            <div id="asset-qr-print" className="p-6 flex flex-col items-center text-center gap-2">
+              <div className="border-2 border-slate-800 rounded-xl p-4 flex flex-col items-center gap-2">
+                <div className="text-base font-bold text-slate-900">{form.name || 'أصل'}</div>
+                {form.plate_number && <div className="text-sm text-slate-600" dir="ltr">{form.plate_number}</div>}
+                <QRCodeSVG value={`${window.location.origin}/assets?asset=${editId}`} size={180} level="M" includeMargin />
+                {form.serial_number && <div className="text-xs text-slate-500" dir="ltr">S/N: {form.serial_number}</div>}
+                <div className="text-[10px] text-slate-400">شركة الميمون للمقاولات</div>
+              </div>
+              <p className="text-xs text-slate-400 no-print">امسح الرمز بكاميرا الهاتف لفتح صفحة هذا الأصل مباشرة.</p>
+            </div>
           </div>
         </div>
       )}
