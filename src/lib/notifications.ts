@@ -64,7 +64,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     try { const { data } = await p; return data ?? [] } catch { return [] }
   }
 
-  const [workers, assets, invoices, cheques, tasks, quotes] = await Promise.all([
+  const [workers, assets, invoices, cheques, tasks, quotes, maintenance] = await Promise.all([
     safe(supabase.from('workers').select('id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status')),
     safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,inspection_expiry,warranty_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
     safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
@@ -72,6 +72,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     safe(supabase.from('cheques').select('id,party_name,amount,due_date,status,cheque_type,direction')),
     safe(supabase.from('tasks').select('id,title,due_date,status')),
     safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status,total')),
+    safe(supabase.from('asset_maintenance').select('id,asset_id,service_date,next_service_date')),
   ])
 
   const subtitleDays = (d: number, verb: { past: string; today: string; future: string }) =>
@@ -145,6 +146,32 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
         }
       }
     }
+  }
+
+  // صيانة الأصول القادمة — تنبيه واحد لكل أصل (من أحدث سجل صيانة له)
+  const assetNameMap = new Map((assets as Record<string, unknown>[]).map(a => [a.id as string, (a.name as string) || 'أصل']))
+  const latestMaint = new Map<string, { service_date: string; next: string }>()
+  for (const m of maintenance as Record<string, unknown>[]) {
+    const next = m.next_service_date as string | null
+    if (!next) continue
+    const sd = (m.service_date as string) || ''
+    const cur = latestMaint.get(m.asset_id as string)
+    if (!cur || sd > cur.service_date) latestMaint.set(m.asset_id as string, { service_date: sd, next })
+  }
+  for (const [assetId, rec] of latestMaint) {
+    const d = daysUntil(rec.next)
+    if (d === null || d > MAX_DOCUMENT) continue
+    const { level, urgent } = classify(d, 'document')
+    alerts.push({
+      id: `maint-${assetId}`,
+      kind: 'asset_doc',
+      level, urgent,
+      title: `صيانة ${assetNameMap.get(assetId) ?? 'أصل'}`,
+      subtitle: subtitleDays(d, { past: 'تأخرت منذ', today: 'مستحقة اليوم', future: 'بعد' }),
+      date: rec.next,
+      daysLeft: d,
+      link: '/assets',
+    })
   }
 
   // ═══ الشيكات — من جدول cheques (المصدر الرسمي للحالة) ═══

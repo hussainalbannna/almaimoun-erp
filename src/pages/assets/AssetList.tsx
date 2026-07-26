@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2,
-  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User,
+  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
@@ -127,6 +127,29 @@ const addMonths = (dateStr: string, delta: number): string => {
   return `${y}-${m}-${day}`
 }
 
+const MAINT_TYPES = [
+  { value: 'routine', label: 'صيانة دورية' },
+  { value: 'repair', label: 'إصلاح عطل' },
+  { value: 'oil', label: 'تغيير زيت' },
+  { value: 'tires', label: 'إطارات' },
+  { value: 'inspection', label: 'فحص' },
+  { value: 'other', label: 'أخرى' },
+]
+const MAINT_TYPE_LABEL: Record<string, string> = Object.fromEntries(MAINT_TYPES.map(t => [t.value, t.label]))
+
+interface AssetMaintenance {
+  id: string
+  service_date: string | null
+  service_type: string | null
+  description: string | null
+  cost: number
+  vendor: string | null
+  odometer: number | null
+  next_service_date: string | null
+  expense_id: string | null
+}
+const newMaintForm = () => ({ service_date: new Date().toISOString().slice(0, 10), service_type: 'routine', description: '', cost: '', vendor: '', odometer: '', next_service_date: '' })
+
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -190,6 +213,10 @@ export default function AssetList() {
   const [deleting, setDeleting] = useState(false)
   const [installments, setInstallments] = useState<AssetInstallment[]>([])
   const [instBusy, setInstBusy] = useState(false)
+  const [maintenance, setMaintenance] = useState<AssetMaintenance[]>([])
+  const [showMaintForm, setShowMaintForm] = useState(false)
+  const [maintBusy, setMaintBusy] = useState(false)
+  const [maintForm, setMaintForm] = useState(newMaintForm())
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -239,7 +266,14 @@ export default function AssetList() {
     setInstallments((data ?? []) as AssetInstallment[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  const loadMaintenance = async (assetId: string) => {
+    const { data } = await supabase.from('asset_maintenance')
+      .select('id, service_date, service_type, description, cost, vendor, odometer, next_service_date, expense_id')
+      .eq('asset_id', assetId).order('service_date', { ascending: false })
+    setMaintenance((data ?? []) as AssetMaintenance[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -258,11 +292,15 @@ export default function AssetList() {
     setDocs([])
     setExpenses([])
     setInstallments([])
+    setMaintenance([])
+    setShowMaintForm(false)
+    setMaintForm(newMaintForm())
     setShowExpForm(false)
     setExpForm(newExpForm())
     loadDocs(a.id)
     loadExpenses(a.id)
     loadInstallments(a.id)
+    loadMaintenance(a.id)
     setShowForm(true)
   }
 
@@ -299,7 +337,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setShowExpForm(false); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -415,6 +453,55 @@ export default function AssetList() {
     if (error) { toast.error('تعذّر الحذف'); return }
     toast.success('تم حذف المصروف')
     if (editId) await loadExpenses(editId)
+  }
+
+  const addMaintenance = async () => {
+    if (!editId) return
+    if (!maintForm.service_date) { toast.error('أدخل تاريخ الصيانة'); return }
+    setMaintBusy(true)
+    try {
+      const cost = Number(maintForm.cost) || 0
+      let expenseId: string | null = null
+      if (cost > 0) {
+        const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
+          asset_id: editId,
+          project_id: null,
+          entry_date: maintForm.service_date,
+          amount: cost,
+          category: 'equipment',
+          expense_type: 'maintenance',
+          payment_method: 'cash',
+          description: `صيانة — ${MAINT_TYPE_LABEL[maintForm.service_type] || ''}${maintForm.vendor ? ' / ' + maintForm.vendor : ''}`,
+        }).select('id').single()
+        if (expErr) { toast.error('تعذّر قيد تكلفة الصيانة'); return }
+        expenseId = (exp as { id: string }).id
+      }
+      const { error } = await supabase.from('asset_maintenance').insert({
+        asset_id: editId,
+        service_date: maintForm.service_date,
+        service_type: maintForm.service_type,
+        description: maintForm.description || null,
+        cost,
+        vendor: maintForm.vendor || null,
+        odometer: maintForm.odometer ? Number(maintForm.odometer) : null,
+        next_service_date: maintForm.next_service_date || null,
+        expense_id: expenseId,
+      })
+      if (error) throw error
+      toast.success('تم تسجيل الصيانة')
+      setMaintForm(newMaintForm()); setShowMaintForm(false)
+      await loadMaintenance(editId); await loadExpenses(editId)
+    } catch (e) { toast.error('تعذّر التسجيل: ' + ((e as Error)?.message ?? '')) }
+    finally { setMaintBusy(false) }
+  }
+
+  const deleteMaintenance = async (rec: AssetMaintenance) => {
+    try {
+      if (rec.expense_id) await supabase.from('accounts_payable').delete().eq('id', rec.expense_id)
+      await supabase.from('asset_maintenance').delete().eq('id', rec.id)
+      toast.success('تم حذف سجل الصيانة')
+      if (editId) { await loadMaintenance(editId); await loadExpenses(editId) }
+    } catch { toast.error('تعذّر الحذف') }
   }
 
   // حذف الأصل: يحذف مستنداته ومرفقاتها من التخزين. مصاريفه في accounts_payable تبقى سجلاً مالياً (asset_id=null تلقائياً)
@@ -812,6 +899,90 @@ export default function AssetList() {
           </div>
 
           <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Wrench size={16} className="text-amber-600" />
+                <span className="text-sm font-semibold text-slate-700">سجل الصيانة</span>
+              </div>
+              {editId && (
+                <button type="button" onClick={() => setShowMaintForm(v => !v)} className="text-xs text-amber-700 hover:text-amber-800 flex items-center gap-1">
+                  <Plus size={13} /> تسجيل صيانة
+                </button>
+              )}
+            </div>
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل صيانته.</div>
+            ) : (
+              <>
+                {(() => {
+                  const upcoming = maintenance.map(m => m.next_service_date).filter((d): d is string => !!d).sort()
+                  const next = upcoming.find(d => { const x = daysUntilOrNull(d); return x !== null && x >= 0 }) ?? upcoming[upcoming.length - 1]
+                  if (!next) return null
+                  const dd = daysUntilOrNull(next)
+                  return (
+                    <div className={`rounded-lg p-3 mb-3 text-sm flex items-center justify-between border ${dd !== null && dd <= 14 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                      <span className="flex items-center gap-1.5"><CalendarClock size={14} /> الصيانة القادمة: {formatDate(next)}</span>
+                      {dd !== null && <span className="font-medium">{dd < 0 ? `متأخرة ${Math.abs(dd)} يوم` : dd === 0 ? 'اليوم' : `بعد ${dd} يوم`}</span>}
+                    </div>
+                  )
+                })()}
+                {showMaintForm && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="تاريخ الصيانة" type="date" value={maintForm.service_date} onChange={e => setMaintForm(p => ({ ...p, service_date: e.target.value }))} />
+                      <Select label="النوع" options={MAINT_TYPES} value={maintForm.service_type} onChange={e => setMaintForm(p => ({ ...p, service_type: e.target.value }))} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="التكلفة (د.ب)" type="number" value={maintForm.cost} onChange={e => setMaintForm(p => ({ ...p, cost: e.target.value }))} dir="ltr" />
+                      <Input label="الورشة / الفني" value={maintForm.vendor} onChange={e => setMaintForm(p => ({ ...p, vendor: e.target.value }))} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="عدّاد الكيلومترات" type="number" value={maintForm.odometer} onChange={e => setMaintForm(p => ({ ...p, odometer: e.target.value }))} dir="ltr" />
+                      <Input label="موعد الصيانة القادمة" type="date" value={maintForm.next_service_date} onChange={e => setMaintForm(p => ({ ...p, next_service_date: e.target.value }))} />
+                    </div>
+                    <Input label="الوصف / الأعمال" value={maintForm.description} onChange={e => setMaintForm(p => ({ ...p, description: e.target.value }))} />
+                    <div className="flex gap-2">
+                      <Button loading={maintBusy} onClick={addMaintenance}>تسجيل الصيانة</Button>
+                      <Button variant="secondary" onClick={() => { setShowMaintForm(false); setMaintForm(newMaintForm()) }}>إلغاء</Button>
+                    </div>
+                    <p className="text-xs text-slate-400">التكلفة تُقيَّد تلقائيًا في مصاريف الأصل.</p>
+                  </div>
+                )}
+                {maintenance.length === 0 ? (
+                  <div className="text-sm text-slate-400 text-center py-4 border border-dashed border-slate-200 rounded-lg">لا يوجد سجل صيانة بعد</div>
+                ) : (
+                  <div className="border border-slate-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 text-right font-medium">التاريخ</th>
+                          <th className="px-3 py-2 text-right font-medium">النوع</th>
+                          <th className="px-3 py-2 text-right font-medium">التكلفة</th>
+                          <th className="px-3 py-2 text-right font-medium">القادمة</th>
+                          <th className="px-3 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {maintenance.map(rec => (
+                          <tr key={rec.id} className="hover:bg-slate-50/60">
+                            <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{rec.service_date ? formatDate(rec.service_date) : '—'}</td>
+                            <td className="px-3 py-2 text-slate-700">{MAINT_TYPE_LABEL[rec.service_type ?? ''] ?? rec.service_type ?? '—'}{rec.description ? <span className="text-xs text-slate-400"> · {rec.description}</span> : ''}{rec.vendor ? <span className="text-xs text-slate-400"> · {rec.vendor}</span> : ''}</td>
+                            <td className="px-3 py-2 font-medium text-red-600 whitespace-nowrap" dir="ltr">{rec.cost > 0 ? formatCurrency(Number(rec.cost)) : '—'}</td>
+                            <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{rec.next_service_date ? formatDate(rec.next_service_date) : '—'}</td>
+                            <td className="px-3 py-2 text-left">
+                              <button type="button" onClick={() => deleteMaintenance(rec)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Trash2 size={14} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
             <div className="flex items-center gap-2 mb-3">
               <Paperclip size={16} className="text-amber-600" />
               <span className="text-sm font-semibold text-slate-700">المستندات والصور</span>
@@ -877,7 +1048,7 @@ export default function AssetList() {
 
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
             {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
