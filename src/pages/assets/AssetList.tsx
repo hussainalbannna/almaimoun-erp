@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2,
-  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench,
+  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench, Fuel,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
@@ -150,6 +150,18 @@ interface AssetMaintenance {
 }
 const newMaintForm = () => ({ service_date: new Date().toISOString().slice(0, 10), service_type: 'routine', description: '', cost: '', vendor: '', odometer: '', next_service_date: '' })
 
+interface AssetFuelLog {
+  id: string
+  fill_date: string | null
+  odometer: number | null
+  liters: number
+  cost: number
+  station: string | null
+  notes: string | null
+  expense_id: string | null
+}
+const newFuelForm = () => ({ fill_date: new Date().toISOString().slice(0, 10), odometer: '', liters: '', cost: '', station: '', notes: '' })
+
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -217,6 +229,10 @@ export default function AssetList() {
   const [showMaintForm, setShowMaintForm] = useState(false)
   const [maintBusy, setMaintBusy] = useState(false)
   const [maintForm, setMaintForm] = useState(newMaintForm())
+  const [fuel, setFuel] = useState<AssetFuelLog[]>([])
+  const [showFuelForm, setShowFuelForm] = useState(false)
+  const [fuelBusy, setFuelBusy] = useState(false)
+  const [fuelForm, setFuelForm] = useState(newFuelForm())
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -273,7 +289,14 @@ export default function AssetList() {
     setMaintenance((data ?? []) as AssetMaintenance[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  const loadFuel = async (assetId: string) => {
+    const { data } = await supabase.from('asset_fuel_logs')
+      .select('id, fill_date, odometer, liters, cost, station, notes, expense_id')
+      .eq('asset_id', assetId).order('fill_date', { ascending: true }).order('odometer', { ascending: true })
+    setFuel((data ?? []) as AssetFuelLog[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -295,12 +318,16 @@ export default function AssetList() {
     setMaintenance([])
     setShowMaintForm(false)
     setMaintForm(newMaintForm())
+    setFuel([])
+    setShowFuelForm(false)
+    setFuelForm(newFuelForm())
     setShowExpForm(false)
     setExpForm(newExpForm())
     loadDocs(a.id)
     loadExpenses(a.id)
     loadInstallments(a.id)
     loadMaintenance(a.id)
+    loadFuel(a.id)
     setShowForm(true)
   }
 
@@ -337,7 +364,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setShowExpForm(false); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -501,6 +528,55 @@ export default function AssetList() {
       await supabase.from('asset_maintenance').delete().eq('id', rec.id)
       toast.success('تم حذف سجل الصيانة')
       if (editId) { await loadMaintenance(editId); await loadExpenses(editId) }
+    } catch { toast.error('تعذّر الحذف') }
+  }
+
+  const addFuel = async () => {
+    if (!editId) return
+    const liters = Number(fuelForm.liters) || 0
+    if (liters <= 0) { toast.error('أدخل عدد اللترات'); return }
+    setFuelBusy(true)
+    try {
+      const cost = Number(fuelForm.cost) || 0
+      let expenseId: string | null = null
+      if (cost > 0) {
+        const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
+          asset_id: editId,
+          project_id: null,
+          entry_date: fuelForm.fill_date || new Date().toISOString().slice(0, 10),
+          amount: cost,
+          category: 'equipment',
+          expense_type: 'fuel',
+          payment_method: 'cash',
+          description: `وقود — ${form.name}${fuelForm.station ? ' / ' + fuelForm.station : ''}`,
+        }).select('id').single()
+        if (expErr) { toast.error('تعذّر قيد تكلفة الوقود'); return }
+        expenseId = (exp as { id: string }).id
+      }
+      const { error } = await supabase.from('asset_fuel_logs').insert({
+        asset_id: editId,
+        fill_date: fuelForm.fill_date || null,
+        odometer: fuelForm.odometer ? Number(fuelForm.odometer) : null,
+        liters,
+        cost,
+        station: fuelForm.station || null,
+        notes: fuelForm.notes || null,
+        expense_id: expenseId,
+      })
+      if (error) throw error
+      toast.success('تم تسجيل التعبئة')
+      setFuelForm(newFuelForm()); setShowFuelForm(false)
+      await loadFuel(editId); await loadExpenses(editId)
+    } catch (e) { toast.error('تعذّر التسجيل: ' + ((e as Error)?.message ?? '')) }
+    finally { setFuelBusy(false) }
+  }
+
+  const deleteFuel = async (rec: AssetFuelLog) => {
+    try {
+      if (rec.expense_id) await supabase.from('accounts_payable').delete().eq('id', rec.expense_id)
+      await supabase.from('asset_fuel_logs').delete().eq('id', rec.id)
+      toast.success('تم حذف التعبئة')
+      if (editId) { await loadFuel(editId); await loadExpenses(editId) }
     } catch { toast.error('تعذّر الحذف') }
   }
 
@@ -983,6 +1059,102 @@ export default function AssetList() {
           </div>
 
           <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Fuel size={16} className="text-amber-600" />
+                <span className="text-sm font-semibold text-slate-700">سجل الوقود والكفاءة</span>
+              </div>
+              {editId && (
+                <button type="button" onClick={() => setShowFuelForm(v => !v)} className="text-xs text-amber-700 hover:text-amber-800 flex items-center gap-1">
+                  <Plus size={13} /> تسجيل تعبئة
+                </button>
+              )}
+            </div>
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل الوقود.</div>
+            ) : (() => {
+              const eff = fuel.map((f, i) => {
+                if (i === 0) return null
+                const dist = Number(f.odometer || 0) - Number(fuel[i - 1].odometer || 0)
+                const lit = Number(f.liters || 0)
+                return (dist > 0 && lit > 0) ? dist / lit : null
+              })
+              const valid = eff.filter((e): e is number => e !== null)
+              const avgEff = valid.length ? valid.reduce((s, e) => s + e, 0) / valid.length : null
+              const totalLiters = fuel.reduce((s, f) => s + Number(f.liters || 0), 0)
+              const totalCost = fuel.reduce((s, f) => s + Number(f.cost || 0), 0)
+              const rows = fuel.map((f, i) => ({ f, eff: eff[i] }))
+              return (
+                <>
+                  {showFuelForm && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="التاريخ" type="date" value={fuelForm.fill_date} onChange={e => setFuelForm(p => ({ ...p, fill_date: e.target.value }))} />
+                        <Input label="عدّاد الكيلومترات" type="number" value={fuelForm.odometer} onChange={e => setFuelForm(p => ({ ...p, odometer: e.target.value }))} dir="ltr" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="اللترات" type="number" value={fuelForm.liters} onChange={e => setFuelForm(p => ({ ...p, liters: e.target.value }))} dir="ltr" />
+                        <Input label="التكلفة (د.ب)" type="number" value={fuelForm.cost} onChange={e => setFuelForm(p => ({ ...p, cost: e.target.value }))} dir="ltr" />
+                      </div>
+                      <Input label="المحطة (اختياري)" value={fuelForm.station} onChange={e => setFuelForm(p => ({ ...p, station: e.target.value }))} />
+                      <div className="flex gap-2">
+                        <Button loading={fuelBusy} onClick={addFuel}>تسجيل التعبئة</Button>
+                        <Button variant="secondary" onClick={() => { setShowFuelForm(false); setFuelForm(newFuelForm()) }}>إلغاء</Button>
+                      </div>
+                      <p className="text-xs text-slate-400">التكلفة تُقيَّد تلقائيًا في مصاريف الأصل. سجّل العدّاد بدقة لحساب الكفاءة.</p>
+                    </div>
+                  )}
+                  {fuel.length === 0 ? (
+                    <div className="text-sm text-slate-400 text-center py-4 border border-dashed border-slate-200 rounded-lg">لا يوجد سجل وقود بعد</div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-3 gap-2 mb-3 text-center text-xs">
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">متوسط الكفاءة</div><div className="font-bold text-slate-800">{avgEff ? `${avgEff.toFixed(1)} كم/لتر` : '—'}</div></div>
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">إجمالي اللترات</div><div className="font-bold text-slate-800" dir="ltr">{totalLiters.toFixed(0)}</div></div>
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">إجمالي التكلفة</div><div className="font-bold text-red-600" dir="ltr">{formatCurrency(totalCost)}</div></div>
+                      </div>
+                      <div className="border border-slate-200 rounded-lg overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 text-slate-500">
+                            <tr>
+                              <th className="px-2 py-2 text-right font-medium">التاريخ</th>
+                              <th className="px-2 py-2 text-right font-medium">العدّاد</th>
+                              <th className="px-2 py-2 text-right font-medium">لتر</th>
+                              <th className="px-2 py-2 text-right font-medium">التكلفة</th>
+                              <th className="px-2 py-2 text-right font-medium">كم/لتر</th>
+                              <th className="px-2 py-2"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {[...rows].reverse().map(({ f, eff: e }) => {
+                              const anomaly = e !== null && avgEff !== null && e < avgEff * 0.7
+                              return (
+                                <tr key={f.id} className={anomaly ? 'bg-red-50/50' : 'hover:bg-slate-50/60'}>
+                                  <td className="px-2 py-2 text-slate-600 whitespace-nowrap">{f.fill_date ? formatDate(f.fill_date) : '—'}</td>
+                                  <td className="px-2 py-2 text-slate-600 whitespace-nowrap" dir="ltr">{f.odometer != null ? Number(f.odometer).toLocaleString('en-US') : '—'}</td>
+                                  <td className="px-2 py-2 text-slate-700 whitespace-nowrap" dir="ltr">{Number(f.liters || 0).toFixed(0)}</td>
+                                  <td className="px-2 py-2 font-medium text-red-600 whitespace-nowrap" dir="ltr">{f.cost > 0 ? formatCurrency(Number(f.cost)) : '—'}</td>
+                                  <td className="px-2 py-2 whitespace-nowrap" dir="ltr">
+                                    {e !== null ? <span className={anomaly ? 'text-red-600 font-bold' : 'text-slate-700'}>{e.toFixed(1)}{anomaly ? ' ⚠' : ''}</span> : <span className="text-slate-300">—</span>}
+                                  </td>
+                                  <td className="px-2 py-2 text-left">
+                                    <button type="button" onClick={() => deleteFuel(f)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Trash2 size={14} /></button>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      {avgEff !== null && <p className="text-xs text-slate-400 mt-2">⚠ = استهلاك أعلى من المعتاد (أقل من 70% من متوسط الكفاءة) — قد يشير لتسرّب أو مشكلة.</p>}
+                    </>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
             <div className="flex items-center gap-2 mb-3">
               <Paperclip size={16} className="text-amber-600" />
               <span className="text-sm font-semibold text-slate-700">المستندات والصور</span>
@@ -1048,7 +1220,7 @@ export default function AssetList() {
 
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
             {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
