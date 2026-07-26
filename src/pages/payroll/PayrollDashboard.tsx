@@ -25,6 +25,9 @@ interface PayrollAdjustment {
   daily_rate: number | null    // أجر اليوم لعامل الهيئة في هذا الشهر
   present_days: number[] | null // أرقام أيام الحضور (1..عدد أيام الشهر)
   notes: string
+  paid: boolean | null         // تم صرف راتب هذا العامل لهذا الشهر
+  paid_at: string | null       // وقت الصرف
+  net_paid: number | null      // الصافي المدفوع فعليًا وقت الصرف
 }
 
 // عامل مع تعديلات الشهر المحدّد وسلفه المعلّقة ضمن ذلك الشهر
@@ -34,6 +37,7 @@ type PayrollWorker = Worker & {
   deduction: number
   presentDays: number[]      // أيام الحضور المحفوظة لهذا الشهر
   monthDailyRate: number | null // أجر اليوم المحفوظ لهذا الشهر (من payroll_adjustments) — مستقل عن الأجر الحالي
+  paid: boolean              // تم صرف راتب هذا الشهر (من القاعدة)
 }
 
 // حالة تحرير الحقول لكل عامل في الجدول (نصّية لدعم الإدخال الجزئي)
@@ -107,6 +111,7 @@ async function fetchPayrollData(monthIndex: number, year: number): Promise<Payro
       deduction: adj ? Number(adj.deduction) : 0,
       presentDays: adj && Array.isArray(adj.present_days) ? adj.present_days.map(Number) : [],
       monthDailyRate: adj && adj.daily_rate != null ? Number(adj.daily_rate) : null,
+      paid: adj ? Boolean(adj.paid) : false,
     }
   })
 }
@@ -117,7 +122,7 @@ export default function PayrollDashboard() {
   const [branch, setBranch] = useState('all')
   const [payingAll, setPayingAll] = useState(false)
   const [savingId, setSavingId] = useState<string | null>(null)
-  // حالة "تم الصرف" مؤشّر جلسة مؤقت (لا يُحفظ في القاعدة) — منفصل عن بيانات الخادم
+  // حالة "تم الصرف" تُقرأ من القاعدة (payroll_adjustments.paid) فتصمد بعد تحديث الصفحة
   const [paidIds, setPaidIds] = useState<Set<string>>(new Set())
   // قيم الحقول القابلة للتعديل لكل عامل (تُهيّأ من بيانات الخادم عند كل تحميل/تغيير شهر)
   const [edits, setEdits] = useState<Record<string, RowEdit>>({})
@@ -166,6 +171,11 @@ export default function PayrollDashboard() {
       }
     }
     setEdits(next)
+  }, [workers])
+
+  // مزامنة حالة "تم الصرف" من القاعدة عند كل تحميل/تغيير شهر
+  useEffect(() => {
+    setPaidIds(new Set(workers.filter(w => w.paid).map(w => w.id)))
   }, [workers])
 
   const setEdit = (id: string, field: 'dailyRate' | 'overtime' | 'deduction' | 'newAdvance', value: string) =>
@@ -261,10 +271,10 @@ export default function PayrollDashboard() {
 
   const branchTag = isLmraTab ? 'LMRA' : (branch === 'all' ? 'AllBranches' : 'Branch' + branch)
 
-  // حفظ صف عامل: upsert لتعديلات الشهر (ساعات إضافية/خصم + أيام حضور الهيئة) + تسجيل سلفة جديدة إن وُجدت
-  const saveRow = async (w: PayrollWorker) => {
-    const { e, overtime, deduction, newAdvance, isLmra } = liveRow(w)
-    // عامل الهيئة: أيام الحضور شهرية · عامل الشركة: المسار الأصلي بلا تغيير
+  // منطق موحّد لحفظ صف عامل — يستخدمه زر "حفظ" الفردي و"صرف الكل" لمنع أي تباعد.
+  // pay=false: حفظ تعديلات الشهر فقط. pay=true: يحفظها + يعلّم "مدفوع" بالصافي ووقته + يخصم السلف المعلّقة.
+  const persistWorkerRow = async (w: PayrollWorker, pay: boolean) => {
+    const { e, overtime, deduction, newAdvance, isLmra, net } = liveRow(w)
     const payload: Record<string, unknown> = {
       worker_id: w.id, month: month + 1, year, overtime, deduction, updated_at: new Date().toISOString(),
     }
@@ -275,34 +285,45 @@ export default function PayrollDashboard() {
     } else {
       payload.manual_salary = null
     }
+    if (pay) {
+      payload.paid = true
+      payload.paid_at = new Date().toISOString()
+      payload.net_paid = Number(net.toFixed(3))
+    }
+    // نحدّث "الأجر الحالي" على سجل العامل فقط عند الشهر الجاري (كي لا يغيّر تعديل شهر ماضٍ الأجر الحالي وتكلفة المشاريع)
+    const isCurrentMonth = month === new Date().getMonth() && year === new Date().getFullYear()
+    if (isLmra && isCurrentMonth) {
+      const { error: rateError } = await supabase.from('workers').update({ daily_rate: rate }).eq('id', w.id)
+      if (rateError) throw rateError
+    }
+    const { error: adjError } = await supabase
+      .from('payroll_adjustments')
+      .upsert(payload, { onConflict: 'worker_id,month,year' })
+    if (adjError) throw adjError
+
+    if (newAdvance > 0) {
+      const { error: advError } = await supabase.from('worker_advances').insert({
+        worker_id: w.id,
+        amount: newAdvance,
+        advance_date: advanceDateForPeriod(month, year),
+        notes: `سلفة كشف ${MONTHS[month]} ${year}`,
+        deducted: false,
+      })
+      if (advError) throw advError
+    }
+    // عند الصرف فقط: خصم السلف المعلّقة التي احتُسبت في صافي هذا الشهر
+    if (pay) {
+      for (const adv of w.advances) {
+        const { error: dedErr } = await supabase.from('worker_advances').update({ deducted: true }).eq('id', adv.id)
+        if (dedErr) throw dedErr
+      }
+    }
+  }
+
+  const saveRow = async (w: PayrollWorker) => {
     setSavingId(w.id)
     try {
-      // نحدّث "الأجر الحالي" على سجل العامل فقط عند حفظ الشهر الجاري (كي لا يغيّر تعديل شهر ماضٍ الأجر الحالي وتكلفة المشاريع)
-      const isCurrentMonth = month === new Date().getMonth() && year === new Date().getFullYear()
-      if (isLmra && isCurrentMonth) {
-        const { error: rateError } = await supabase
-          .from('workers')
-          .update({ daily_rate: rate })
-          .eq('id', w.id)
-        if (rateError) throw rateError
-      }
-
-      const { error: adjError } = await supabase
-        .from('payroll_adjustments')
-        .upsert(payload, { onConflict: 'worker_id,month,year' })
-      if (adjError) throw adjError
-
-      if (newAdvance > 0) {
-        const { error: advError } = await supabase.from('worker_advances').insert({
-          worker_id: w.id,
-          amount: newAdvance,
-          advance_date: advanceDateForPeriod(month, year),
-          notes: `سلفة كشف ${MONTHS[month]} ${year}`,
-          deducted: false,
-        })
-        if (advError) throw advError
-      }
-
+      await persistWorkerRow(w, false)
       await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
       toast.success(`تم حفظ تعديلات ${w.name_en || w.name}`)
     } catch (err) {
@@ -392,19 +413,22 @@ export default function PayrollDashboard() {
     toast.success('تم تصدير شبكة حضور عمال الهيئة')
   }
 
+  // صرف الكل: يحفظ كامل كشف كل عامل لم يُصرف له بعد (تعديلات + سلف + صافٍ مدفوع + خصم السلف).
+  // يُصرف فقط لغير المدفوعين (لا صرف مزدوج)، وإن فشل في المنتصف يُكمل الباقي عند إعادة المحاولة.
   const handlePayAll = async () => {
-    if (activeWorkers.length === 0) { toast.error('لا يوجد موظفون'); return }
-    if (!window.confirm(`هل تريد تسجيل صرف الرواتب لـ ${activeWorkers.length} عامل؟`)) return
+    const toPay = activeWorkers.filter(w => !w.paid)
+    if (toPay.length === 0) { toast.error('لا يوجد موظفون بحاجة للصرف'); return }
+    if (!window.confirm(`هل تريد تسجيل صرف الرواتب لـ ${toPay.length} عامل؟ سيُحفظ الكشف كاملًا وتُخصم السلف.`)) return
     setPayingAll(true)
-    for (const w of activeWorkers) {
-      for (const adv of w.advances) {
-        await supabase.from('worker_advances').update({ deducted: true }).eq('id', adv.id)
-      }
+    try {
+      for (const w of toPay) await persistWorkerRow(w, true)
+      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
+      toast.success(`تم تسجيل صرف الرواتب لـ ${toPay.length} عامل`)
+    } catch (err) {
+      toast.error('تعذّر صرف الرواتب: ' + ((err as Error)?.message ?? ''))
+    } finally {
+      setPayingAll(false)
     }
-    setPaidIds(prev => new Set([...prev, ...activeWorkers.map(w => w.id)]))
-    queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
-    toast.success(`تم تسجيل صرف الرواتب لـ ${activeWorkers.length} عامل`)
-    setPayingAll(false)
   }
 
   const numCellClass = 'w-24 border border-slate-200 rounded-md px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-amber-500/30'
