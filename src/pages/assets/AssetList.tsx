@@ -35,6 +35,7 @@ interface Asset {
   custodian: string | null
   inspection_expiry: string | null
   warranty_expiry: string | null
+  operation_license_expiry: string | null
   current_project_id: string | null
   payment_method: string
   bank_name: string
@@ -284,7 +285,7 @@ const emptyForm = {
   name: '', asset_type: 'heavy_equipment', plate_number: '', serial_number: '',
   purchase_date: '', purchase_value: '', current_location: '', status: 'available',
   insurance_expiry: '', registration_expiry: '', notes: '',
-  custodian: '', inspection_expiry: '', warranty_expiry: '', current_project_id: '',
+  custodian: '', inspection_expiry: '', warranty_expiry: '', operation_license_expiry: '', current_project_id: '',
   payment_method: 'cash', bank_name: '', finance_amount: '', down_payment: '',
   monthly_installment: '', total_installments: '', paid_installments: '', next_installment_date: '',
   useful_life_years: '', salvage_value: '',
@@ -470,7 +471,7 @@ export default function AssetList() {
       serial_number: a.serial_number ?? '', purchase_date: a.purchase_date ?? '', purchase_value: a.purchase_value ? String(a.purchase_value) : '',
       current_location: a.current_location ?? '', status: a.status ?? 'available',
       insurance_expiry: a.insurance_expiry ?? '', registration_expiry: a.registration_expiry ?? '', notes: a.notes ?? '',
-      custodian: a.custodian ?? '', inspection_expiry: a.inspection_expiry ?? '', warranty_expiry: a.warranty_expiry ?? '', current_project_id: a.current_project_id ?? '',
+      custodian: a.custodian ?? '', inspection_expiry: a.inspection_expiry ?? '', warranty_expiry: a.warranty_expiry ?? '', operation_license_expiry: a.operation_license_expiry ?? '', current_project_id: a.current_project_id ?? '',
       payment_method: a.payment_method ?? 'cash', bank_name: a.bank_name ?? '',
       finance_amount: a.finance_amount ? String(a.finance_amount) : '', down_payment: a.down_payment ? String(a.down_payment) : '',
       monthly_installment: a.monthly_installment ? String(a.monthly_installment) : '', total_installments: a.total_installments ? String(a.total_installments) : '',
@@ -529,6 +530,7 @@ export default function AssetList() {
         registration_expiry: form.registration_expiry || null,
         inspection_expiry: form.inspection_expiry || null,
         warranty_expiry: form.warranty_expiry || null,
+        operation_license_expiry: form.operation_license_expiry || null,
         payment_method: form.payment_method,
         bank_name: form.payment_method === 'installment' ? form.bank_name : '',
         finance_amount: form.payment_method === 'installment' ? (Number(form.finance_amount) || 0) : 0,
@@ -581,9 +583,9 @@ export default function AssetList() {
     if (!hasApiKey()) { toast.error('خدمة الذكاء الاصطناعي غير مُفعّلة'); return }
     setAiBusy(true)
     try {
-      const instruction = 'أنت تقرأ وثيقة رسمية لمركبة أو معدة (تأمين/استمارة تسجيل/فحص دوري/ضمان). استخرج الحقول التالية إن وُجدت وأعِد JSON فقط بلا أي نص آخر: {"insurance_expiry":"YYYY-MM-DD","registration_expiry":"YYYY-MM-DD","inspection_expiry":"YYYY-MM-DD","warranty_expiry":"YYYY-MM-DD","plate_number":"","serial_number":""}. استخدم null لأي حقل غير موجود. حوّل أي تاريخ هجري إلى ميلادي بصيغة YYYY-MM-DD.'
+      const instruction = 'أنت تقرأ وثيقة رسمية لمركبة أو معدة (تأمين/استمارة تسجيل/فحص دوري/ضمان/رخصة تشغيل). استخرج الحقول التالية إن وُجدت وأعِد JSON فقط بلا أي نص آخر: {"insurance_expiry":"YYYY-MM-DD","registration_expiry":"YYYY-MM-DD","inspection_expiry":"YYYY-MM-DD","warranty_expiry":"YYYY-MM-DD","operation_license_expiry":"YYYY-MM-DD","plate_number":"","serial_number":""}. استخدم null لأي حقل غير موجود. حوّل أي تاريخ هجري إلى ميلادي بصيغة YYYY-MM-DD.'
       const text = await readDocumentText(file, instruction)
-      const data = extractJSON<{ insurance_expiry?: string | null; registration_expiry?: string | null; inspection_expiry?: string | null; warranty_expiry?: string | null; plate_number?: string | null; serial_number?: string | null }>(text)
+      const data = extractJSON<{ insurance_expiry?: string | null; registration_expiry?: string | null; inspection_expiry?: string | null; warranty_expiry?: string | null; operation_license_expiry?: string | null; plate_number?: string | null; serial_number?: string | null }>(text)
       if (!data) { toast.error('تعذّر قراءة الوثيقة — جرّب صورة أوضح'); return }
       const isDate = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
       const updates: Partial<typeof emptyForm> = {}
@@ -592,6 +594,7 @@ export default function AssetList() {
       if (isDate(data.registration_expiry)) { updates.registration_expiry = data.registration_expiry; found.push('انتهاء التسجيل') }
       if (isDate(data.inspection_expiry)) { updates.inspection_expiry = data.inspection_expiry; found.push('انتهاء الفحص') }
       if (isDate(data.warranty_expiry)) { updates.warranty_expiry = data.warranty_expiry; found.push('انتهاء الضمان') }
+      if (isDate(data.operation_license_expiry)) { updates.operation_license_expiry = data.operation_license_expiry; found.push('رخصة التشغيل') }
       if (typeof data.plate_number === 'string' && data.plate_number.trim() && !form.plate_number) { updates.plate_number = data.plate_number.trim(); found.push('رقم اللوحة') }
       if (typeof data.serial_number === 'string' && data.serial_number.trim() && !form.serial_number) { updates.serial_number = data.serial_number.trim(); found.push('الرقم التسلسلي') }
       if (found.length) { setForm(f => ({ ...f, ...updates })); toast.success('تم استخراج: ' + found.join('، ') + ' — راجِعها ثم احفظ') }
@@ -1292,6 +1295,9 @@ export default function AssetList() {
             <Input label="انتهاء التسجيل / الاستمارة" type="date" value={form.registration_expiry} onChange={e => setForm(f => ({ ...f, registration_expiry: e.target.value }))} />
             <Input label="انتهاء الفحص الدوري" type="date" value={form.inspection_expiry} onChange={e => setForm(f => ({ ...f, inspection_expiry: e.target.value }))} />
             <Input label="انتهاء الضمان" type="date" value={form.warranty_expiry} onChange={e => setForm(f => ({ ...f, warranty_expiry: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Input label="انتهاء رخصة التشغيل / الشهادة" type="date" value={form.operation_license_expiry} onChange={e => setForm(f => ({ ...f, operation_license_expiry: e.target.value }))} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Input label="العمر الإنتاجي (سنوات) — للإهلاك" type="number" value={form.useful_life_years} onChange={e => setForm(f => ({ ...f, useful_life_years: e.target.value }))} dir="ltr" />

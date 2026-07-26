@@ -64,15 +64,16 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     try { const { data } = await p; return data ?? [] } catch { return [] }
   }
 
-  const [workers, assets, invoices, cheques, tasks, quotes, maintenance] = await Promise.all([
+  const [workers, assets, invoices, cheques, tasks, quotes, maintenance, spareParts] = await Promise.all([
     safe(supabase.from('workers').select('id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status')),
-    safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,inspection_expiry,warranty_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
+    safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,inspection_expiry,warranty_expiry,operation_license_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
     safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
     // الشيكات من مصدرها الرسمي (جدول cheques) — حالتها تُحدَّث عند الصرف في مركز الشيكات
     safe(supabase.from('cheques').select('id,party_name,amount,due_date,status,cheque_type,direction')),
     safe(supabase.from('tasks').select('id,title,due_date,status')),
     safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status,total')),
     safe(supabase.from('asset_maintenance').select('id,asset_id,service_date,next_service_date')),
+    safe(supabase.from('asset_spare_parts').select('id,asset_id,part_name,next_replace_date')),
   ])
 
   const subtitleDays = (d: number, verb: { past: string; today: string; future: string }) =>
@@ -101,7 +102,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
 
   // وثائق المعدات
   for (const a of assets as Record<string, unknown>[]) {
-    for (const [label, field] of [['تأمين', 'insurance_expiry'], ['استمارة', 'registration_expiry'], ['فحص دوري', 'inspection_expiry'], ['ضمان', 'warranty_expiry']] as const) {
+    for (const [label, field] of [['تأمين', 'insurance_expiry'], ['استمارة', 'registration_expiry'], ['فحص دوري', 'inspection_expiry'], ['ضمان', 'warranty_expiry'], ['رخصة تشغيل', 'operation_license_expiry']] as const) {
       const d = daysUntil(a[field] as string)
       if (d !== null && d <= MAX_DOCUMENT) {
         const { level, urgent } = classify(d, 'document')
@@ -169,6 +170,25 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
       title: `صيانة ${assetNameMap.get(assetId) ?? 'أصل'}`,
       subtitle: subtitleDays(d, { past: 'تأخرت منذ', today: 'مستحقة اليوم', future: 'بعد' }),
       date: rec.next,
+      daysLeft: d,
+      link: '/assets',
+    })
+  }
+
+  // استبدال قطع الغيار/الإطارات القادم
+  for (const p of spareParts as Record<string, unknown>[]) {
+    const next = p.next_replace_date as string | null
+    if (!next) continue
+    const d = daysUntil(next)
+    if (d === null || d > MAX_DOCUMENT) continue
+    const { level, urgent } = classify(d, 'document')
+    alerts.push({
+      id: `part-${p.id}`,
+      kind: 'asset_doc',
+      level, urgent,
+      title: `استبدال ${(p.part_name as string) || 'قطعة'} — ${assetNameMap.get(p.asset_id as string) ?? 'أصل'}`,
+      subtitle: subtitleDays(d, { past: 'تأخر منذ', today: 'مستحق اليوم', future: 'بعد' }),
+      date: next,
       daysLeft: d,
       link: '/assets',
     })
