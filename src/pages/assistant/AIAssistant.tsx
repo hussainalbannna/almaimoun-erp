@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Bot, Send, Loader2, Sparkles, User, Trash2, AlertCircle, RefreshCw } from 'lucide-react'
 import { safeSelect } from '../../lib/supabase'
 import { askAI, hasApiKey, type ChatMessage } from '../../lib/ai'
+import { fetchCheques, computePendingChequeSets, computeProjectProfit, type ChequeRow, type WorkerPayLike, type PurchaseLike, type SubPaymentLike } from '../../lib/finance'
 
 // عدد الأيام حتى تاريخ معيّن (سالب = منتهي)
 function daysUntil(dateStr: string | null | undefined): number | null {
@@ -41,25 +42,36 @@ interface BusinessData {
   quotations: Record<string, unknown>[]
   tasks: Record<string, unknown>[]
   vos: Record<string, unknown>[]
+  attendance: Record<string, unknown>[]
+  dailyLogs: Record<string, unknown>[]
+  laborEntries: Record<string, unknown>[]
+  rentals: Record<string, unknown>[]
+  rentalPayments: Record<string, unknown>[]
+  cheques: ChequeRow[]
 }
 
-// جلب بيانات الشركة للسياق (مصدر React Query) — كل استعلام يفشل بأمان عبر safeSelect
 async function fetchBusinessData(): Promise<BusinessData> {
-  const [projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos] = await Promise.all([
+  const [projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos, attendance, dailyLogs, laborEntries, rentals, rentalPayments, cheques] = await Promise.all([
     safeSelect('projects', 'id,project_number,project_name,client_name,location,contract_value,status,start_date,end_date'),
-    safeSelect('workers', 'name,profession,nationality,worker_type,status,visa_expiry,cpr_expiry,passport_expiry,basic_salary,actual_salary,daily_rate'),
+    safeSelect('workers', 'id,name,profession,nationality,worker_type,status,visa_expiry,cpr_expiry,passport_expiry,pay_type,basic_salary,actual_salary,social_allowance,daily_rate'),
     safeSelect('invoices', 'invoice_number,customer_name,issue_date,due_date,status,total,project_id'),
     safeSelect('receipts', 'receipt_number,customer_name,amount,receipt_date,project_id'),
     safeSelect('suppliers', 'name,company_name,phone'),
     safeSelect('project_milestones', 'name,percentage,amount,status,project_id'),
-    safeSelect('purchase_invoices', 'supplier_name,project_id,project_name,amount,payment_method,check_due_date,vendor_invoice_number'),
-    safeSelect('subcontractor_payments', 'amount,payment_method,check_due_date,payment_date,project_id'),
+    safeSelect('purchase_invoices', 'id,supplier_name,project_id,project_name,amount,payment_method,check_due_date,vendor_invoice_number'),
+    safeSelect('subcontractor_payments', 'id,amount,payment_method,check_due_date,payment_date,project_id'),
     safeSelect('accounts_payable', 'amount,category,expense_type,project_id,entry_date'),
     safeSelect('quotations', 'quote_number,customer_name,project_name,total,status,valid_until'),
     safeSelect('tasks', 'title,status,priority,due_date'),
-    safeSelect('variation_orders', 'project_id,description,amount,status'),
+    safeSelect('variation_orders', 'project_id,description,amount,status,billable'),
+    safeSelect('worker_attendance', 'project_id,worker_id,status'),
+    safeSelect('daily_logs', 'project_id,overtime_amount'),
+    safeSelect('project_labor_entries', 'project_id,amount'),
+    safeSelect('rentals', 'id,project_id'),
+    safeSelect('rental_payments', 'rental_id,amount'),
+    fetchCheques(),
   ])
-  return { projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos }
+  return { projects, workers, invoices, receipts, suppliers, milestones, purchaseInvoices, subPayments, cashEntries, quotations, tasks, vos, attendance, dailyLogs, laborEntries, rentals, rentalPayments, cheques }
 }
 
 export default function AIAssistant() {
@@ -90,36 +102,64 @@ export default function AIAssistant() {
 
     // ── ربحية كل مشروع (الأهم) ──
     lines.push(`\n## تحليل ربحية المشاريع (${d.projects.length} مشروع):`)
-    lines.push(`[ملاحظة للحساب: ربح المشروع = (قيمة العقد + أوامر التغيير) − (مصروفات الصندوق + فواتير الموردين + مدفوعات المقاولين) المرتبطة بالمشروع]`)
+    lines.push(`[ملاحظة للحساب: ربح المشروع = (قيمة العقد + أوامر التغيير المعتمدة القابلة للفوترة) − (مصروفات الصندوق + مشتريات مدفوعة فعلاً + مقاولو باطن مدفوعون + إيجارات + تكلفة العمالة + أوفرتايم + عمالة تاريخية). الشيكات الآجلة لا تُخصم حتى تُصرف — نفس محرك صفحة المشروع ولوحة التحكم]`)
+
+    const pending = computePendingChequeSets(d.cheques)
+    const workersById = new Map<string, WorkerPayLike>(
+      (d.workers as Array<Record<string, unknown>>).map(w => [String(w.id), w as unknown as WorkerPayLike])
+    )
+    const rentalProject = new Map(
+      (d.rentals as Array<Record<string, unknown>>).map(r => [String(r.id), (r.project_id as string | null) ?? null])
+    )
+    const rentalsPaidByProject = new Map<string, number>()
+    for (const rp of d.rentalPayments as Array<Record<string, unknown>>) {
+      const proj = rentalProject.get(String(rp.rental_id))
+      if (proj) rentalsPaidByProject.set(proj, (rentalsPaidByProject.get(proj) ?? 0) + n(rp.amount))
+    }
+    const groupSum = (rows: Array<Record<string, unknown>>, valKey: string): Map<string, number> => {
+      const m = new Map<string, number>()
+      for (const r of rows) { const pid = r.project_id as string | null; if (pid) m.set(pid, (m.get(pid) ?? 0) + n(r[valKey])) }
+      return m
+    }
+    const boxByProject = groupSum(d.cashEntries as Array<Record<string, unknown>>, 'amount')
+    const overtimeByProject = groupSum(d.dailyLogs as Array<Record<string, unknown>>, 'overtime_amount')
+    const histByProject = groupSum(d.laborEntries as Array<Record<string, unknown>>, 'amount')
 
     let totalContracts = 0, totalAllCosts = 0, totalReceivedAll = 0
 
     d.projects.forEach((p, i) => {
-      const pid = (p as { id?: string }).id
-      const contract = n(p.contract_value)
-
-      const projVOs = d.vos.filter(v => v.project_id === pid && (v.status === 'approved' || v.status === 'معتمد'))
-      const voTotal = projVOs.reduce((s, v) => s + n(v.amount), 0)
-
-      const cashCost = d.cashEntries.filter(c => c.project_id === pid).reduce((s, c) => s + n(c.amount), 0)
-      const supplierCost = d.purchaseInvoices.filter(pi => pi.project_id === pid).reduce((s, pi) => s + n(pi.amount), 0)
-      const subCost = d.subPayments.filter(sp => sp.project_id === pid).reduce((s, sp) => s + n(sp.amount), 0)
-      const totalCost = cashCost + supplierCost + subCost
+      const pid = String((p as { id?: string }).id ?? '')
+      const fin = computeProjectProfit({
+        contractValue: n(p.contract_value),
+        vos: (d.vos as Array<Record<string, unknown>>).filter(v => v.project_id === pid) as unknown as Array<{ status?: string | null; billable?: boolean | null; amount: number | null }>,
+        boxExpenses: boxByProject.get(pid) ?? 0,
+        purchases: (d.purchaseInvoices as Array<Record<string, unknown>>).filter(x => x.project_id === pid) as unknown as Array<PurchaseLike & { id?: string }>,
+        subPayments: (d.subPayments as Array<Record<string, unknown>>).filter(x => x.project_id === pid) as unknown as Array<SubPaymentLike & { id?: string }>,
+        rentalsPaid: rentalsPaidByProject.get(pid) ?? 0,
+        attendance: (d.attendance as Array<Record<string, unknown>>).filter(a => a.project_id === pid) as unknown as Array<{ worker_id: string; status?: string | null }>,
+        workersById,
+        overtime: overtimeByProject.get(pid) ?? 0,
+        histLabor: histByProject.get(pid) ?? 0,
+        pendingPurchaseIds: pending.purchaseIds,
+        pendingSubIds: pending.subPaymentIds,
+      })
 
       const received = d.receipts.filter(r => r.project_id === pid).reduce((s, r) => s + n(r.amount), 0)
-
-      const revenue = contract + voTotal
-      const profit = revenue - totalCost
+      const contract = n(p.contract_value)
+      const revenue = fin.revenue
+      const totalCost = fin.totalExpenses
+      const profit = fin.netProfit
       const margin = revenue > 0 ? (profit / revenue) * 100 : 0
       const outstanding = revenue - received
+      const laborAll = fin.laborCost + fin.overtime + fin.histLabor
 
       totalContracts += revenue
       totalAllCosts += totalCost
       totalReceivedAll += received
 
       lines.push(`\n${i + 1}. ${p.project_name} — ${p.client_name} (${p.location || 'بدون موقع'}) [${p.status}]`)
-      lines.push(`   الإيراد: ${fmt(revenue)} (عقد ${fmt(contract)}${voTotal ? ' + أوامر تغيير ' + fmt(voTotal) : ''})`)
-      lines.push(`   التكاليف: ${fmt(totalCost)} (صندوق ${fmt(cashCost)} + موردين ${fmt(supplierCost)} + مقاولين ${fmt(subCost)})`)
+      lines.push(`   الإيراد: ${fmt(revenue)} (عقد ${fmt(contract)}${revenue - contract ? ' + أوامر تغيير ' + fmt(revenue - contract) : ''})`)
+      lines.push(`   التكاليف: ${fmt(totalCost)} (صندوق ${fmt(fin.boxExpenses)} + موردين ${fmt(fin.purchasePaid)} + مقاولين ${fmt(fin.subPaid)} + عمالة ${fmt(laborAll)} + إيجارات ${fmt(fin.rentalsPaid)})`)
       lines.push(`   ${profit >= 0 ? 'الربح' : 'الخسارة'}: ${fmt(profit)} (هامش ${margin.toFixed(1)}%)`)
       lines.push(`   المقبوض: ${fmt(received)} | المتبقي على العميل: ${fmt(outstanding)}`)
     })
