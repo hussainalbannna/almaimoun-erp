@@ -726,7 +726,7 @@ export default function AssetList() {
         next_service_odometer: maintForm.next_service_odometer ? Number(maintForm.next_service_odometer) : null,
         expense_id: expenseId,
       })
-      if (error) throw error
+      if (error) { if (expenseId) await supabase.from('accounts_payable').delete().eq('id', expenseId); throw error }
       toast.success('تم تسجيل الصيانة')
       setMaintForm(newMaintForm()); setShowMaintForm(false)
       await loadMaintenance(editId); await loadExpenses(editId)
@@ -775,7 +775,7 @@ export default function AssetList() {
         notes: fuelForm.notes || null,
         expense_id: expenseId,
       })
-      if (error) throw error
+      if (error) { if (expenseId) await supabase.from('accounts_payable').delete().eq('id', expenseId); throw error }
       toast.success('تم تسجيل التعبئة')
       setFuelForm(newFuelForm()); setShowFuelForm(false)
       await loadFuel(editId); await loadExpenses(editId)
@@ -829,7 +829,7 @@ export default function AssetList() {
         resolved: incidentForm.resolved,
         expense_id: expenseId,
       })
-      if (error) throw error
+      if (error) { if (expenseId) await supabase.from('accounts_payable').delete().eq('id', expenseId); throw error }
       toast.success('تم تسجيل الحادث')
       setIncidentForm(newIncidentForm()); setShowIncidentForm(false)
       await loadIncidents(editId); await loadExpenses(editId)
@@ -868,7 +868,7 @@ export default function AssetList() {
       const toProjectName = moveForm.to_project_id ? projectName(moveForm.to_project_id) : null
       const { data: current } = await supabase.from('assets').select('current_location').eq('id', editId).single()
       const fromLocation = (current as { current_location: string | null } | null)?.current_location ?? null
-      const { error } = await supabase.from('asset_movements').insert({
+      const { data: inserted, error } = await supabase.from('asset_movements').insert({
         asset_id: editId,
         movement_date: moveForm.movement_date || null,
         from_location: fromLocation,
@@ -877,13 +877,13 @@ export default function AssetList() {
         project_name: toProjectName,
         moved_by: moveForm.moved_by || null,
         notes: moveForm.notes || null,
-      })
+      }).select('id').single()
       if (error) throw error
       const newLocation = moveForm.to_location.trim() || toProjectName || fromLocation
       const { error: updErr } = await supabase.from('assets')
         .update({ current_location: newLocation, current_project_id: moveForm.to_project_id || null })
         .eq('id', editId)
-      if (updErr) throw updErr
+      if (updErr) { await supabase.from('asset_movements').delete().eq('id', (inserted as { id: string }).id); throw updErr }
       setForm(f => ({ ...f, current_location: newLocation ?? '', current_project_id: moveForm.to_project_id || '' }))
       toast.success('تم تسجيل الحركة وتحديث الموقع الحالي')
       setMoveForm(newMoveForm()); setShowMoveForm(false)
@@ -972,7 +972,7 @@ export default function AssetList() {
         notes: partForm.notes || null,
         expense_id: expenseId,
       })
-      if (error) throw error
+      if (error) { if (expenseId) await supabase.from('accounts_payable').delete().eq('id', expenseId); throw error }
       toast.success('تم تسجيل القطعة')
       setPartForm(newPartForm()); setShowPartForm(false)
       await loadParts(editId); await loadExpenses(editId)
@@ -1129,7 +1129,7 @@ export default function AssetList() {
       if (expErr) { toast.error('تعذّر قيد القسط في المصاريف'); return }
       const { error: updErr } = await supabase.from('asset_installments')
         .update({ status: 'paid', paid_date: today, expense_id: (exp as { id: string }).id }).eq('id', row.id)
-      if (updErr) { toast.error('تعذّر تحديث القسط'); return }
+      if (updErr) { await supabase.from('accounts_payable').delete().eq('id', (exp as { id: string }).id); toast.error('تعذّر تحديث القسط'); return }
       const { data: after } = await supabase.from('asset_installments').select('due_date, status').eq('asset_id', editId).order('seq')
       const rows2 = (after ?? []) as { due_date: string | null; status: string }[]
       const paidCount = rows2.filter(r => r.status === 'paid').length
