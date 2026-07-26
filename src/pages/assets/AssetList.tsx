@@ -205,6 +205,18 @@ interface AssetIncident {
 }
 const newIncidentForm = () => ({ incident_date: new Date().toISOString().slice(0, 10), incident_type: 'accident', severity: 'minor', description: '', location: '', driver: '', cost: '', insurance_claim: false, claim_number: '', claim_amount: '', claim_status: 'none', resolved: false })
 
+interface AssetMovement {
+  id: string
+  movement_date: string | null
+  from_location: string | null
+  to_location: string | null
+  project_id: string | null
+  project_name: string | null
+  moved_by: string | null
+  notes: string | null
+}
+const newMoveForm = () => ({ movement_date: new Date().toISOString().slice(0, 10), to_location: '', to_project_id: '', moved_by: '', notes: '' })
+
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -280,6 +292,10 @@ export default function AssetList() {
   const [showIncidentForm, setShowIncidentForm] = useState(false)
   const [incidentBusy, setIncidentBusy] = useState(false)
   const [incidentForm, setIncidentForm] = useState(newIncidentForm())
+  const [movements, setMovements] = useState<AssetMovement[]>([])
+  const [showMoveForm, setShowMoveForm] = useState(false)
+  const [moveBusy, setMoveBusy] = useState(false)
+  const [moveForm, setMoveForm] = useState(newMoveForm())
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -350,7 +366,14 @@ export default function AssetList() {
     setIncidents((data ?? []) as AssetIncident[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setIncidents([]); setShowIncidentForm(false); setIncidentForm(newIncidentForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  const loadMovements = async (assetId: string) => {
+    const { data } = await supabase.from('asset_movements')
+      .select('id, movement_date, from_location, to_location, project_id, project_name, moved_by, notes')
+      .eq('asset_id', assetId).order('movement_date', { ascending: false }).order('created_at', { ascending: false })
+    setMovements((data ?? []) as AssetMovement[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setIncidents([]); setShowIncidentForm(false); setIncidentForm(newIncidentForm()); setMovements([]); setShowMoveForm(false); setMoveForm(newMoveForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -378,6 +401,9 @@ export default function AssetList() {
     setIncidents([])
     setShowIncidentForm(false)
     setIncidentForm(newIncidentForm())
+    setMovements([])
+    setShowMoveForm(false)
+    setMoveForm(newMoveForm())
     setShowExpForm(false)
     setExpForm(newExpForm())
     loadDocs(a.id)
@@ -386,6 +412,7 @@ export default function AssetList() {
     loadMaintenance(a.id)
     loadFuel(a.id)
     loadIncidents(a.id)
+    loadMovements(a.id)
     setShowForm(true)
   }
 
@@ -422,7 +449,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setShowExpForm(false); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -703,6 +730,44 @@ export default function AssetList() {
       await supabase.from('asset_incidents').delete().eq('id', rec.id)
       toast.success('تم حذف الحادث')
       if (editId) { await loadIncidents(editId); await loadExpenses(editId) }
+    } catch { toast.error('تعذّر الحذف') }
+  }
+
+  const addMovement = async () => {
+    if (!editId) return
+    if (!moveForm.to_location.trim() && !moveForm.to_project_id) { toast.error('أدخل الموقع أو المشروع الجديد'); return }
+    setMoveBusy(true)
+    try {
+      const toProjectName = moveForm.to_project_id ? projectName(moveForm.to_project_id) : null
+      const { error } = await supabase.from('asset_movements').insert({
+        asset_id: editId,
+        movement_date: moveForm.movement_date || null,
+        from_location: form.current_location || null,
+        to_location: moveForm.to_location.trim() || toProjectName,
+        project_id: moveForm.to_project_id || null,
+        project_name: toProjectName,
+        moved_by: moveForm.moved_by || null,
+        notes: moveForm.notes || null,
+      })
+      if (error) throw error
+      const newLocation = moveForm.to_location.trim() || toProjectName || form.current_location
+      const { error: updErr } = await supabase.from('assets')
+        .update({ current_location: newLocation, current_project_id: moveForm.to_project_id || null })
+        .eq('id', editId)
+      if (updErr) throw updErr
+      setForm(f => ({ ...f, current_location: newLocation ?? '', current_project_id: moveForm.to_project_id || '' }))
+      toast.success('تم تسجيل الحركة وتحديث الموقع الحالي')
+      setMoveForm(newMoveForm()); setShowMoveForm(false)
+      await loadMovements(editId); reload()
+    } catch (e) { toast.error('تعذّر التسجيل: ' + ((e as Error)?.message ?? '')) }
+    finally { setMoveBusy(false) }
+  }
+
+  const deleteMovement = async (rec: AssetMovement) => {
+    try {
+      await supabase.from('asset_movements').delete().eq('id', rec.id)
+      toast.success('تم حذف الحركة')
+      if (editId) await loadMovements(editId)
     } catch { toast.error('تعذّر الحذف') }
   }
 
@@ -1397,6 +1462,73 @@ export default function AssetList() {
           </div>
 
           <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <MapPin size={16} className="text-amber-600" />
+                <span className="text-sm font-semibold text-slate-700">سجل حركة الأصل</span>
+                {movements.length > 0 && <span className="text-xs text-slate-400">({movements.length})</span>}
+              </div>
+              {editId && (
+                <button type="button" onClick={() => setShowMoveForm(v => !v)} className="text-xs text-amber-700 hover:text-amber-800 flex items-center gap-1">
+                  <Plus size={13} /> تسجيل حركة
+                </button>
+              )}
+            </div>
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل حركته.</div>
+            ) : (
+              <>
+                {showMoveForm && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
+                    <div className="text-xs text-slate-500">من: <span className="font-medium text-slate-700">{form.current_location || '—'}</span>{projectName(form.current_project_id || null) ? ` · ${projectName(form.current_project_id || null)}` : ''}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="التاريخ" type="date" value={moveForm.movement_date} onChange={e => setMoveForm(p => ({ ...p, movement_date: e.target.value }))} />
+                      <Input label="الموقع الجديد" value={moveForm.to_location} onChange={e => setMoveForm(p => ({ ...p, to_location: e.target.value }))} />
+                    </div>
+                    <Select label="المشروع الجديد (اختياري)" options={projectOptions} value={moveForm.to_project_id} onChange={e => setMoveForm(p => ({ ...p, to_project_id: e.target.value }))} />
+                    <Input label="بواسطة (اختياري)" value={moveForm.moved_by} onChange={e => setMoveForm(p => ({ ...p, moved_by: e.target.value }))} />
+                    <Input label="ملاحظات (اختياري)" value={moveForm.notes} onChange={e => setMoveForm(p => ({ ...p, notes: e.target.value }))} />
+                    <div className="flex gap-2">
+                      <Button loading={moveBusy} onClick={addMovement}>تسجيل الحركة</Button>
+                      <Button variant="secondary" onClick={() => { setShowMoveForm(false); setMoveForm(newMoveForm()) }}>إلغاء</Button>
+                    </div>
+                    <p className="text-xs text-slate-400">تسجيل الحركة يحدّث «الموقع الحالي» و«المشروع الحالي» للأصل تلقائيًا.</p>
+                  </div>
+                )}
+                {movements.length === 0 ? (
+                  <div className="text-sm text-slate-400 text-center py-4 border border-dashed border-slate-200 rounded-lg">لا يوجد سجل حركة بعد</div>
+                ) : (
+                  <div className="relative pr-4">
+                    <div className="absolute top-1 bottom-1 right-1 w-px bg-slate-200" />
+                    <div className="space-y-3">
+                      {movements.map(m => (
+                        <div key={m.id} className="relative">
+                          <div className="absolute right-[-11px] top-1.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white" />
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 text-sm text-slate-800 flex-wrap">
+                                {m.from_location && <><span className="text-slate-400">{m.from_location}</span><span className="text-amber-500">←</span></>}
+                                <span className="font-semibold">{m.to_location || '—'}</span>
+                              </div>
+                              <div className="text-xs text-slate-400 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                                <span>{m.movement_date ? formatDate(m.movement_date) : '—'}</span>
+                                {m.project_name && <span className="inline-flex items-center gap-1"><Building2 size={11} /> {m.project_name}</span>}
+                                {m.moved_by && <span>👤 {m.moved_by}</span>}
+                              </div>
+                              {m.notes && <p className="text-xs text-slate-500 mt-0.5 break-words">{m.notes}</p>}
+                            </div>
+                            <button type="button" onClick={() => deleteMovement(m)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 shrink-0"><Trash2 size={14} /></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
             <div className="flex items-center gap-2 mb-3">
               <Paperclip size={16} className="text-amber-600" />
               <span className="text-sm font-semibold text-slate-700">المستندات والصور</span>
@@ -1462,7 +1594,7 @@ export default function AssetList() {
 
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
             {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
