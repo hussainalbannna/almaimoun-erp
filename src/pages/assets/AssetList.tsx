@@ -186,7 +186,6 @@ const CLAIM_STATUS_OPTS = [
   { value: 'paid', label: 'مُسدَّدة' },
   { value: 'rejected', label: 'مرفوضة' },
 ]
-const CLAIM_STATUS_LABEL: Record<string, string> = Object.fromEntries(CLAIM_STATUS_OPTS.map(t => [t.value, t.label]))
 
 interface AssetIncident {
   id: string
@@ -689,6 +688,13 @@ export default function AssetList() {
       await supabase.from('asset_incidents').update({ resolved: !rec.resolved }).eq('id', rec.id)
       if (editId) await loadIncidents(editId)
     } catch { toast.error('تعذّر التحديث') }
+  }
+
+  const updateClaimStatus = async (rec: AssetIncident, status: string) => {
+    try {
+      await supabase.from('asset_incidents').update({ claim_status: status }).eq('id', rec.id)
+      if (editId) await loadIncidents(editId)
+    } catch { toast.error('تعذّر تحديث حالة المطالبة') }
   }
 
   const deleteIncident = async (rec: AssetIncident) => {
@@ -1365,10 +1371,13 @@ export default function AssetList() {
                                   {x.cost > 0 && <span className="text-red-600 font-medium" dir="ltr">{formatCurrency(Number(x.cost))}</span>}
                                 </div>
                                 {x.insurance_claim && (
-                                  <div className="text-xs mt-1 inline-flex items-center gap-1 bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-600">
-                                    تأمين: {CLAIM_STATUS_LABEL[x.claim_status ?? 'none']}
-                                    {x.claim_number ? ` · #${x.claim_number}` : ''}
-                                    {x.claim_amount ? ` · ` : ''}{x.claim_amount ? <span dir="ltr" className="text-emerald-600 font-medium">{formatCurrency(Number(x.claim_amount))}</span> : null}
+                                  <div className="text-xs mt-1 inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded px-2 py-1 text-slate-600 flex-wrap">
+                                    <span>تأمين:</span>
+                                    <select value={x.claim_status ?? 'none'} onChange={e => updateClaimStatus(x, e.target.value)} className="text-xs bg-slate-50 border border-slate-200 rounded px-1 py-0.5 text-slate-700 focus:outline-none focus:ring-1 focus:ring-amber-400">
+                                      {CLAIM_STATUS_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                    </select>
+                                    {x.claim_number ? <span>· #{x.claim_number}</span> : null}
+                                    {x.claim_amount ? <span dir="ltr" className="text-emerald-600 font-medium">· {formatCurrency(Number(x.claim_amount))}</span> : null}
                                   </div>
                                 )}
                               </div>
