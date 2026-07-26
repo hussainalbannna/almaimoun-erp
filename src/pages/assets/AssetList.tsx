@@ -315,6 +315,9 @@ const fileToData = async (f: File): Promise<string> => (f.type.startsWith('image
 export default function AssetList() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
+  const [showReport, setShowReport] = useState(false)
+  const [reportBusy, setReportBusy] = useState(false)
+  const [reportExpenses, setReportExpenses] = useState<Record<string, number>>({})
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
@@ -945,6 +948,48 @@ export default function AssetList() {
     } catch { toast.error('تعذّر الحذف') }
   }
 
+  const openReport = async () => {
+    setReportBusy(true); setShowReport(true)
+    try {
+      const { data } = await supabase.from('accounts_payable').select('asset_id, amount').not('asset_id', 'is', null)
+      const map: Record<string, number> = {}
+      for (const r of (data ?? []) as { asset_id: string; amount: number }[]) {
+        if (r.asset_id) map[r.asset_id] = (map[r.asset_id] || 0) + Number(r.amount || 0)
+      }
+      setReportExpenses(map)
+    } catch { toast.error('تعذّر تحميل بيانات التقرير') }
+    finally { setReportBusy(false) }
+  }
+
+  const buildReportRows = () => assets.map(a => {
+    const purchase = Number(a.purchase_value || 0)
+    const dep = computeDepreciation(purchase, a.purchase_date, Number(a.useful_life_years || 0), Number(a.salvage_value || 0), a.disposal_date ? new Date(a.disposal_date).getTime() : undefined)
+    const bookAtRef = dep ? dep.bookValue : purchase
+    const disposed = !!a.disposal_date
+    const proceeds = Number(a.disposal_amount || 0)
+    const gain = disposed ? proceeds - bookAtRef : null
+    return { a, purchase, bookValue: disposed ? 0 : bookAtRef, expenses: reportExpenses[a.id] || 0, disposed, proceeds, gain }
+  })
+
+  const exportReportCsv = () => {
+    const rows = buildReportRows()
+    const header = ['الأصل', 'النوع', 'الحالة', 'تاريخ الشراء', 'قيمة الشراء', 'القيمة الدفترية', 'إجمالي المصاريف', 'حصيلة البيع', 'ربح/خسارة الاستبعاد']
+    const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`
+    const body = rows.map(r => [
+      r.a.name ?? '', ASSET_TYPE_LABELS[r.a.asset_type] ?? r.a.asset_type ?? '', STATUS_LABELS[r.a.status] ?? r.a.status ?? '',
+      r.a.purchase_date ?? '', r.purchase.toFixed(3), r.disposed ? '' : r.bookValue.toFixed(3),
+      r.expenses.toFixed(3), r.disposed ? r.proceeds.toFixed(3) : '', r.gain != null ? r.gain.toFixed(3) : '',
+    ])
+    const csv = '﻿' + [header, ...body].map(row => row.map(esc).join(',')).join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'تقرير_الأصول.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   // حذف الأصل: يحذف مستنداته ومرفقاتها من التخزين. مصاريفه في accounts_payable تبقى سجلاً مالياً (asset_id=null تلقائياً)
   const deleteAsset = async () => {
     if (!editId) return
@@ -1101,7 +1146,10 @@ export default function AssetList() {
           <h1 className="text-2xl font-bold text-slate-800">الأصول والمعدات</h1>
           <p className="text-slate-500 text-sm">{assets.length} أصل مسجل</p>
         </div>
-        <Button icon={<Plus size={16} />} onClick={openNew}>إضافة أصل</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" icon={<FileText size={16} />} onClick={openReport}>التقرير الشامل</Button>
+          <Button icon={<Plus size={16} />} onClick={openNew}>إضافة أصل</Button>
+        </div>
       </div>
 
       {installmentAssets.length > 0 && (
@@ -2087,6 +2135,89 @@ export default function AssetList() {
           </div>
         </div>
       )}
+
+      {showReport && (() => {
+        const rows = buildReportRows()
+        const active = rows.filter(r => !r.disposed)
+        const totalBook = active.reduce((s, r) => s + r.bookValue, 0)
+        const totalPurchaseActive = active.reduce((s, r) => s + r.purchase, 0)
+        const totalExpenses = rows.reduce((s, r) => s + r.expenses, 0)
+        const totalGain = rows.reduce((s, r) => s + (r.gain ?? 0), 0)
+        return (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto" onClick={() => setShowReport(false)}>
+            <style>{`@media print { body * { visibility: hidden !important; } #assets-report-print, #assets-report-print * { visibility: visible !important; } #assets-report-print { position: absolute; top: 0; right: 0; left: 0; padding: 12px; } .no-print { display: none !important; } table { page-break-inside: auto } tr { page-break-inside: avoid } }`}</style>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl my-4" onClick={e => e.stopPropagation()} dir="rtl">
+              <div className="flex items-center justify-between p-4 border-b border-slate-100 no-print">
+                <h2 className="text-lg font-bold text-slate-800">التقرير الشامل للأصول</h2>
+                <div className="flex items-center gap-2">
+                  <Button variant="secondary" icon={<Download size={15} />} onClick={exportReportCsv}>تصدير Excel</Button>
+                  <Button variant="secondary" onClick={() => window.print()}>طباعة / PDF</Button>
+                  <button onClick={() => setShowReport(false)} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"><X size={18} /></button>
+                </div>
+              </div>
+              <div id="assets-report-print" className="p-4">
+                <div className="mb-3">
+                  <h2 className="text-lg font-bold text-slate-800">شركة الميمون للمقاولات — سجل الأصول والمعدات</h2>
+                  <p className="text-xs text-slate-500">تاريخ التقرير: {formatDate((() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })())} · عدد الأصول: {rows.length}</p>
+                </div>
+                {reportBusy ? (
+                  <div className="py-12 text-center text-slate-400">جارٍ تجميع المصاريف...</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-center text-xs">
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">قيمة شراء الأصول النشطة</div><div className="font-bold text-slate-800" dir="ltr">{formatCurrency(totalPurchaseActive)}</div></div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">القيمة الدفترية الحالية</div><div className="font-bold text-emerald-700" dir="ltr">{formatCurrency(totalBook)}</div></div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">إجمالي المصاريف</div><div className="font-bold text-red-600" dir="ltr">{formatCurrency(totalExpenses)}</div></div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">صافي ربح/خسارة الاستبعادات</div><div className={`font-bold ${totalGain >= 0 ? 'text-emerald-600' : 'text-red-600'}`} dir="ltr">{formatCurrency(totalGain)}</div></div>
+                    </div>
+                    <div className="border border-slate-200 rounded-lg overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 text-slate-500">
+                          <tr>
+                            <th className="px-2 py-2 text-right font-medium">الأصل</th>
+                            <th className="px-2 py-2 text-right font-medium">النوع</th>
+                            <th className="px-2 py-2 text-right font-medium">الحالة</th>
+                            <th className="px-2 py-2 text-right font-medium">تاريخ الشراء</th>
+                            <th className="px-2 py-2 text-right font-medium">قيمة الشراء</th>
+                            <th className="px-2 py-2 text-right font-medium">القيمة الدفترية</th>
+                            <th className="px-2 py-2 text-right font-medium">المصاريف</th>
+                            <th className="px-2 py-2 text-right font-medium">ربح/خسارة البيع</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {rows.map(r => (
+                            <tr key={r.a.id} className={r.disposed ? 'bg-slate-50/60 text-slate-400' : ''}>
+                              <td className="px-2 py-1.5 font-medium text-slate-700">{r.a.name}</td>
+                              <td className="px-2 py-1.5">{ASSET_TYPE_LABELS[r.a.asset_type] ?? r.a.asset_type}</td>
+                              <td className="px-2 py-1.5">{STATUS_LABELS[r.a.status] ?? r.a.status}</td>
+                              <td className="px-2 py-1.5 whitespace-nowrap">{r.a.purchase_date ? formatDate(r.a.purchase_date) : '—'}</td>
+                              <td className="px-2 py-1.5 whitespace-nowrap" dir="ltr">{formatCurrency(r.purchase)}</td>
+                              <td className="px-2 py-1.5 whitespace-nowrap" dir="ltr">{r.disposed ? '—' : formatCurrency(r.bookValue)}</td>
+                              <td className="px-2 py-1.5 whitespace-nowrap text-red-600" dir="ltr">{formatCurrency(r.expenses)}</td>
+                              <td className="px-2 py-1.5 whitespace-nowrap" dir="ltr">{r.gain != null ? <span className={r.gain >= 0 ? 'text-emerald-600' : 'text-red-600'}>{formatCurrency(r.gain)}</span> : '—'}</td>
+                            </tr>
+                          ))}
+                          {rows.length === 0 && <tr><td colSpan={8} className="px-2 py-6 text-center text-slate-400">لا توجد أصول مسجّلة</td></tr>}
+                        </tbody>
+                        <tfoot className="bg-slate-50 font-bold text-slate-700">
+                          <tr>
+                            <td className="px-2 py-2" colSpan={4}>الإجمالي (النشطة)</td>
+                            <td className="px-2 py-2 whitespace-nowrap" dir="ltr">{formatCurrency(totalPurchaseActive)}</td>
+                            <td className="px-2 py-2 whitespace-nowrap" dir="ltr">{formatCurrency(totalBook)}</td>
+                            <td className="px-2 py-2 whitespace-nowrap text-red-600" dir="ltr">{formatCurrency(totalExpenses)}</td>
+                            <td className="px-2 py-2 whitespace-nowrap" dir="ltr">{formatCurrency(totalGain)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-2">القيمة الدفترية = قيمة الشراء ناقص مجمع الإهلاك (قسط ثابت). الأصول المستبعدة تُستثنى من إجمالي القيمة الدفترية.</p>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
