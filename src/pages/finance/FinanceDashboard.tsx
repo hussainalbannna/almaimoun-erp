@@ -36,13 +36,14 @@ interface SubPayRow { id: string; amount: number | null; payment_date: string | 
 interface AttendRow { worker_id: string | null; attendance_date: string | null }
 interface WorkerRow { id: string; pay_type: string | null; daily_rate: number | null; actual_salary: number | null; basic_salary: number | null; social_allowance: number | null }
 interface OtRow { amount: number | null; created_at: string | null }
+interface RentalPayRow { amount: number | null; payment_date: string | null; payment_method: string | null }
 
 interface FinanceData { income: Row[]; expenses: Row[] }
 const EMPTY_DATA: FinanceData = { income: [], expenses: [] }
 
 // جلب وبناء الإيرادات (المقبوضات) والمصروفات (الصندوق + المشتريات + الباطن + رواتب العمالة من الحضور + الأوفرتايم) — مصدر React Query
 async function fetchFinanceData(): Promise<FinanceData> {
-  const [receipts, cashbook, purchases, subPay, attendance, workers, overtime, cheques] = await Promise.all([
+  const [receipts, cashbook, purchases, subPay, attendance, workers, overtime, rentalPayments, cheques] = await Promise.all([
     safeSelect<ReceiptRow>('receipts', 'amount,receipt_date'),
     safeSelect<CashbookRow>('accounts_payable', 'amount,entry_date,category'),
     safeSelect<PurchaseRow>('purchase_invoices', 'id,amount,entry_date,created_at'),
@@ -50,6 +51,7 @@ async function fetchFinanceData(): Promise<FinanceData> {
     safeSelect<AttendRow>('worker_attendance', 'worker_id,attendance_date'),
     safeSelect<WorkerRow>('workers', 'id,pay_type,daily_rate,actual_salary,basic_salary,social_allowance'),
     safeSelect<OtRow>('daily_log_overtime', 'amount,created_at'),
+    safeSelect<RentalPayRow>('rental_payments', 'amount,payment_date,payment_method'),
     fetchCheques(),
   ])
 
@@ -75,6 +77,10 @@ async function fetchFinanceData(): Promise<FinanceData> {
     ...attendance.map(a => ({ amount: (a.worker_id ? dayCostById.get(a.worker_id) : 0) || 0, date: a.attendance_date || '', category: 'salaries' })),
     // العمل الإضافي (الأوفرتايم) المسجّل في التقارير اليومية
     ...overtime.map(o => ({ amount: Number(o.amount) || 0, date: (o.created_at || '').slice(0, 10), category: 'salaries' })),
+    // الإيجارات: دفعات الإيجار الفعلية، مع استبعاد ما دُفع بشيك آجل لم يُصرف بعد (نفس قاعدة اللوحة النقدية)
+    ...rentalPayments
+      .filter(rp => rp.payment_method !== 'deferred_cheque')
+      .map(rp => ({ amount: Number(rp.amount) || 0, date: rp.payment_date || '', category: 'rent' })),
   ]
   return { income, expenses }
 }
