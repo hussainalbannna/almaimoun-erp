@@ -50,6 +50,7 @@ interface Asset {
   disposal_type: string | null
   disposal_amount: number | null
   disposal_notes: string | null
+  archived: boolean
 }
 
 interface AssetDoc {
@@ -317,6 +318,10 @@ const fileToData = async (f: File): Promise<string> => (f.type.startsWith('image
 export default function AssetList() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
+  const [filterType, setFilterType] = useState('')
+  const [filterStatus, setFilterStatus] = useState('')
+  const [sortBy, setSortBy] = useState('name')
+  const [showArchived, setShowArchived] = useState(false)
   const [showReport, setShowReport] = useState(false)
   const [reportBusy, setReportBusy] = useState(false)
   const [reportExpenses, setReportExpenses] = useState<Record<string, number>>({})
@@ -1040,6 +1045,35 @@ export default function AssetList() {
     finally { setDeleting(false) }
   }
 
+  const cloneCurrent = () => {
+    setEditId(null)
+    setForm(f => ({
+      ...emptyForm,
+      name: f.name ? `${f.name} (نسخة)` : '',
+      asset_type: f.asset_type,
+      purchase_value: f.purchase_value,
+      current_location: f.current_location,
+      useful_life_years: f.useful_life_years,
+      salvage_value: f.salvage_value,
+      custodian: f.custodian,
+      current_project_id: f.current_project_id,
+    }))
+    setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setFuel([]); setIncidents([]); setMovements([]); setParts([]); setDisposal(null); setCoverPath(null)
+    setShowMaintForm(false); setShowFuelForm(false); setShowIncidentForm(false); setShowMoveForm(false); setShowDisposeForm(false); setShowPartForm(false); setShowExpForm(false)
+    toast('نسخة جديدة — عدّل التفاصيل ثم احفظ')
+  }
+
+  const archiveAsset = async (archived: boolean) => {
+    if (!editId) return
+    try {
+      const { error } = await supabase.from('assets').update({ archived }).eq('id', editId)
+      if (error) throw error
+      toast.success(archived ? 'تمت أرشفة الأصل' : 'تم إلغاء الأرشفة')
+      setShowForm(false); setEditId(null)
+      reload()
+    } catch (e) { toast.error('تعذّر التحديث: ' + ((e as Error)?.message ?? '')) }
+  }
+
   // توليد جدول أقساط تفصيلي من خطة التمويل (يمسح القديم ويعيد التوليد)
   const generateSchedule = async () => {
     if (!editId) return
@@ -1160,12 +1194,23 @@ export default function AssetList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assets, searchParams])
 
-  const filtered = useMemo(() =>
-    assets.filter(a =>
-      (a.name || '').includes(search) || (a.plate_number || '').includes(search) || (a.current_location || '').includes(search)
-    ),
-    [assets, search],
-  )
+  const filtered = useMemo(() => {
+    const rows = assets.filter(a => {
+      if (a.archived !== showArchived) return false
+      const q = search.trim()
+      if (q && !((a.name || '').includes(q) || (a.plate_number || '').includes(q) || (a.current_location || '').includes(q))) return false
+      if (filterType && a.asset_type !== filterType) return false
+      if (filterStatus && a.status !== filterStatus) return false
+      return true
+    })
+    const sorted = [...rows]
+    if (sortBy === 'value') sorted.sort((a, b) => Number(b.purchase_value || 0) - Number(a.purchase_value || 0))
+    else if (sortBy === 'newest') sorted.sort((a, b) => (b.purchase_date || '').localeCompare(a.purchase_date || ''))
+    else sorted.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ar'))
+    return sorted
+  }, [assets, search, filterType, filterStatus, sortBy, showArchived])
+
+  const archivedCount = useMemo(() => assets.filter(a => a.archived).length, [assets])
 
   const { installmentAssets, totalRemaining, dueSoon } = useMemo(() => {
     const installmentAssets = assets.filter(a => a.payment_method === 'installment')
@@ -2046,6 +2091,18 @@ export default function AssetList() {
               </button>
             )}
             {editId && (
+              <button type="button" onClick={cloneCurrent}
+                className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-amber-700 px-3 py-2 rounded-lg hover:bg-amber-50 border border-slate-200">
+                <Plus size={15} /> استنساخ
+              </button>
+            )}
+            {editId && (
+              <button type="button" onClick={() => archiveAsset(!assets.find(a => a.id === editId)?.archived)}
+                className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-amber-700 px-3 py-2 rounded-lg hover:bg-amber-50 border border-slate-200">
+                {assets.find(a => a.id === editId)?.archived ? 'إلغاء الأرشفة' : 'أرشفة'}
+              </button>
+            )}
+            {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
                 <Trash2 size={15} /> حذف الأصل
@@ -2080,15 +2137,32 @@ export default function AssetList() {
         </div>
       )}
 
-      <div className="mb-4">
-        <input className="w-full max-w-sm h-9 px-4 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <input className="h-9 px-4 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 min-w-[220px] flex-1 max-w-sm"
           placeholder="بحث بالاسم أو اللوحة أو الموقع..." value={search} onChange={e => setSearch(e.target.value)} />
+        <select value={filterType} onChange={e => setFilterType(e.target.value)} className="h-9 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30">
+          <option value="">كل الأنواع</option>
+          {ASSET_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="h-9 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30">
+          <option value="">كل الحالات</option>
+          {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="h-9 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30">
+          <option value="name">ترتيب: الاسم</option>
+          <option value="value">ترتيب: الأعلى قيمة</option>
+          <option value="newest">ترتيب: الأحدث شراءً</option>
+        </select>
+        <button type="button" onClick={() => setShowArchived(v => !v)}
+          className={`h-9 px-3 rounded-lg text-sm border transition-colors ${showArchived ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'}`}>
+          {showArchived ? 'عرض النشطة' : `المؤرشفة${archivedCount > 0 ? ` (${archivedCount})` : ''}`}
+        </button>
       </div>
 
       {filtered.length === 0 ? (
         <div className="text-center py-16 text-slate-400">
           <Truck size={48} className="mx-auto mb-3 opacity-40" />
-          <p>لا توجد أصول مسجلة</p>
+          <p>{showArchived ? 'لا توجد أصول مؤرشفة' : (search || filterType || filterStatus ? 'لا توجد نتائج مطابقة للبحث' : 'لا توجد أصول مسجلة')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2206,7 +2280,7 @@ export default function AssetList() {
 
       <ConfirmDialog open={confirmDelete} title="حذف الأصل"
         message="سيتم حذف الأصل ومستنداته وصوره نهائياً. مصاريفه المسجّلة تبقى في دفتر المصاريف كسجل مالي. متابعة؟"
-        confirmLabel={deleting ? 'جارٍ الحذف...' : 'حذف'} danger onConfirm={deleteAsset} onCancel={() => setConfirmDelete(false)} />
+        confirmLabel={deleting ? 'جارٍ الحذف...' : 'حذف'} danger loading={deleting} onConfirm={deleteAsset} onCancel={() => setConfirmDelete(false)} />
 
       {previewImg && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setPreviewImg(null)}>
