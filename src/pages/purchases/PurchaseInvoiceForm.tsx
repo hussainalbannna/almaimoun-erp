@@ -8,7 +8,7 @@ import { supabase } from '../../lib/supabase'
 import { todayLocal } from '../../lib/utils'
 import type { PurchaseInvoice, PurchasePaymentMethod } from '../../types'
 import { readDocumentText, extractJSON, compressImage, fileToDataUrl, hasApiKey, openStoredFile } from '../../lib/ai'
-import { uploadDataUrl, getAttachmentUrl } from '../../lib/storage'
+import { uploadDataUrl, getAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
@@ -361,19 +361,31 @@ export default function PurchaseInvoiceForm() {
     setSaving(true)
 
     // رفع المرفقات إلى Storage والحصول على المسارات (يبقى القديم المرفوع كما هو، والجديد يُرفع الآن)
+    // نتتبّع ما رُفع حديثاً في هذه المحاولة كي نتمكّن من تنظيفه إن فشل الحفظ لاحقاً (منع الملفات اليتيمة)
     let invoiceCopyPath = ''
     let paymentProofPath = ''
     let checkImagePath = ''
     const deliveryPaths: string[] = []
+    const newMainUploads: string[] = []      // مرفقات الفاتورة المرفوعة حديثاً
+    const newDeliveryUploads: string[] = []  // صور التوصيل المرفوعة حديثاً (نطاق تنظيف منفصل)
+    // يرفع القيمة ويسجّل مسارها في السلّة إن كانت ملفاً جديداً (Data URL) كي نتمكّن من حذفه عند الفشل
+    const persistTracked = async (value: string, folder: string, bucket: string[]): Promise<string> => {
+      const wasNew = isDataUrl(value)
+      const path = await persistToStorage(value, folder)
+      if (wasNew && path) bucket.push(path)
+      return path
+    }
     try {
       const FOLDER = 'purchase-invoices'
-      invoiceCopyPath = await persistToStorage(form.invoice_copy, FOLDER)
-      paymentProofPath = await persistToStorage(form.payment_proof, FOLDER)
-      checkImagePath = form.payment_method === 'deferred_cheque' ? await persistToStorage(form.check_image, FOLDER) : ''
+      invoiceCopyPath = await persistTracked(form.invoice_copy, FOLDER, newMainUploads)
+      paymentProofPath = await persistTracked(form.payment_proof, FOLDER, newMainUploads)
+      checkImagePath = form.payment_method === 'deferred_cheque' ? await persistTracked(form.check_image, FOLDER, newMainUploads) : ''
       for (const d of deliveries) {
-        deliveryPaths.push(await persistToStorage(d.image, `${FOLDER}/deliveries`))
+        deliveryPaths.push(await persistTracked(d.image, `${FOLDER}/deliveries`, newDeliveryUploads))
       }
     } catch (e) {
+      // فشل الرفع → نحذف ما رُفع بنجاح قبل التعثّر كي لا يبقى يتيماً في التخزين
+      await deleteAttachment([...newMainUploads, ...newDeliveryUploads]).catch(() => {})
       toast.error('تعذّر رفع المرفقات: ' + ((e as Error)?.message ?? ''))
       setSaving(false)
       return
@@ -404,10 +416,17 @@ export default function PurchaseInvoiceForm() {
     let invoiceId = id
     if (isEdit) {
       const { error } = await supabase.from('purchase_invoices').update(payload).eq('id', id)
-      if (error) { toast.error('فشل في الحفظ: ' + error.message); setSaving(false); return }
+      if (error) {
+        // فشل الحفظ ولم يُشِر إليها أي سجل → نحذف كل ما رفعناه حديثاً
+        await deleteAttachment([...newMainUploads, ...newDeliveryUploads]).catch(() => {})
+        toast.error('فشل في الحفظ: ' + error.message); setSaving(false); return
+      }
     } else {
       const { data, error } = await supabase.from('purchase_invoices').insert(payload).select('id').single()
-      if (error || !data) { toast.error('فشل في الحفظ: ' + (error?.message ?? '')); setSaving(false); return }
+      if (error || !data) {
+        await deleteAttachment([...newMainUploads, ...newDeliveryUploads]).catch(() => {})
+        toast.error('فشل في الحفظ: ' + (error?.message ?? '')); setSaving(false); return
+      }
       invoiceId = (data as { id: string }).id
     }
 
@@ -426,7 +445,11 @@ export default function PurchaseInvoiceForm() {
       }))
     if (deliveryPayload.length > 0) {
       const { error: delErr } = await supabase.from('purchase_invoice_deliveries').insert(deliveryPayload)
-      if (delErr) { toast.error('حُفظت الفاتورة، لكن تعذّر حفظ بيانات التوصيل: ' + delErr.message); setSaving(false); navigate('/purchases'); return }
+      if (delErr) {
+        // الفاتورة حُفظت (ومرفقاتها مرتبطة بها) → ننظّف فقط صور التوصيل المرفوعة حديثاً التي لم تُربط
+        await deleteAttachment(newDeliveryUploads).catch(() => {})
+        toast.error('حُفظت الفاتورة، لكن تعذّر حفظ بيانات التوصيل: ' + delErr.message); setSaving(false); navigate('/purchases'); return
+      }
     }
 
     toast.success(isEdit ? 'تم تحديث الفاتورة بنجاح' : 'تم تسجيل فاتورة الشراء بنجاح')
