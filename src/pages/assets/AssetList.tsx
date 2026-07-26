@@ -91,6 +91,7 @@ const ASSET_EXPENSE_TYPES = [
 const EXPENSE_TYPE_LABEL: Record<string, string> = {
   ...Object.fromEntries(ASSET_EXPENSE_TYPES.map(e => [e.value, e.label])),
   installment: 'قسط بنكي',
+  incident: 'حادث / إصلاح',
 }
 const EXPENSE_PAYMENT_METHODS = [
   { value: 'cash', label: 'نقداً' },
