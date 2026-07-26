@@ -1011,23 +1011,23 @@ export default function AssetList() {
     return { a, purchase, bookValue: disposed ? 0 : bookAtRef, expenses: reportExpenses[a.id] || 0, disposed, proceeds, gain }
   })
 
-  const exportReportCsv = () => {
+  const exportReportXlsx = async () => {
     const rows = buildReportRows()
     const header = ['الأصل', 'النوع', 'الحالة', 'تاريخ الشراء', 'قيمة الشراء', 'القيمة الدفترية', 'إجمالي المصاريف', 'حصيلة البيع', 'ربح/خسارة الاستبعاد']
-    const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`
     const body = rows.map(r => [
       r.a.name ?? '', ASSET_TYPE_LABELS[r.a.asset_type] ?? r.a.asset_type ?? '', STATUS_LABELS[r.a.status] ?? r.a.status ?? '',
-      r.a.purchase_date ?? '', r.purchase.toFixed(3), r.disposed ? '' : r.bookValue.toFixed(3),
-      r.expenses.toFixed(3), r.disposed ? r.proceeds.toFixed(3) : '', r.gain != null ? r.gain.toFixed(3) : '',
+      r.a.purchase_date ?? '', Number(r.purchase.toFixed(3)), r.disposed ? '' : Number(r.bookValue.toFixed(3)),
+      Number(r.expenses.toFixed(3)), r.disposed ? Number(r.proceeds.toFixed(3)) : '', r.gain != null ? Number(r.gain.toFixed(3)) : '',
     ])
-    const csv = '﻿' + [header, ...body].map(row => row.map(esc).join(',')).join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'تقرير_الأصول.csv'
-    link.click()
-    URL.revokeObjectURL(url)
+    try {
+      const XLSX = await import('xlsx')
+      const ws = XLSX.utils.aoa_to_sheet([header, ...body])
+      ws['!cols'] = [{ wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 16 }]
+      const wb = XLSX.utils.book_new()
+      wb.Workbook = { Views: [{ RTL: true }] }
+      XLSX.utils.book_append_sheet(wb, ws, 'الأصول')
+      XLSX.writeFile(wb, 'تقرير_الأصول.xlsx')
+    } catch { toast.error('تعذّر تصدير الملف') }
   }
 
   // حذف الأصل: يحذف مستنداته ومرفقاتها من التخزين. مصاريفه في accounts_payable تبقى سجلاً مالياً (asset_id=null تلقائياً)
@@ -2309,6 +2309,11 @@ export default function AssetList() {
         const totalPurchaseActive = active.reduce((s, r) => s + r.purchase, 0)
         const totalExpenses = rows.reduce((s, r) => s + r.expenses, 0)
         const totalGain = rows.reduce((s, r) => s + (r.gain ?? 0), 0)
+        const byStatus = STATUS_OPTIONS.map(o => ({ label: o.label, count: rows.filter(r => r.a.status === o.value).length })).filter(x => x.count > 0)
+        const byType = ASSET_TYPE_OPTIONS.map(o => ({ label: o.label, count: rows.filter(r => r.a.asset_type === o.value).length })).filter(x => x.count > 0)
+        const topExpenses = [...rows].filter(r => r.expenses > 0).sort((a, b) => b.expenses - a.expenses).slice(0, 5)
+        const maxTypeCount = Math.max(1, ...byType.map(x => x.count))
+        const maxStatusCount = Math.max(1, ...byStatus.map(x => x.count))
         return (
           <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto" onClick={() => setShowReport(false)}>
             <style>{`@media print { body * { visibility: hidden !important; } #assets-report-print, #assets-report-print * { visibility: visible !important; } #assets-report-print { position: absolute; top: 0; right: 0; left: 0; padding: 12px; } .no-print { display: none !important; } table { page-break-inside: auto } tr { page-break-inside: avoid } }`}</style>
@@ -2316,7 +2321,7 @@ export default function AssetList() {
               <div className="flex items-center justify-between p-4 border-b border-slate-100 no-print">
                 <h2 className="text-lg font-bold text-slate-800">التقرير الشامل للأصول</h2>
                 <div className="flex items-center gap-2">
-                  <Button variant="secondary" icon={<Download size={15} />} onClick={exportReportCsv}>تصدير Excel</Button>
+                  <Button variant="secondary" icon={<Download size={15} />} onClick={exportReportXlsx}>تصدير Excel</Button>
                   <Button variant="secondary" onClick={() => window.print()}>طباعة / PDF</Button>
                   <button onClick={() => setShowReport(false)} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"><X size={18} /></button>
                 </div>
@@ -2335,6 +2340,43 @@ export default function AssetList() {
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">القيمة الدفترية الحالية</div><div className="font-bold text-emerald-700" dir="ltr">{formatCurrency(totalBook)}</div></div>
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">إجمالي المصاريف</div><div className="font-bold text-red-600" dir="ltr">{formatCurrency(totalExpenses)}</div></div>
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">صافي ربح/خسارة الاستبعادات</div><div className={`font-bold ${totalGain >= 0 ? 'text-emerald-600' : 'text-red-600'}`} dir="ltr">{formatCurrency(totalGain)}</div></div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                      <div className="border border-slate-200 rounded-lg p-3">
+                        <div className="text-xs font-semibold text-slate-600 mb-2">التوزيع حسب النوع</div>
+                        <div className="space-y-1.5">
+                          {byType.map(x => (
+                            <div key={x.label} className="flex items-center gap-2 text-xs">
+                              <span className="w-24 truncate text-slate-500">{x.label}</span>
+                              <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-amber-400 rounded-full" style={{ width: `${(x.count / maxTypeCount) * 100}%` }} /></div>
+                              <span className="w-6 text-left text-slate-600" dir="ltr">{x.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="border border-slate-200 rounded-lg p-3">
+                        <div className="text-xs font-semibold text-slate-600 mb-2">التوزيع حسب الحالة</div>
+                        <div className="space-y-1.5">
+                          {byStatus.map(x => (
+                            <div key={x.label} className="flex items-center gap-2 text-xs">
+                              <span className="w-24 truncate text-slate-500">{x.label}</span>
+                              <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-blue-400 rounded-full" style={{ width: `${(x.count / maxStatusCount) * 100}%` }} /></div>
+                              <span className="w-6 text-left text-slate-600" dir="ltr">{x.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="border border-slate-200 rounded-lg p-3">
+                        <div className="text-xs font-semibold text-slate-600 mb-2">أعلى 5 معدات تكلفة تشغيل</div>
+                        <div className="space-y-1">
+                          {topExpenses.length === 0 ? <div className="text-xs text-slate-400">لا مصاريف مسجّلة</div> : topExpenses.map(r => (
+                            <div key={r.a.id} className="flex items-center justify-between gap-2 text-xs">
+                              <span className="truncate text-slate-600">{r.a.name}</span>
+                              <span className="text-red-600 font-medium shrink-0" dir="ltr">{formatCurrency(r.expenses)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                     <div className="border border-slate-200 rounded-lg overflow-x-auto">
                       <table className="w-full text-xs">
