@@ -1,8 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2 } from 'lucide-react'
+import {
+  Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2,
+  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X,
+} from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
+import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Badge, { type BadgeColor } from '../../components/ui/Badge'
 import Input from '../../components/ui/Input'
@@ -23,7 +28,7 @@ interface Asset {
   insurance_expiry: string | null
   registration_expiry: string | null
   notes: string
-  // الأقساط
+  cover_image_path: string | null
   payment_method: string
   bank_name: string
   finance_amount: number
@@ -34,30 +39,65 @@ interface Asset {
   next_installment_date: string | null
 }
 
+interface AssetDoc {
+  id: string
+  name: string
+  doc_type: string
+  file_type: string
+  has_file: boolean
+  created_at: string
+}
+
 const ASSET_TYPE_LABELS: Record<string, string> = {
-  equipment: 'معدة', vehicle: 'مركبة', tool: 'أداة',
-  scaffolding: 'سقالات', generator: 'مولد', other: 'أخرى',
+  heavy_equipment: 'معدات ثقيلة',
+  vehicle: 'مركبة',
+  generator: 'مولّدات وطاقة',
+  power_tool: 'أدوات كهربائية',
+  scaffolding: 'سقالات وقوالب',
+  tool: 'أدوات ومساحة / سلامة',
+  office_it: 'مكتب وتقنية',
+  equipment: 'معدة (عام)',
+  other: 'أخرى',
 }
 const STATUS_COLORS: Record<string, BadgeColor> = { available: 'green', in_use: 'blue', maintenance: 'orange', retired: 'gray' }
 const STATUS_LABELS: Record<string, string> = { available: 'متاح', in_use: 'قيد الاستخدام', maintenance: 'صيانة', retired: 'مستبعد' }
 
-// خيارات القوائم المنسدلة (مبنية مرة واحدة من التسميات أعلاه)
+const DOC_TYPES = [
+  { value: 'photo', label: 'صورة الأصل' },
+  { value: 'registration', label: 'استمارة / تسجيل' },
+  { value: 'insurance', label: 'بوليصة تأمين' },
+  { value: 'purchase_invoice', label: 'فاتورة الشراء' },
+  { value: 'finance_contract', label: 'عقد تمويل / أقساط' },
+  { value: 'maintenance', label: 'تقرير صيانة' },
+  { value: 'warranty', label: 'ضمان' },
+  { value: 'other', label: 'أخرى' },
+]
+const DOC_TYPE_LABEL: Record<string, string> = Object.fromEntries(DOC_TYPES.map(d => [d.value, d.label]))
+
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 
 const emptyForm = {
-  name: '', asset_type: 'equipment', plate_number: '', serial_number: '',
+  name: '', asset_type: 'heavy_equipment', plate_number: '', serial_number: '',
   purchase_date: '', purchase_value: '', current_location: '', status: 'available',
   insurance_expiry: '', registration_expiry: '', notes: '',
   payment_method: 'cash', bank_name: '', finance_amount: '', down_payment: '',
   monthly_installment: '', total_installments: '', paid_installments: '', next_installment_date: '',
 }
 
-// جلب الأصول (مصدر React Query)
 async function fetchAssets(): Promise<Asset[]> {
   const { data } = await supabase.from('assets').select('*').order('created_at', { ascending: false })
   return (data ?? []) as Asset[]
 }
+
+async function fetchDocCounts(): Promise<Record<string, number>> {
+  const { data } = await supabase.from('documents').select('related_id').eq('related_type', 'asset')
+  const m: Record<string, number> = {}
+  for (const r of (data ?? []) as { related_id: string }[]) m[r.related_id] = (m[r.related_id] ?? 0) + 1
+  return m
+}
+
+const fileToData = async (f: File): Promise<string> => (f.type.startsWith('image/') ? compressImage(f) : fileToDataUrl(f))
 
 export default function AssetList() {
   const queryClient = useQueryClient()
@@ -67,15 +107,47 @@ export default function AssetList() {
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
 
-  const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
-  // بعد أي تعديل: إبطال الكاش فيتحدّث كل مستهلِك لهذا المفتاح تلقائياً
-  const reload = () => queryClient.invalidateQueries({ queryKey: ['assets'] })
+  const [docs, setDocs] = useState<AssetDoc[]>([])
+  const [docBusy, setDocBusy] = useState(false)
+  const [docType, setDocType] = useState('photo')
+  const [previewImg, setPreviewImg] = useState<string | null>(null)
+  const [coverPath, setCoverPath] = useState<string | null>(null)
+  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({})
+  const fileRef = useRef<HTMLInputElement>(null)
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setShowForm(true) }
+  const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
+  const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
+  const reload = () => {
+    queryClient.invalidateQueries({ queryKey: ['assets'] })
+    queryClient.invalidateQueries({ queryKey: ['asset-doc-counts'] })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const withCover = assets.filter(a => a.cover_image_path)
+      const entries = await Promise.all(
+        withCover.map(async a => [a.id, await resolveAttachmentUrl(a.cover_image_path)] as const)
+      )
+      if (!cancelled) setCoverUrls(Object.fromEntries(entries.filter(([, u]) => !!u) as [string, string][]))
+    })()
+    return () => { cancelled = true }
+  }, [assets])
+
+  const loadDocs = async (assetId: string) => {
+    const { data } = await supabase.from('documents')
+      .select('id, name, doc_type, file_type, has_file, created_at')
+      .eq('related_id', assetId).eq('related_type', 'asset')
+      .order('created_at', { ascending: false })
+    setDocs((data ?? []) as AssetDoc[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
+    setCoverPath(a.cover_image_path ?? null)
     setForm({
-      name: a.name ?? '', asset_type: a.asset_type ?? 'equipment', plate_number: a.plate_number ?? '',
+      name: a.name ?? '', asset_type: a.asset_type ?? 'heavy_equipment', plate_number: a.plate_number ?? '',
       serial_number: a.serial_number ?? '', purchase_date: a.purchase_date ?? '', purchase_value: a.purchase_value ? String(a.purchase_value) : '',
       current_location: a.current_location ?? '', status: a.status ?? 'available',
       insurance_expiry: a.insurance_expiry ?? '', registration_expiry: a.registration_expiry ?? '', notes: a.notes ?? '',
@@ -84,6 +156,9 @@ export default function AssetList() {
       monthly_installment: a.monthly_installment ? String(a.monthly_installment) : '', total_installments: a.total_installments ? String(a.total_installments) : '',
       paid_installments: a.paid_installments ? String(a.paid_installments) : '', next_installment_date: a.next_installment_date ?? '',
     })
+    setDocType('photo')
+    setDocs([])
+    loadDocs(a.id)
     setShowForm(true)
   }
 
@@ -114,14 +189,94 @@ export default function AssetList() {
       } else {
         const { error } = await supabase.from('assets').insert(payload)
         if (error) throw error
-        toast.success('تم إضافة الأصل')
+        toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
 
-  // تسجيل دفع قسط (زيادة المدفوع + تحديث التاريخ القادم شهر)
+  const handleUpload = async (files: FileList) => {
+    if (!editId) { toast.error('احفظ الأصل أولاً ثم أرفق المستندات'); return }
+    setDocBusy(true)
+    try {
+      for (const f of Array.from(files)) {
+        const dataUrl = await fileToData(f)
+        const path = await uploadDataUrl(dataUrl, 'assets')
+        const { error } = await supabase.from('documents').insert({
+          name: f.name || DOC_TYPE_LABEL[docType] || 'مستند',
+          doc_type: docType,
+          file_url: path,
+          file_type: f.type || '',
+          related_id: editId,
+          related_type: 'asset',
+          has_file: true,
+        })
+        if (error) throw error
+      }
+      toast.success('تم رفع المستند')
+      await loadDocs(editId)
+      queryClient.invalidateQueries({ queryKey: ['asset-doc-counts'] })
+    } catch (e) { toast.error('تعذّر الرفع: ' + ((e as Error)?.message ?? '')) }
+    finally { setDocBusy(false) }
+  }
+
+  const getDocUrl = async (docId: string): Promise<string | null> => {
+    const { data } = await supabase.from('documents').select('file_url').eq('id', docId).maybeSingle()
+    const fileUrl = (data as { file_url?: string } | null)?.file_url
+    return resolveAttachmentUrl(fileUrl ?? '')
+  }
+
+  const viewDoc = async (doc: AssetDoc) => {
+    const url = await getDocUrl(doc.id)
+    if (!url) { toast.error('تعذّر فتح المستند'); return }
+    if (doc.file_type?.startsWith('image/')) setPreviewImg(url)
+    else openStoredFile(url, doc.file_type)
+  }
+
+  const downloadDoc = async (doc: AssetDoc) => {
+    try {
+      const url = await getDocUrl(doc.id)
+      if (!url) { toast.error('تعذّر تحميل المستند'); return }
+      const res = await fetch(url)
+      const blob = await res.blob()
+      const objUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objUrl
+      a.download = doc.name || 'مستند'
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(objUrl)
+    } catch { toast.error('تعذّر التحميل') }
+  }
+
+  const deleteDoc = async (doc: AssetDoc) => {
+    try {
+      const { data } = await supabase.from('documents').select('file_url').eq('id', doc.id).maybeSingle()
+      const fileUrl = (data as { file_url?: string } | null)?.file_url
+      if (fileUrl) await deleteAttachment(fileUrl)
+      await supabase.from('documents').delete().eq('id', doc.id)
+      if (editId && fileUrl && fileUrl === coverPath) {
+        await supabase.from('assets').update({ cover_image_path: null }).eq('id', editId)
+        setCoverPath(null)
+      }
+      toast.success('تم حذف المستند')
+      if (editId) await loadDocs(editId)
+      reload()
+    } catch { toast.error('تعذّر الحذف') }
+  }
+
+  const setAsCover = async (doc: AssetDoc) => {
+    if (!editId) return
+    const { data } = await supabase.from('documents').select('file_url').eq('id', doc.id).maybeSingle()
+    const fileUrl = (data as { file_url?: string } | null)?.file_url
+    if (!fileUrl) return
+    const { error } = await supabase.from('assets').update({ cover_image_path: fileUrl }).eq('id', editId)
+    if (error) { toast.error('تعذّر تعيين الغلاف'); return }
+    setCoverPath(fileUrl)
+    toast.success('تم تعيين صورة الغلاف')
+    queryClient.invalidateQueries({ queryKey: ['assets'] })
+  }
+
   const payInstallment = async (a: Asset) => {
     if (a.paid_installments >= a.total_installments) { toast.error('تم سداد جميع الأقساط'); return }
     const nextDate = a.next_installment_date ? new Date(a.next_installment_date) : new Date()
@@ -142,7 +297,6 @@ export default function AssetList() {
     [assets, search],
   )
 
-  // إحصائيات الأقساط — تُحسب فقط عند تغيّر الأصول (لا عند كل رندر/كتابة في النموذج)
   const { installmentAssets, totalRemaining, dueSoon } = useMemo(() => {
     const installmentAssets = assets.filter(a => a.payment_method === 'installment')
     const totalRemaining = installmentAssets.reduce((s, a) => {
@@ -170,7 +324,6 @@ export default function AssetList() {
         <Button icon={<Plus size={16} />} onClick={openNew}>إضافة أصل</Button>
       </div>
 
-      {/* بطاقات إحصائية للأقساط */}
       {installmentAssets.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div className="bg-gradient-to-br from-purple-50 to-white rounded-xl border border-purple-200 p-4 flex items-center gap-3">
@@ -217,8 +370,10 @@ export default function AssetList() {
             <Input label="قيمة الشراء الكلية (د.ب)" type="number" value={form.purchase_value} onChange={e => setForm(f => ({ ...f, purchase_value: e.target.value }))} dir="ltr" />
             <Input label="انتهاء التأمين" type="date" value={form.insurance_expiry} onChange={e => setForm(f => ({ ...f, insurance_expiry: e.target.value }))} />
           </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Input label="انتهاء التسجيل / الاستمارة" type="date" value={form.registration_expiry} onChange={e => setForm(f => ({ ...f, registration_expiry: e.target.value }))} />
+          </div>
 
-          {/* ═══ طريقة الشراء: نقدي / أقساط ═══ */}
           <div className="border-t border-slate-100 pt-4">
             <label className="text-sm font-semibold text-slate-700 mb-2 block">طريقة الشراء</label>
             <div className="grid grid-cols-2 gap-3 mb-3">
@@ -234,7 +389,6 @@ export default function AssetList() {
               </button>
             </div>
 
-            {/* حقول الأقساط */}
             {isInst && (
               <div className="bg-purple-50/50 rounded-xl border border-purple-200 p-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
@@ -250,7 +404,6 @@ export default function AssetList() {
                   <Input label="عدد الأقساط الكلي" type="number" value={form.total_installments} onChange={e => setForm(f => ({ ...f, total_installments: e.target.value }))} dir="ltr" />
                   <Input label="الأقساط المدفوعة" type="number" value={form.paid_installments} onChange={e => setForm(f => ({ ...f, paid_installments: e.target.value }))} dir="ltr" />
                 </div>
-                {/* ملخص حسابي مباشر */}
                 {Number(form.monthly_installment) > 0 && Number(form.total_installments) > 0 && (
                   <div className="bg-white rounded-lg p-3 border border-purple-200 text-sm">
                     <div className="flex justify-between text-slate-600"><span>المتبقي من الأقساط:</span>
@@ -266,9 +419,74 @@ export default function AssetList() {
           </div>
 
           <Textarea rows={2} placeholder="ملاحظات" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
-          <div className="flex gap-2">
+
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Paperclip size={16} className="text-amber-600" />
+              <span className="text-sm font-semibold text-slate-700">المستندات والصور</span>
+              {docs.length > 0 && <span className="text-xs text-slate-400">({docs.length})</span>}
+            </div>
+
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">
+                احفظ الأصل أولاً، ثم افتحه من القائمة لإرفاق المستندات والصور.
+              </div>
+            ) : (
+              <>
+                <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden"
+                  onChange={e => { if (e.target.files?.length) handleUpload(e.target.files); e.target.value = '' }} />
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <div className="w-52">
+                    <Select options={DOC_TYPES} value={docType} onChange={e => setDocType(e.target.value)} />
+                  </div>
+                  <button type="button" onClick={() => fileRef.current?.click()} disabled={docBusy}
+                    className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg transition-opacity hover:opacity-90 disabled:opacity-60"
+                    style={{ background: 'linear-gradient(135deg, #c4925a, #7b4a2d)' }}>
+                    {docBusy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                    رفع مستند / صورة
+                  </button>
+                  <span className="text-xs text-slate-400">صور أو PDF — يمكن اختيار عدة ملفات</span>
+                </div>
+
+                {docs.length === 0 ? (
+                  <div className="text-sm text-slate-400 text-center py-6 border border-dashed border-slate-200 rounded-lg">لا توجد مستندات مرفقة بعد</div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {docs.map(doc => {
+                      const isImage = doc.file_type?.startsWith('image/')
+                      return (
+                        <div key={doc.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-200 hover:border-amber-300 transition-colors">
+                          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: isImage ? '#eff6ff' : '#fef2f2' }}>
+                            {isImage ? <ImageIcon size={16} className="text-blue-500" /> : <FileText size={16} className="text-red-500" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-slate-700 truncate">{doc.name}</div>
+                            <div className="text-xs text-slate-400">{DOC_TYPE_LABEL[doc.doc_type] ?? doc.doc_type} · {formatDate(doc.created_at)}</div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {isImage && (
+                              <button type="button" title="تعيين كغلاف" onClick={() => setAsCover(doc)}
+                                className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-amber-50"><Star size={15} /></button>
+                            )}
+                            <button type="button" title="عرض" onClick={() => viewDoc(doc)}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50"><Eye size={15} /></button>
+                            <button type="button" title="تحميل" onClick={() => downloadDoc(doc)}
+                              className="p-1.5 text-slate-400 hover:text-green-600 rounded-lg hover:bg-green-50"><Download size={15} /></button>
+                            <button type="button" title="حذف" onClick={() => deleteDoc(doc)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Trash2 size={15} /></button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null) }}>إلغاء</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setCoverPath(null) }}>إغلاق</Button>
           </div>
         </div>
       )}
@@ -292,82 +510,109 @@ export default function AssetList() {
             const isPaidOff = asset.paid_installments >= asset.total_installments && asset.total_installments > 0
             const dDays = daysUntilOrNull(asset.next_installment_date)
             const isDue = !isPaidOff && dDays !== null && dDays <= 7
+            const cover = coverUrls[asset.id]
+            const docCount = docCounts[asset.id] ?? 0
 
             return (
-              <div key={asset.id} className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md transition-shadow cursor-pointer" onClick={() => openEdit(asset)}>
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                      {asset.name}
-                      {isInstAsset && <CreditCard size={13} className="text-purple-500" />}
-                    </div>
-                    <div className="text-xs text-slate-500">{ASSET_TYPE_LABELS[asset.asset_type] || asset.asset_type}</div>
-                  </div>
-                  <Badge color={STATUS_COLORS[asset.status] || 'gray'}>{STATUS_LABELS[asset.status] || asset.status}</Badge>
-                </div>
-                {asset.plate_number && <div className="text-sm text-slate-600 mb-1" dir="ltr" style={{ textAlign: 'right' }}>اللوحة: {asset.plate_number}</div>}
-                {asset.current_location && (
-                  <div className="flex items-center gap-1 text-sm text-slate-500"><MapPin size={12} /> {asset.current_location}</div>
-                )}
-                {asset.purchase_value > 0 && (
-                  <div className="text-sm text-slate-600 mt-2">القيمة الكلية: <span dir="ltr">{formatCurrency(asset.purchase_value)}</span></div>
-                )}
-
-                {/* ═══ قسم الأقساط ═══ */}
-                {isInstAsset && (
-                  <div className="mt-3 pt-3 border-t border-slate-100">
-                    {asset.bank_name && (
-                      <div className="flex items-center gap-1.5 text-xs text-purple-700 mb-2">
-                        <Building2 size={12} /> {asset.bank_name}
-                      </div>
+              <div key={asset.id} className="bg-white rounded-xl border border-slate-200 hover:shadow-md transition-shadow cursor-pointer overflow-hidden" onClick={() => openEdit(asset)}>
+                {cover && (
+                  <div className="h-32 w-full bg-slate-100 relative">
+                    <img src={cover} alt={asset.name} className="w-full h-full object-cover" />
+                    {docCount > 0 && (
+                      <span className="absolute top-2 left-2 flex items-center gap-1 text-xs bg-black/55 text-white px-2 py-0.5 rounded-full">
+                        <Paperclip size={11} /> {docCount}
+                      </span>
                     )}
-                    {/* شريط التقدّم */}
-                    <div className="mb-2">
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-500">{asset.paid_installments} من {asset.total_installments} قسط</span>
-                        <span className="font-medium text-purple-600">{progress.toFixed(0)}%</span>
+                  </div>
+                )}
+                <div className="p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                        {asset.name}
+                        {isInstAsset && <CreditCard size={13} className="text-purple-500" />}
                       </div>
-                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: isPaidOff ? '#16a34a' : 'linear-gradient(90deg, #a855f7, #7b4a2d)' }} />
-                      </div>
+                      <div className="text-xs text-slate-500">{ASSET_TYPE_LABELS[asset.asset_type] || asset.asset_type}</div>
                     </div>
+                    <div className="flex items-center gap-1.5">
+                      {!cover && docCount > 0 && (
+                        <span className="flex items-center gap-1 text-xs text-slate-400"><Paperclip size={12} /> {docCount}</span>
+                      )}
+                      <Badge color={STATUS_COLORS[asset.status] || 'gray'}>{STATUS_LABELS[asset.status] || asset.status}</Badge>
+                    </div>
+                  </div>
+                  {asset.plate_number && <div className="text-sm text-slate-600 mb-1" dir="ltr" style={{ textAlign: 'right' }}>اللوحة: {asset.plate_number}</div>}
+                  {asset.current_location && (
+                    <div className="flex items-center gap-1 text-sm text-slate-500"><MapPin size={12} /> {asset.current_location}</div>
+                  )}
+                  {asset.purchase_value > 0 && (
+                    <div className="text-sm text-slate-600 mt-2">القيمة الكلية: <span dir="ltr">{formatCurrency(asset.purchase_value)}</span></div>
+                  )}
 
-                    {isPaidOff ? (
-                      <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 rounded-lg p-2">
-                        <CheckCircle2 size={14} /> تم سداد كامل الأقساط
+                  {isInstAsset && (
+                    <div className="mt-3 pt-3 border-t border-slate-100">
+                      {asset.bank_name && (
+                        <div className="flex items-center gap-1.5 text-xs text-purple-700 mb-2">
+                          <Building2 size={12} /> {asset.bank_name}
+                        </div>
+                      )}
+                      <div className="mb-2">
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="text-slate-500">{asset.paid_installments} من {asset.total_installments} قسط</span>
+                          <span className="font-medium text-purple-600">{progress.toFixed(0)}%</span>
+                        </div>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: isPaidOff ? '#16a34a' : 'linear-gradient(90deg, #a855f7, #7b4a2d)' }} />
+                        </div>
                       </div>
-                    ) : (
-                      <>
-                        <div className="flex justify-between text-xs text-slate-600 mb-1">
-                          <span>القسط الشهري:</span><span className="font-medium" dir="ltr">{formatCurrency(asset.monthly_installment)}</span>
+
+                      {isPaidOff ? (
+                        <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 rounded-lg p-2">
+                          <CheckCircle2 size={14} /> تم سداد كامل الأقساط
                         </div>
-                        <div className="flex justify-between text-xs text-slate-600 mb-2">
-                          <span>المتبقي:</span><span className="font-bold text-red-600" dir="ltr">{formatCurrency(remaining)}</span>
-                        </div>
-                        {/* تنبيه القسط القادم */}
-                        {asset.next_installment_date && (
-                          <div className={`flex items-center gap-1.5 text-xs rounded-lg p-2 mb-2 ${isDue ? 'bg-amber-50 text-amber-700' : 'bg-slate-50 text-slate-500'}`}>
-                            <CalendarClock size={13} />
-                            القسط القادم: {formatDate(asset.next_installment_date)}
-                            {isDue && dDays !== null && <span className="font-bold mr-1">({dDays <= 0 ? 'مستحق الآن!' : `خلال ${dDays} يوم`})</span>}
+                      ) : (
+                        <>
+                          <div className="flex justify-between text-xs text-slate-600 mb-1">
+                            <span>القسط الشهري:</span><span className="font-medium" dir="ltr">{formatCurrency(asset.monthly_installment)}</span>
                           </div>
-                        )}
-                        <button onClick={e => { e.stopPropagation(); payInstallment(asset) }}
-                          className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-white py-2 rounded-lg transition-opacity hover:opacity-90"
-                          style={{ background: 'linear-gradient(135deg, #a855f7, #7b4a2d)' }}>
-                          <CheckCircle2 size={14} /> تسجيل دفع قسط
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
+                          <div className="flex justify-between text-xs text-slate-600 mb-2">
+                            <span>المتبقي:</span><span className="font-bold text-red-600" dir="ltr">{formatCurrency(remaining)}</span>
+                          </div>
+                          {asset.next_installment_date && (
+                            <div className={`flex items-center gap-1.5 text-xs rounded-lg p-2 mb-2 ${isDue ? 'bg-amber-50 text-amber-700' : 'bg-slate-50 text-slate-500'}`}>
+                              <CalendarClock size={13} />
+                              القسط القادم: {formatDate(asset.next_installment_date)}
+                              {isDue && dDays !== null && <span className="font-bold mr-1">({dDays <= 0 ? 'مستحق الآن!' : `خلال ${dDays} يوم`})</span>}
+                            </div>
+                          )}
+                          <button onClick={e => { e.stopPropagation(); payInstallment(asset) }}
+                            className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-white py-2 rounded-lg transition-opacity hover:opacity-90"
+                            style={{ background: 'linear-gradient(135deg, #a855f7, #7b4a2d)' }}>
+                            <CheckCircle2 size={14} /> تسجيل دفع قسط
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
 
-                {asset.insurance_expiry && !isInstAsset && (
-                  <div className="text-xs text-slate-400 mt-1">التأمين: {formatDate(asset.insurance_expiry)}</div>
-                )}
+                  {asset.insurance_expiry && !isInstAsset && (
+                    <div className="text-xs text-slate-400 mt-1">التأمين: {formatDate(asset.insurance_expiry)}</div>
+                  )}
+                </div>
               </div>
             )
           })}
+        </div>
+      )}
+
+      {previewImg && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setPreviewImg(null)}>
+          <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setPreviewImg(null)} className="absolute -top-3 -right-3 bg-white text-slate-700 rounded-full w-8 h-8 flex items-center justify-center shadow-lg hover:bg-slate-100">
+              <X size={18} />
+            </button>
+            <img src={previewImg} alt="معاينة" className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl" />
+          </div>
         </div>
       )}
     </div>
