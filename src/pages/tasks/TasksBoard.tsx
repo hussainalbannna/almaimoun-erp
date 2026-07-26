@@ -120,20 +120,28 @@ export default function TasksBoard() {
 
   // نقل سريع بين الحالات (تحديث تفاؤلي فوري في الكاش)
   const moveTask = async (t: Task, status: Task['status']) => {
+    const prevTasks = queryClient.getQueryData<Task[]>(['tasks-board'])
     queryClient.setQueryData<Task[]>(['tasks-board'], prev => (prev ?? []).map(x => x.id === t.id ? { ...x, status } : x))
-    await supabase.from('tasks').update({
+    const { error } = await supabase.from('tasks').update({
       status,
       completed_at: status === 'done' ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
     }).eq('id', t.id)
+    if (error) {
+      // تراجع عن التحديث التفاؤلي عند الفشل حتى لا تُظهر الواجهة نقلًا لم يُحفظ
+      if (prevTasks) queryClient.setQueryData(['tasks-board'], prevTasks)
+      toast.error('تعذّر نقل المهمة: ' + error.message)
+      return
+    }
     // المهام المتأخرة تظهر في التنبيهات
     queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
   }
 
   const handleDelete = async () => {
     if (!deleteId) return
-    await supabase.from('tasks').delete().eq('id', deleteId)
+    const { error } = await supabase.from('tasks').delete().eq('id', deleteId)
     setDeleteId(null)
+    if (error) { toast.error('تعذّر حذف المهمة: ' + error.message); return }
     toast.success('تم حذف المهمة')
     reload()
   }
