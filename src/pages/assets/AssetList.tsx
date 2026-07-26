@@ -123,7 +123,8 @@ interface AssetInstallment {
 const addMonths = (dateStr: string, delta: number): string => {
   const d = dateStr ? new Date(dateStr) : new Date()
   d.setMonth(d.getMonth() + delta)
-  return d.toISOString().slice(0, 10)
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
@@ -148,6 +149,11 @@ async function fetchDocCounts(): Promise<Record<string, number>> {
   const m: Record<string, number> = {}
   for (const r of (data ?? []) as { related_id: string }[]) m[r.related_id] = (m[r.related_id] ?? 0) + 1
   return m
+}
+
+async function fetchScheduledAssetIds(): Promise<Set<string>> {
+  const { data } = await supabase.from('asset_installments').select('asset_id')
+  return new Set((data ?? []).map((r: { asset_id: string }) => r.asset_id))
 }
 
 // المشاريع النشطة (لربط الأصل بمشروع حالي)
@@ -187,12 +193,14 @@ export default function AssetList() {
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
+  const { data: scheduledAssetIds = new Set<string>() } = useQuery({ queryKey: ['asset-schedule-ids'], queryFn: fetchScheduledAssetIds })
   const { data: projects = [] } = useQuery({ queryKey: ['assets-projects'], queryFn: fetchActiveProjects })
   const projectOptions = useMemo(() => [{ value: '', label: '— بدون مشروع —' }, ...projects.map(p => ({ value: p.id, label: p.project_name }))], [projects])
   const projectName = (id: string | null) => projects.find(p => p.id === id)?.project_name ?? ''
   const reload = () => {
     queryClient.invalidateQueries({ queryKey: ['assets'] })
     queryClient.invalidateQueries({ queryKey: ['asset-doc-counts'] })
+    queryClient.invalidateQueries({ queryKey: ['asset-schedule-ids'] })
   }
 
   useEffect(() => {
@@ -974,11 +982,15 @@ export default function AssetList() {
                               {isDue && dDays !== null && <span className="font-bold mr-1">({dDays <= 0 ? 'مستحق الآن!' : `خلال ${dDays} يوم`})</span>}
                             </div>
                           )}
-                          <button onClick={e => { e.stopPropagation(); payInstallment(asset) }} disabled={payingId === asset.id}
-                            className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-white py-2 rounded-lg transition-opacity hover:opacity-90 disabled:opacity-60"
-                            style={{ background: 'linear-gradient(135deg, #a855f7, #7b4a2d)' }}>
-                            <CheckCircle2 size={14} /> {payingId === asset.id ? 'جارٍ التسجيل...' : 'تسجيل دفع قسط'}
-                          </button>
+                          {scheduledAssetIds.has(asset.id) ? (
+                            <div className="text-[11px] text-center text-slate-400 py-1.5">الأقساط تُدار من جدول الأصل التفصيلي — افتح الأصل</div>
+                          ) : (
+                            <button onClick={e => { e.stopPropagation(); payInstallment(asset) }} disabled={payingId === asset.id}
+                              className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-white py-2 rounded-lg transition-opacity hover:opacity-90 disabled:opacity-60"
+                              style={{ background: 'linear-gradient(135deg, #a855f7, #7b4a2d)' }}>
+                              <CheckCircle2 size={14} /> {payingId === asset.id ? 'جارٍ التسجيل...' : 'تسجيل دفع قسط'}
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
