@@ -42,6 +42,8 @@ interface Asset {
   total_installments: number
   paid_installments: number
   next_installment_date: string | null
+  useful_life_years: number | null
+  salvage_value: number | null
 }
 
 interface AssetDoc {
@@ -126,6 +128,22 @@ const addMonths = (dateStr: string, delta: number): string => {
   d.setMonth(d.getMonth() + delta)
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+const computeDepreciation = (purchaseValue: number, purchaseDate: string | null, usefulLifeYears: number, salvageValue: number) => {
+  if (!purchaseValue || purchaseValue <= 0 || !usefulLifeYears || usefulLifeYears <= 0) return null
+  const salvage = Math.min(Math.max(salvageValue || 0, 0), purchaseValue)
+  const base = purchaseValue - salvage
+  const annual = base / usefulLifeYears
+  let yearsElapsed = 0
+  if (purchaseDate) {
+    const start = new Date(purchaseDate).getTime()
+    if (!Number.isNaN(start)) yearsElapsed = Math.max((Date.now() - start) / (365.25 * 24 * 3600 * 1000), 0)
+  }
+  const accumulated = Math.min(annual * yearsElapsed, base)
+  const bookValue = purchaseValue - accumulated
+  const fullyDepreciated = accumulated >= base - 0.005
+  return { annual, accumulated, bookValue, yearsElapsed, fullyDepreciated }
 }
 
 const MAINT_TYPES = [
@@ -227,6 +245,7 @@ const emptyForm = {
   custodian: '', inspection_expiry: '', warranty_expiry: '', current_project_id: '',
   payment_method: 'cash', bank_name: '', finance_amount: '', down_payment: '',
   monthly_installment: '', total_installments: '', paid_installments: '', next_installment_date: '',
+  useful_life_years: '', salvage_value: '',
 }
 
 async function fetchAssets(): Promise<Asset[]> {
@@ -387,6 +406,7 @@ export default function AssetList() {
       finance_amount: a.finance_amount ? String(a.finance_amount) : '', down_payment: a.down_payment ? String(a.down_payment) : '',
       monthly_installment: a.monthly_installment ? String(a.monthly_installment) : '', total_installments: a.total_installments ? String(a.total_installments) : '',
       paid_installments: a.paid_installments ? String(a.paid_installments) : '', next_installment_date: a.next_installment_date ?? '',
+      useful_life_years: a.useful_life_years ? String(a.useful_life_years) : '', salvage_value: a.salvage_value ? String(a.salvage_value) : '',
     })
     setDocType('photo')
     setDocs([])
@@ -427,6 +447,8 @@ export default function AssetList() {
         current_project_id: form.current_project_id || null,
         purchase_value: Number(form.purchase_value) || 0,
         purchase_date: form.purchase_date || null,
+        useful_life_years: Number(form.useful_life_years) || null,
+        salvage_value: Number(form.salvage_value) || null,
         insurance_expiry: form.insurance_expiry || null,
         registration_expiry: form.registration_expiry || null,
         inspection_expiry: form.inspection_expiry || null,
@@ -983,6 +1005,22 @@ export default function AssetList() {
             <Input label="انتهاء الفحص الدوري" type="date" value={form.inspection_expiry} onChange={e => setForm(f => ({ ...f, inspection_expiry: e.target.value }))} />
             <Input label="انتهاء الضمان" type="date" value={form.warranty_expiry} onChange={e => setForm(f => ({ ...f, warranty_expiry: e.target.value }))} />
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="العمر الإنتاجي (سنوات) — للإهلاك" type="number" value={form.useful_life_years} onChange={e => setForm(f => ({ ...f, useful_life_years: e.target.value }))} dir="ltr" />
+            <Input label="القيمة التخريدية المتوقعة (د.ب)" type="number" value={form.salvage_value} onChange={e => setForm(f => ({ ...f, salvage_value: e.target.value }))} dir="ltr" />
+          </div>
+          {(() => {
+            const dep = computeDepreciation(Number(form.purchase_value) || 0, form.purchase_date || null, Number(form.useful_life_years) || 0, Number(form.salvage_value) || 0)
+            if (!dep) return null
+            return (
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">القيمة الدفترية الحالية</div><div className={`font-bold ${dep.fullyDepreciated ? 'text-slate-500' : 'text-emerald-700'}`} dir="ltr">{formatCurrency(dep.bookValue)}</div></div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">مجمع الإهلاك</div><div className="font-bold text-slate-700" dir="ltr">{formatCurrency(dep.accumulated)}</div></div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">الإهلاك السنوي</div><div className="font-bold text-slate-700" dir="ltr">{formatCurrency(dep.annual)}</div></div>
+                {dep.fullyDepreciated && <div className="col-span-3 text-[11px] text-amber-600">اكتمل إهلاك هذا الأصل — قيمته الدفترية = القيمة التخريدية.</div>}
+              </div>
+            )
+          })()}
           <div className="grid grid-cols-2 gap-3">
             <Input placeholder="مسؤول العهدة (من بحوزته الأصل)" value={form.custodian} onChange={e => setForm(f => ({ ...f, custodian: e.target.value }))} />
             <Select label="المشروع الحالي" options={projectOptions} value={form.current_project_id} onChange={e => setForm(f => ({ ...f, current_project_id: e.target.value }))} />
