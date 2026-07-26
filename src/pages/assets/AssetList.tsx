@@ -739,10 +739,12 @@ export default function AssetList() {
     setMoveBusy(true)
     try {
       const toProjectName = moveForm.to_project_id ? projectName(moveForm.to_project_id) : null
+      const { data: current } = await supabase.from('assets').select('current_location').eq('id', editId).single()
+      const fromLocation = (current as { current_location: string | null } | null)?.current_location ?? null
       const { error } = await supabase.from('asset_movements').insert({
         asset_id: editId,
         movement_date: moveForm.movement_date || null,
-        from_location: form.current_location || null,
+        from_location: fromLocation,
         to_location: moveForm.to_location.trim() || toProjectName,
         project_id: moveForm.to_project_id || null,
         project_name: toProjectName,
@@ -750,7 +752,7 @@ export default function AssetList() {
         notes: moveForm.notes || null,
       })
       if (error) throw error
-      const newLocation = moveForm.to_location.trim() || toProjectName || form.current_location
+      const newLocation = moveForm.to_location.trim() || toProjectName || fromLocation
       const { error: updErr } = await supabase.from('assets')
         .update({ current_location: newLocation, current_project_id: moveForm.to_project_id || null })
         .eq('id', editId)
