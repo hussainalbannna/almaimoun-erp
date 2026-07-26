@@ -13,6 +13,7 @@ import Badge, { type BadgeColor } from '../../components/ui/Badge'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
 import Textarea from '../../components/ui/Textarea'
+import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 
 interface Asset {
@@ -136,7 +137,7 @@ async function fetchDocCounts(): Promise<Record<string, number>> {
 
 // المشاريع النشطة (لربط الأصل بمشروع حالي)
 async function fetchActiveProjects(): Promise<{ id: string; project_name: string }[]> {
-  const { data } = await supabase.from('projects').select('id, project_name').eq('status', 'active').order('project_name')
+  const { data } = await supabase.from('projects').select('id, project_name').order('project_name')
   return (data ?? []) as { id: string; project_name: string }[]
 }
 
@@ -164,6 +165,8 @@ export default function AssetList() {
   const [expBusy, setExpBusy] = useState(false)
   const [expForm, setExpForm] = useState(newExpForm())
   const [payingId, setPayingId] = useState<string | null>(null) // منع النقر المزدوج على تسجيل القسط
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -380,6 +383,26 @@ export default function AssetList() {
     if (editId) await loadExpenses(editId)
   }
 
+  // حذف الأصل: يحذف مستنداته ومرفقاتها من التخزين. مصاريفه في accounts_payable تبقى سجلاً مالياً (asset_id=null تلقائياً)
+  const deleteAsset = async () => {
+    if (!editId) return
+    setDeleting(true)
+    try {
+      const { data: docRows } = await supabase.from('documents').select('id, file_url').eq('related_id', editId).eq('related_type', 'asset')
+      const rows = (docRows ?? []) as { id: string; file_url: string | null }[]
+      const paths = rows.map(r => r.file_url).filter(Boolean) as string[]
+      if (paths.length) await deleteAttachment(paths)
+      if (rows.length) await supabase.from('documents').delete().eq('related_id', editId).eq('related_type', 'asset')
+      const { error } = await supabase.from('assets').delete().eq('id', editId)
+      if (error) throw error
+      toast.success('تم حذف الأصل ومستنداته')
+      setConfirmDelete(false)
+      setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setShowExpForm(false); setCoverPath(null)
+      reload()
+    } catch (e) { toast.error('تعذّر الحذف: ' + ((e as Error)?.message ?? '')) }
+    finally { setDeleting(false) }
+  }
+
   // تسجيل دفع قسط: زيادة المدفوع + تحديث التاريخ القادم + قيد صرف حقيقي في المصاريف
   // محميّ من النقر المزدوج (payingId)، ويتراجع عن العدّاد إن فشل قيد المصروف
   const payInstallment = async (a: Asset) => {
@@ -576,9 +599,13 @@ export default function AssetList() {
               <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل مصاريفه.</div>
             ) : (
               <>
-                <div className="bg-amber-50/60 border border-amber-200 rounded-lg p-3 mb-3 flex items-center justify-between">
+                <div className="bg-amber-50/60 border border-amber-200 rounded-lg p-3 mb-2 flex items-center justify-between">
                   <span className="text-sm text-amber-800">إجمالي المصروف على هذا الأصل (تشغيلي + أقساط مسجّلة)</span>
                   <span className="font-bold text-amber-900" dir="ltr">{formatCurrency(expenses.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
+                </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 flex items-center justify-between">
+                  <span className="text-sm text-slate-600">إجمالي تكلفة الملكية (قيمة الشراء + المصاريف)</span>
+                  <span className="font-bold text-slate-800" dir="ltr">{formatCurrency((Number(form.purchase_value) || 0) + expenses.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
                 </div>
                 {showExpForm && (
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
@@ -698,6 +725,12 @@ export default function AssetList() {
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
             <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
+            {editId && (
+              <button type="button" onClick={() => setConfirmDelete(true)}
+                className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
+                <Trash2 size={15} /> حذف الأصل
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -821,6 +854,10 @@ export default function AssetList() {
           })}
         </div>
       )}
+
+      <ConfirmDialog open={confirmDelete} title="حذف الأصل"
+        message="سيتم حذف الأصل ومستنداته وصوره نهائياً. مصاريفه المسجّلة تبقى في دفتر المصاريف كسجل مالي. متابعة؟"
+        confirmLabel={deleting ? 'جارٍ الحذف...' : 'حذف'} danger onConfirm={deleteAsset} onCancel={() => setConfirmDelete(false)} />
 
       {previewImg && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setPreviewImg(null)}>

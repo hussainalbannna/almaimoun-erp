@@ -66,7 +66,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
 
   const [workers, assets, invoices, cheques, tasks, quotes] = await Promise.all([
     safe(supabase.from('workers').select('id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status')),
-    safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
+    safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,inspection_expiry,warranty_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
     safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
     // الشيكات من مصدرها الرسمي (جدول cheques) — حالتها تُحدَّث عند الصرف في مركز الشيكات
     safe(supabase.from('cheques').select('id,party_name,amount,due_date,status,cheque_type,direction')),
@@ -100,7 +100,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
 
   // وثائق المعدات
   for (const a of assets as Record<string, unknown>[]) {
-    for (const [label, field] of [['تأمين', 'insurance_expiry'], ['استمارة', 'registration_expiry']] as const) {
+    for (const [label, field] of [['تأمين', 'insurance_expiry'], ['استمارة', 'registration_expiry'], ['فحص دوري', 'inspection_expiry'], ['ضمان', 'warranty_expiry']] as const) {
       const d = daysUntil(a[field] as string)
       if (d !== null && d <= MAX_DOCUMENT) {
         const { level, urgent } = classify(d, 'document')
