@@ -590,19 +590,16 @@ export default function DailyLogList() {
     }
 
     setSaving(true)
+    // نتتبّع الصور المرفوعة حديثاً كي ننظّفها إن فشل الحفظ (منع الملفات اليتيمة)
+    let newUploads: string[] = []
     try {
       // ── رفع الصور الجديدة (Data URL) إلى Storage؛ المسارات الموجودة تبقى ──
       // photoPaths يحمل: مسارات قائمة (تبقى) + Data URL جديدة (تُرفع الآن)
       const finalPaths = await Promise.all(
         form.photoPaths.map(v => (isDataUrl(v) ? uploadDataUrl(v, DAILY_LOGS_FOLDER) : v))
       )
-
-      // تنظيف Storage: عند التحرير، احذف الصور التي أُزيلت من التقرير
-      if (editingId) {
-        const previous = rawPhotosCache[editingId] ?? []
-        const removed = previous.filter(p => !isDataUrl(p) && !finalPaths.includes(p))
-        if (removed.length) await deleteAttachment(removed)
-      }
+      // الصور المرفوعة حديثاً (كان مصدرها Data URL) — نتذكّرها لتنظيفها عند الفشل
+      newUploads = finalPaths.filter((_, i) => isDataUrl(form.photoPaths[i]))
 
       // الأوفرتايم مشترك: ساعات واحدة لكل العمال المحددين — الإجمالي لقطة تُخزَّن ليظهر في تكلفة المشروع
       const otActive = hasOvertime && otHours > 0 && overtimeWorkers.length > 0
@@ -630,6 +627,10 @@ export default function DailyLogList() {
         const { error } = await supabase.from('daily_logs').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editingId)
         if (error) throw error
         logId = editingId
+        // نجح الحفظ → الآن فقط نحذف الصور التي أُزيلت من التقرير (تفادي فقدان صور مرتبطة عند الفشل)
+        const previous = rawPhotosCache[editingId] ?? []
+        const removed = previous.filter(p => !isDataUrl(p) && !finalPaths.includes(p))
+        if (removed.length) await deleteAttachment(removed).catch(() => {})
         await supabase.from('daily_log_workers').delete().eq('log_id', logId)
       } else {
         const { data: inserted, error } = await supabase.from('daily_logs').insert(payload).select('id').single()
@@ -669,6 +670,8 @@ export default function DailyLogList() {
       resetForm()
       reload()
     } catch {
+      // فشل الحفظ → نحذف الصور التي رفعناها للتوّ كي لا تبقى يتيمة في التخزين
+      if (newUploads.length) await deleteAttachment(newUploads).catch(() => {})
       toast.error('حدث خطأ أثناء الحفظ')
     } finally {
       setSaving(false)
