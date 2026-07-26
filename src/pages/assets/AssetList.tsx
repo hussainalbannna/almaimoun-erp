@@ -152,6 +152,7 @@ export default function AssetList() {
   const [showExpForm, setShowExpForm] = useState(false)
   const [expBusy, setExpBusy] = useState(false)
   const [expForm, setExpForm] = useState(newExpForm())
+  const [payingId, setPayingId] = useState<string | null>(null) // منع النقر المزدوج على تسجيل القسط
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -361,31 +362,46 @@ export default function AssetList() {
   }
 
   // تسجيل دفع قسط: زيادة المدفوع + تحديث التاريخ القادم + قيد صرف حقيقي في المصاريف
+  // محميّ من النقر المزدوج (payingId)، ويتراجع عن العدّاد إن فشل قيد المصروف
   const payInstallment = async (a: Asset) => {
+    if (payingId) return
     if (a.paid_installments >= a.total_installments) { toast.error('تم سداد جميع الأقساط'); return }
-    const nextDate = a.next_installment_date ? new Date(a.next_installment_date) : new Date()
-    nextDate.setMonth(nextDate.getMonth() + 1)
-    const today = new Date().toISOString().slice(0, 10)
-    const { error } = await supabase.from('assets').update({
-      paid_installments: a.paid_installments + 1,
-      next_installment_date: nextDate.toISOString().slice(0, 10),
-    }).eq('id', a.id)
-    if (error) { toast.error('حدث خطأ'); return }
-    if (Number(a.monthly_installment) > 0) {
-      await supabase.from('accounts_payable').insert({
-        asset_id: a.id,
-        project_id: null,
-        entry_date: today,
-        amount: Number(a.monthly_installment),
-        category: 'equipment',
-        expense_type: 'installment',
-        payment_method: 'bank_transfer',
-        description: `قسط بنكي — ${a.name}${a.bank_name ? ' / ' + a.bank_name : ''}`,
-      })
+    setPayingId(a.id)
+    try {
+      const nextDate = a.next_installment_date ? new Date(a.next_installment_date) : new Date()
+      nextDate.setMonth(nextDate.getMonth() + 1)
+      const today = new Date().toISOString().slice(0, 10)
+      const { error } = await supabase.from('assets').update({
+        paid_installments: a.paid_installments + 1,
+        next_installment_date: nextDate.toISOString().slice(0, 10),
+      }).eq('id', a.id)
+      if (error) { toast.error('تعذّر تحديث الأصل'); return }
+      if (Number(a.monthly_installment) > 0) {
+        const { error: expErr } = await supabase.from('accounts_payable').insert({
+          asset_id: a.id,
+          project_id: null,
+          entry_date: today,
+          amount: Number(a.monthly_installment),
+          category: 'equipment',
+          expense_type: 'installment',
+          payment_method: 'bank_transfer',
+          description: `قسط بنكي — ${a.name}${a.bank_name ? ' / ' + a.bank_name : ''}`,
+        })
+        if (expErr) {
+          await supabase.from('assets').update({
+            paid_installments: a.paid_installments,
+            next_installment_date: a.next_installment_date,
+          }).eq('id', a.id)
+          toast.error('تعذّر قيد القسط في المصاريف — أُلغيت العملية')
+          return
+        }
+      }
+      toast.success('تم تسجيل دفع القسط وقيده في المصاريف')
+      if (editId === a.id) await loadExpenses(a.id)
+      reload()
+    } finally {
+      setPayingId(null)
     }
-    toast.success('تم تسجيل دفع القسط وقيده في المصاريف')
-    if (editId === a.id) await loadExpenses(a.id)
-    reload()
   }
 
   const filtered = useMemo(() =>
@@ -755,10 +771,10 @@ export default function AssetList() {
                               {isDue && dDays !== null && <span className="font-bold mr-1">({dDays <= 0 ? 'مستحق الآن!' : `خلال ${dDays} يوم`})</span>}
                             </div>
                           )}
-                          <button onClick={e => { e.stopPropagation(); payInstallment(asset) }}
-                            className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-white py-2 rounded-lg transition-opacity hover:opacity-90"
+                          <button onClick={e => { e.stopPropagation(); payInstallment(asset) }} disabled={payingId === asset.id}
+                            className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-white py-2 rounded-lg transition-opacity hover:opacity-90 disabled:opacity-60"
                             style={{ background: 'linear-gradient(135deg, #a855f7, #7b4a2d)' }}>
-                            <CheckCircle2 size={14} /> تسجيل دفع قسط
+                            <CheckCircle2 size={14} /> {payingId === asset.id ? 'جارٍ التسجيل...' : 'تسجيل دفع قسط'}
                           </button>
                         </>
                       )}
