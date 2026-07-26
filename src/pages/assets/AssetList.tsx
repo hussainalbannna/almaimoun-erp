@@ -111,6 +111,21 @@ interface AssetExpense {
   description: string | null
 }
 
+interface AssetInstallment {
+  id: string
+  seq: number
+  due_date: string | null
+  amount: number
+  status: string
+  paid_date: string | null
+}
+
+const addMonths = (dateStr: string, delta: number): string => {
+  const d = dateStr ? new Date(dateStr) : new Date()
+  d.setMonth(d.getMonth() + delta)
+  return d.toISOString().slice(0, 10)
+}
+
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -167,6 +182,8 @@ export default function AssetList() {
   const [payingId, setPayingId] = useState<string | null>(null) // منع النقر المزدوج على تسجيل القسط
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [installments, setInstallments] = useState<AssetInstallment[]>([])
+  const [instBusy, setInstBusy] = useState(false)
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -207,7 +224,14 @@ export default function AssetList() {
     setExpenses((data ?? []) as AssetExpense[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  const loadInstallments = async (assetId: string) => {
+    const { data } = await supabase.from('asset_installments')
+      .select('id, seq, due_date, amount, status, paid_date')
+      .eq('asset_id', assetId).order('seq')
+    setInstallments((data ?? []) as AssetInstallment[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -225,10 +249,12 @@ export default function AssetList() {
     setDocType('photo')
     setDocs([])
     setExpenses([])
+    setInstallments([])
     setShowExpForm(false)
     setExpForm(newExpForm())
     loadDocs(a.id)
     loadExpenses(a.id)
+    loadInstallments(a.id)
     setShowForm(true)
   }
 
@@ -265,7 +291,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setShowExpForm(false); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -401,6 +427,68 @@ export default function AssetList() {
       reload()
     } catch (e) { toast.error('تعذّر الحذف: ' + ((e as Error)?.message ?? '')) }
     finally { setDeleting(false) }
+  }
+
+  // توليد جدول أقساط تفصيلي من خطة التمويل (يمسح القديم ويعيد التوليد)
+  const generateSchedule = async () => {
+    if (!editId) return
+    const total = Number(form.total_installments) || 0
+    const monthly = Number(form.monthly_installment) || 0
+    const paid = Number(form.paid_installments) || 0
+    if (total <= 0 || monthly <= 0) { toast.error('أدخل عدد الأقساط والقسط الشهري أولاً'); return }
+    const anchor = form.next_installment_date || new Date().toISOString().slice(0, 10)
+    setInstBusy(true)
+    try {
+      const rows = Array.from({ length: total }, (_, i) => {
+        const seq = i + 1
+        return {
+          asset_id: editId,
+          seq,
+          due_date: addMonths(anchor, seq - (paid + 1)),
+          amount: monthly,
+          status: seq <= paid ? 'paid' : 'pending',
+          paid_date: null as string | null,
+        }
+      })
+      await supabase.from('asset_installments').delete().eq('asset_id', editId)
+      const { error } = await supabase.from('asset_installments').insert(rows)
+      if (error) throw error
+      toast.success('تم توليد جدول الأقساط')
+      await loadInstallments(editId)
+    } catch (e) { toast.error('تعذّر التوليد: ' + ((e as Error)?.message ?? '')) }
+    finally { setInstBusy(false) }
+  }
+
+  // تسجيل دفع قسط مجدول: قيد المصروف + تعليم القسط مدفوعاً + مزامنة ملخّص الأصل
+  const payScheduleRow = async (row: AssetInstallment) => {
+    if (!editId || instBusy) return
+    setInstBusy(true)
+    const today = new Date().toISOString().slice(0, 10)
+    try {
+      const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
+        asset_id: editId,
+        project_id: null,
+        entry_date: today,
+        amount: Number(row.amount),
+        category: 'equipment',
+        expense_type: 'installment',
+        payment_method: 'bank_transfer',
+        description: `قسط بنكي — ${form.name}${form.bank_name ? ' / ' + form.bank_name : ''} (قسط ${row.seq})`,
+      }).select('id').single()
+      if (expErr) { toast.error('تعذّر قيد القسط في المصاريف'); return }
+      const { error: updErr } = await supabase.from('asset_installments')
+        .update({ status: 'paid', paid_date: today, expense_id: (exp as { id: string }).id }).eq('id', row.id)
+      if (updErr) { toast.error('تعذّر تحديث القسط'); return }
+      const { data: after } = await supabase.from('asset_installments').select('due_date, status').eq('asset_id', editId).order('seq')
+      const rows2 = (after ?? []) as { due_date: string | null; status: string }[]
+      const paidCount = rows2.filter(r => r.status === 'paid').length
+      const nextPending = rows2.find(r => r.status !== 'paid')
+      await supabase.from('assets').update({ paid_installments: paidCount, next_installment_date: nextPending?.due_date ?? null }).eq('id', editId)
+      setForm(f => ({ ...f, paid_installments: String(paidCount), next_installment_date: nextPending?.due_date ?? '' }))
+      toast.success('تم تسجيل دفع القسط وقيده في المصاريف')
+      await loadInstallments(editId); await loadExpenses(editId); reload()
+    } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
+    finally { setInstBusy(false) }
   }
 
   // تسجيل دفع قسط: زيادة المدفوع + تحديث التاريخ القادم + قيد صرف حقيقي في المصاريف
@@ -576,6 +664,63 @@ export default function AssetList() {
                     </div>
                   </div>
                 )}
+
+                <div className="border-t border-purple-200 pt-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold text-purple-900">جدول الأقساط التفصيلي</span>
+                    {editId && (
+                      <button type="button" onClick={generateSchedule} disabled={instBusy}
+                        className="text-xs text-purple-700 hover:text-purple-900 flex items-center gap-1 disabled:opacity-60">
+                        {installments.length > 0 ? 'إعادة توليد' : 'توليد الجدول'}
+                      </button>
+                    )}
+                  </div>
+                  {!editId ? (
+                    <div className="text-xs text-slate-500 bg-white rounded-lg p-2 border border-purple-100">احفظ الأصل أولاً ثم ولّد الجدول.</div>
+                  ) : installments.length === 0 ? (
+                    <div className="text-xs text-slate-400 text-center py-3 border border-dashed border-purple-200 rounded-lg bg-white">لا يوجد جدول بعد — اضغط «توليد الجدول»</div>
+                  ) : (
+                    <div className="bg-white border border-purple-100 rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-purple-50 text-purple-700">
+                          <tr>
+                            <th className="px-2 py-1.5 text-right font-medium">#</th>
+                            <th className="px-2 py-1.5 text-right font-medium">الاستحقاق</th>
+                            <th className="px-2 py-1.5 text-right font-medium">المبلغ</th>
+                            <th className="px-2 py-1.5 text-right font-medium">الحالة</th>
+                            <th className="px-2 py-1.5"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-purple-50">
+                          {installments.map((row, idx) => {
+                            const isNextPending = row.status !== 'paid' && installments.findIndex(r => r.status !== 'paid') === idx
+                            return (
+                              <tr key={row.id} className={row.status === 'paid' ? 'bg-green-50/40' : ''}>
+                                <td className="px-2 py-1.5 text-slate-600">{row.seq}</td>
+                                <td className="px-2 py-1.5 text-slate-600 whitespace-nowrap">{row.due_date ? formatDate(row.due_date) : '—'}</td>
+                                <td className="px-2 py-1.5 font-medium text-slate-700 whitespace-nowrap" dir="ltr">{formatCurrency(Number(row.amount || 0))}</td>
+                                <td className="px-2 py-1.5 whitespace-nowrap">
+                                  {row.status === 'paid'
+                                    ? <span className="text-green-700">مدفوع{row.paid_date ? ` · ${formatDate(row.paid_date)}` : ''}</span>
+                                    : <span className="text-amber-700">مستحق</span>}
+                                </td>
+                                <td className="px-2 py-1.5 text-left">
+                                  {isNextPending && (
+                                    <button type="button" onClick={() => payScheduleRow(row)} disabled={instBusy}
+                                      className="text-xs font-medium text-white px-2 py-1 rounded-md disabled:opacity-60"
+                                      style={{ background: 'linear-gradient(135deg, #a855f7, #7b4a2d)' }}>
+                                      {instBusy ? '...' : 'تسجيل الدفع'}
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -724,7 +869,7 @@ export default function AssetList() {
 
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
             {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
