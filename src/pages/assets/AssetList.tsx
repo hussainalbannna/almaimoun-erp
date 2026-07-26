@@ -74,6 +74,38 @@ const DOC_TYPES = [
 ]
 const DOC_TYPE_LABEL: Record<string, string> = Object.fromEntries(DOC_TYPES.map(d => [d.value, d.label]))
 
+// أنواع مصاريف الأصل + طرق الدفع
+const ASSET_EXPENSE_TYPES = [
+  { value: 'fuel', label: 'بنزين / وقود' },
+  { value: 'maintenance', label: 'صيانة وإصلاح' },
+  { value: 'tools', label: 'قطع غيار / أدوات' },
+  { value: 'insurance', label: 'تأمين / بوليصة' },
+  { value: 'government', label: 'رسوم حكومية (تسجيل/تجديد)' },
+  { value: 'general', label: 'مصروف عام' },
+]
+const EXPENSE_TYPE_LABEL: Record<string, string> = {
+  ...Object.fromEntries(ASSET_EXPENSE_TYPES.map(e => [e.value, e.label])),
+  installment: 'قسط بنكي',
+}
+const EXPENSE_PAYMENT_METHODS = [
+  { value: 'cash', label: 'نقداً' },
+  { value: 'bank_transfer', label: 'تحويل بنكي' },
+  { value: 'cheque', label: 'شيك' },
+  { value: 'benefit', label: 'بنفت' },
+  { value: 'card', label: 'بطاقة' },
+]
+const PAYMENT_LABEL: Record<string, string> = Object.fromEntries(EXPENSE_PAYMENT_METHODS.map(m => [m.value, m.label]))
+const newExpForm = () => ({ entry_date: new Date().toISOString().slice(0, 10), amount: '', expense_type: 'fuel', payment_method: 'cash', description: '' })
+
+interface AssetExpense {
+  id: string
+  entry_date: string | null
+  amount: number
+  expense_type: string | null
+  payment_method: string | null
+  description: string | null
+}
+
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -115,6 +147,12 @@ export default function AssetList() {
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // ── المصاريف المرتبطة بالأصل ──
+  const [expenses, setExpenses] = useState<AssetExpense[]>([])
+  const [showExpForm, setShowExpForm] = useState(false)
+  const [expBusy, setExpBusy] = useState(false)
+  const [expForm, setExpForm] = useState(newExpForm())
+
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
   const reload = () => {
@@ -142,7 +180,16 @@ export default function AssetList() {
     setDocs((data ?? []) as AssetDoc[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  // جلب مصاريف أصل معيّن (من دفتر المصاريف المرتبطة به)
+  const loadExpenses = async (assetId: string) => {
+    const { data } = await supabase.from('accounts_payable')
+      .select('id, entry_date, amount, expense_type, payment_method, description')
+      .eq('asset_id', assetId)
+      .order('entry_date', { ascending: false })
+    setExpenses((data ?? []) as AssetExpense[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -158,7 +205,11 @@ export default function AssetList() {
     })
     setDocType('photo')
     setDocs([])
+    setExpenses([])
+    setShowExpForm(false)
+    setExpForm(newExpForm())
     loadDocs(a.id)
+    loadExpenses(a.id)
     setShowForm(true)
   }
 
@@ -191,7 +242,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -277,16 +328,63 @@ export default function AssetList() {
     queryClient.invalidateQueries({ queryKey: ['assets'] })
   }
 
+  // إضافة مصروف مرتبط بالأصل (يُسجَّل في دفتر المصاريف accounts_payable)
+  const addExpense = async () => {
+    if (!editId) return
+    const amt = Number(expForm.amount)
+    if (!amt || amt <= 0) { toast.error('أدخل مبلغ المصروف'); return }
+    setExpBusy(true)
+    try {
+      const { error } = await supabase.from('accounts_payable').insert({
+        asset_id: editId,
+        project_id: null,
+        entry_date: expForm.entry_date || new Date().toISOString().slice(0, 10),
+        amount: amt,
+        category: 'equipment',
+        expense_type: expForm.expense_type,
+        payment_method: expForm.payment_method,
+        description: expForm.description || EXPENSE_TYPE_LABEL[expForm.expense_type] || 'مصروف أصل',
+      })
+      if (error) throw error
+      toast.success('تم تسجيل المصروف')
+      setExpForm(newExpForm()); setShowExpForm(false)
+      await loadExpenses(editId)
+    } catch (e) { toast.error('تعذّر التسجيل: ' + ((e as Error)?.message ?? '')) }
+    finally { setExpBusy(false) }
+  }
+
+  const deleteExpense = async (id: string) => {
+    const { error } = await supabase.from('accounts_payable').delete().eq('id', id)
+    if (error) { toast.error('تعذّر الحذف'); return }
+    toast.success('تم حذف المصروف')
+    if (editId) await loadExpenses(editId)
+  }
+
+  // تسجيل دفع قسط: زيادة المدفوع + تحديث التاريخ القادم + قيد صرف حقيقي في المصاريف
   const payInstallment = async (a: Asset) => {
     if (a.paid_installments >= a.total_installments) { toast.error('تم سداد جميع الأقساط'); return }
     const nextDate = a.next_installment_date ? new Date(a.next_installment_date) : new Date()
     nextDate.setMonth(nextDate.getMonth() + 1)
+    const today = new Date().toISOString().slice(0, 10)
     const { error } = await supabase.from('assets').update({
       paid_installments: a.paid_installments + 1,
       next_installment_date: nextDate.toISOString().slice(0, 10),
     }).eq('id', a.id)
     if (error) { toast.error('حدث خطأ'); return }
-    toast.success('تم تسجيل دفع القسط')
+    if (Number(a.monthly_installment) > 0) {
+      await supabase.from('accounts_payable').insert({
+        asset_id: a.id,
+        project_id: null,
+        entry_date: today,
+        amount: Number(a.monthly_installment),
+        category: 'equipment',
+        expense_type: 'installment',
+        payment_method: 'bank_transfer',
+        description: `قسط بنكي — ${a.name}${a.bank_name ? ' / ' + a.bank_name : ''}`,
+      })
+    }
+    toast.success('تم تسجيل دفع القسط وقيده في المصاريف')
+    if (editId === a.id) await loadExpenses(a.id)
     reload()
   }
 
@@ -420,6 +518,78 @@ export default function AssetList() {
 
           <Textarea rows={2} placeholder="ملاحظات" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
 
+          {/* ═══ المصاريف على الأصل ═══ */}
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Wallet size={16} className="text-amber-600" />
+                <span className="text-sm font-semibold text-slate-700">المصاريف على الأصل</span>
+              </div>
+              {editId && (
+                <button type="button" onClick={() => setShowExpForm(v => !v)} className="text-xs text-amber-700 hover:text-amber-800 flex items-center gap-1">
+                  <Plus size={13} /> إضافة مصروف
+                </button>
+              )}
+            </div>
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل مصاريفه.</div>
+            ) : (
+              <>
+                <div className="bg-amber-50/60 border border-amber-200 rounded-lg p-3 mb-3 flex items-center justify-between">
+                  <span className="text-sm text-amber-800">إجمالي المصروف على هذا الأصل (تشغيلي + أقساط مسجّلة)</span>
+                  <span className="font-bold text-amber-900" dir="ltr">{formatCurrency(expenses.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
+                </div>
+                {showExpForm && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="التاريخ" type="date" value={expForm.entry_date} onChange={e => setExpForm(p => ({ ...p, entry_date: e.target.value }))} />
+                      <Input label="المبلغ (د.ب)" type="number" value={expForm.amount} onChange={e => setExpForm(p => ({ ...p, amount: e.target.value }))} dir="ltr" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Select label="نوع المصروف" options={ASSET_EXPENSE_TYPES} value={expForm.expense_type} onChange={e => setExpForm(p => ({ ...p, expense_type: e.target.value }))} />
+                      <Select label="طريقة الدفع" options={EXPENSE_PAYMENT_METHODS} value={expForm.payment_method} onChange={e => setExpForm(p => ({ ...p, payment_method: e.target.value }))} />
+                    </div>
+                    <Input label="وصف (اختياري)" value={expForm.description} onChange={e => setExpForm(p => ({ ...p, description: e.target.value }))} />
+                    <div className="flex gap-2">
+                      <Button loading={expBusy} onClick={addExpense}>تسجيل المصروف</Button>
+                      <Button variant="secondary" onClick={() => { setShowExpForm(false); setExpForm(newExpForm()) }}>إلغاء</Button>
+                    </div>
+                  </div>
+                )}
+                {expenses.length === 0 ? (
+                  <div className="text-sm text-slate-400 text-center py-4 border border-dashed border-slate-200 rounded-lg">لا توجد مصاريف مسجّلة على هذا الأصل</div>
+                ) : (
+                  <div className="border border-slate-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 text-right font-medium">التاريخ</th>
+                          <th className="px-3 py-2 text-right font-medium">النوع</th>
+                          <th className="px-3 py-2 text-right font-medium">المبلغ</th>
+                          <th className="px-3 py-2 text-right font-medium">الطريقة</th>
+                          <th className="px-3 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {expenses.map(e => (
+                          <tr key={e.id} className="hover:bg-slate-50/60">
+                            <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{e.entry_date ? formatDate(e.entry_date) : '—'}</td>
+                            <td className="px-3 py-2 text-slate-700">{EXPENSE_TYPE_LABEL[e.expense_type ?? ''] ?? e.expense_type ?? '—'}{e.description ? <span className="text-xs text-slate-400"> · {e.description}</span> : ''}</td>
+                            <td className="px-3 py-2 font-bold text-red-600 whitespace-nowrap" dir="ltr">{formatCurrency(Number(e.amount || 0))}</td>
+                            <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{PAYMENT_LABEL[e.payment_method ?? ''] ?? e.payment_method ?? '—'}</td>
+                            <td className="px-3 py-2 text-left">
+                              <button type="button" onClick={() => deleteExpense(e.id)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Trash2 size={14} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           <div className="border-t border-slate-100 pt-4">
             <div className="flex items-center gap-2 mb-3">
               <Paperclip size={16} className="text-amber-600" />
@@ -486,7 +656,7 @@ export default function AssetList() {
 
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setCoverPath(null) }}>إغلاق</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
           </div>
         </div>
       )}
