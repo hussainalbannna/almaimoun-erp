@@ -24,16 +24,38 @@ export default function WorkerList() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'company' | 'lmra' | 'former'>('all')
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const { data: workers = [], isLoading } = useQuery({ queryKey: ['workers-list'], queryFn: fetchWorkers })
   const reload = () => queryClient.invalidateQueries({ queryKey: ['workers-list'] })
 
+  // حماية التاريخ: إن كان للعامل أي حضور/كشوف/سلف نؤرشفه (سابقون) بدل حذفه المدمّر؛ الفارغ فقط يُحذف فعلاً
   const handleDelete = async () => {
     if (!deleteId) return
-    await supabase.from('workers').delete().eq('id', deleteId)
-    toast.success('تم حذف العامل')
-    setDeleteId(null)
-    reload()
+    setDeleting(true)
+    try {
+      const [att, adj, adv] = await Promise.all([
+        supabase.from('worker_attendance').select('id', { count: 'exact', head: true }).eq('worker_id', deleteId),
+        supabase.from('payroll_adjustments').select('id', { count: 'exact', head: true }).eq('worker_id', deleteId),
+        supabase.from('worker_advances').select('id', { count: 'exact', head: true }).eq('worker_id', deleteId),
+      ])
+      const hasHistory = (att.count ?? 0) > 0 || (adj.count ?? 0) > 0 || (adv.count ?? 0) > 0
+      if (hasHistory) {
+        const { error } = await supabase.from('workers').update({ status: 'former' }).eq('id', deleteId)
+        if (error) throw error
+        toast.success('للعامل سجلّ سابق — تمت أرشفته (نُقل إلى «سابقون») حفاظًا على تاريخه')
+      } else {
+        const { error } = await supabase.from('workers').delete().eq('id', deleteId)
+        if (error) throw error
+        toast.success('تم حذف العامل')
+      }
+      setDeleteId(null)
+      reload()
+    } catch (e) {
+      toast.error('تعذّر الحذف: ' + ((e as Error)?.message ?? ''))
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const filtered = useMemo(() => {
@@ -162,7 +184,10 @@ export default function WorkerList() {
         )}
       </div>
 
-      <ConfirmDialog open={!!deleteId} title="حذف العامل" message="هل أنت متأكد من حذف هذا العامل؟" onConfirm={handleDelete} onCancel={() => setDeleteId(null)} />
+      <ConfirmDialog open={!!deleteId} title="حذف العامل"
+        message="إن كان لهذا العامل سجلّ حضور أو رواتب أو سلف، ستتم أرشفته (نقله إلى «سابقون») حفاظًا على تاريخه بدل حذفه نهائيًا. متابعة؟"
+        confirmLabel={deleting ? 'جارٍ التنفيذ...' : 'متابعة'} danger loading={deleting}
+        onConfirm={handleDelete} onCancel={() => { setDeleting(false); setDeleteId(null) }} />
     </div>
   )
 }
