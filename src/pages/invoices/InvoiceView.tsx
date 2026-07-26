@@ -362,7 +362,34 @@ export default function InvoiceView() {
   )
 }
 
-function buildPrintableHTML(invoice: Invoice, items: InvoiceItem[], company: CompanySettings | null): string {
+// تهريب HTML لكل قيمة يتحكّم بها المستخدم قبل حقنها في قوالب الطباعة/البريد (منع XSS)
+function escHtml(s: unknown): string {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
+}
+// نسخ مُهرَّبة من الحقول النصّية فقط (الأرقام تبقى كما هي عبر الـspread)
+function sanitizeInvoice(inv: Invoice): Invoice {
+  return {
+    ...inv,
+    invoice_number: escHtml(inv.invoice_number), customer_name: escHtml(inv.customer_name),
+    customer_address: escHtml(inv.customer_address), customer_email: escHtml(inv.customer_email),
+    customer_tax_number: escHtml(inv.customer_tax_number), payment_terms: escHtml(inv.payment_terms),
+    notes: escHtml(inv.notes), issue_date: escHtml(inv.issue_date), due_date: escHtml(inv.due_date),
+  } as Invoice
+}
+function sanitizeCompany(c: CompanySettings | null): CompanySettings | null {
+  if (!c) return null
+  return {
+    ...c,
+    address: escHtml(c.address), phone: escHtml(c.phone), email: escHtml(c.email),
+    tax_number: escHtml(c.tax_number), commercial_reg: escHtml(c.commercial_reg), name_en: escHtml(c.name_en),
+    bank_name: escHtml(c.bank_name), bank_account: escHtml(c.bank_account), bank_iban: escHtml(c.bank_iban),
+  } as CompanySettings
+}
+
+function buildPrintableHTML(invoiceRaw: Invoice, itemsRaw: InvoiceItem[], companyRaw: CompanySettings | null): string {
+  const invoice = sanitizeInvoice(invoiceRaw)
+  const company = sanitizeCompany(companyRaw)
+  const items = itemsRaw.map(it => ({ ...it, description: escHtml(it.description) }))
   const itemRows = items.map((item, idx) => `
     <tr style="${idx % 2 !== 0 ? 'background:#f8fafc;' : ''}">
       <td style="padding:10px 14px;color:#94a3b8;font-size:13px;">${idx + 1}</td>
@@ -456,7 +483,10 @@ function buildPrintableHTML(invoice: Invoice, items: InvoiceItem[], company: Com
 </html>`
 }
 
-function buildEmailHTML(invoice: Invoice, items: InvoiceItem[], company: CompanySettings | null): string {
+function buildEmailHTML(invoiceRaw: Invoice, itemsRaw: InvoiceItem[], companyRaw: CompanySettings | null): string {
+  const invoice = sanitizeInvoice(invoiceRaw)
+  const company = sanitizeCompany(companyRaw)
+  const items = itemsRaw.map(it => ({ ...it, description: escHtml(it.description) }))
   const itemRows = items.map((item, idx) => `
     <tr style="border-bottom:1px solid #f1f5f9;">
       <td style="padding:10px 12px;color:#64748b;font-size:13px;">${idx + 1}</td>
