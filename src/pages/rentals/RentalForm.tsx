@@ -114,19 +114,19 @@ export default function RentalForm() {
     if (form.rental_type === 'recurring' && (!form.due_day || Number(form.due_day) < 1 || Number(form.due_day) > 31)) { toast.error('أدخل يوم استحقاق صحيح (1-31)'); return }
 
     setSaving(true)
+    // نتتبّع الملف الذي رفعناه حديثاً كي ننظّفه إن فشل الحفظ لاحقاً (منع الملفات اليتيمة)
+    let uploadedNewPath = ''
     try {
       // ── رفع العقد إلى Storage وحفظ المسار (بدل base64 داخل الجدول) ──
       // إن كان مسار موجود لم يتغيّر: نُبقيه. إن كان Data URL جديد: نرفعه.
-      // إن أُزيل: نمسحه ونحذف المسار القديم من Storage.
       let contractPath = ''
       if (form.contract_data) {
-        contractPath = isDataUrl(form.contract_data)
-          ? await uploadDataUrl(form.contract_data, RENTALS_FOLDER) // ملف جديد → رفع
-          : form.contract_data                                     // مسار موجود → إبقاء
-      }
-      // حذف العقد القديم من Storage عند استبداله أو إزالته
-      if (originalContractPath && originalContractPath !== contractPath) {
-        await deleteAttachment(originalContractPath)
+        if (isDataUrl(form.contract_data)) {
+          contractPath = await uploadDataUrl(form.contract_data, RENTALS_FOLDER) // ملف جديد → رفع
+          uploadedNewPath = contractPath                                          // نتذكّره لتنظيفه عند الفشل
+        } else {
+          contractPath = form.contract_data                                       // مسار موجود → إبقاء
+        }
       }
 
       const payload = {
@@ -155,7 +155,14 @@ export default function RentalForm() {
         const { error } = await supabase.from('rentals').insert(payload)
         if (error) throw error
       }
+
+      // نجح الحفظ في القاعدة → الآن فقط نحذف العقد القديم من Storage (عند استبداله أو إزالته)
+      if (originalContractPath && originalContractPath !== contractPath) {
+        await deleteAttachment(originalContractPath).catch(() => { /* تنظيف اختياري */ })
+      }
     } catch (e) {
+      // فشل الحفظ → نحذف الملف الجديد الذي رفعناه للتوّ كي لا يبقى يتيماً في التخزين
+      if (uploadedNewPath) await deleteAttachment(uploadedNewPath).catch(() => {})
       toast.error('فشل الحفظ: ' + ((e as Error)?.message ?? '')); setSaving(false); return
     }
 
