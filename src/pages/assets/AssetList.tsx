@@ -162,6 +162,49 @@ interface AssetFuelLog {
 }
 const newFuelForm = () => ({ fill_date: new Date().toISOString().slice(0, 10), odometer: '', liters: '', cost: '', station: '', notes: '' })
 
+const INCIDENT_TYPES = [
+  { value: 'accident', label: 'حادث مروري' },
+  { value: 'damage', label: 'تلف / ضرر' },
+  { value: 'breakdown', label: 'عطل ميكانيكي' },
+  { value: 'theft', label: 'سرقة' },
+  { value: 'fine', label: 'مخالفة مرورية' },
+  { value: 'other', label: 'أخرى' },
+]
+const INCIDENT_TYPE_LABEL: Record<string, string> = Object.fromEntries(INCIDENT_TYPES.map(t => [t.value, t.label]))
+const SEVERITY_OPTS = [
+  { value: 'minor', label: 'بسيط' },
+  { value: 'moderate', label: 'متوسط' },
+  { value: 'major', label: 'جسيم' },
+]
+const SEVERITY_LABEL: Record<string, string> = Object.fromEntries(SEVERITY_OPTS.map(t => [t.value, t.label]))
+const SEVERITY_COLOR: Record<string, string> = { minor: 'text-amber-600', moderate: 'text-orange-600', major: 'text-red-600' }
+const CLAIM_STATUS_OPTS = [
+  { value: 'none', label: 'لا يوجد' },
+  { value: 'submitted', label: 'مُقدَّمة' },
+  { value: 'approved', label: 'مقبولة' },
+  { value: 'paid', label: 'مُسدَّدة' },
+  { value: 'rejected', label: 'مرفوضة' },
+]
+const CLAIM_STATUS_LABEL: Record<string, string> = Object.fromEntries(CLAIM_STATUS_OPTS.map(t => [t.value, t.label]))
+
+interface AssetIncident {
+  id: string
+  incident_date: string | null
+  incident_type: string | null
+  severity: string | null
+  description: string | null
+  location: string | null
+  driver: string | null
+  cost: number
+  insurance_claim: boolean
+  claim_number: string | null
+  claim_amount: number | null
+  claim_status: string | null
+  resolved: boolean
+  expense_id: string | null
+}
+const newIncidentForm = () => ({ incident_date: new Date().toISOString().slice(0, 10), incident_type: 'accident', severity: 'minor', description: '', location: '', driver: '', cost: '', insurance_claim: false, claim_number: '', claim_amount: '', claim_status: 'none', resolved: false })
+
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -233,6 +276,10 @@ export default function AssetList() {
   const [showFuelForm, setShowFuelForm] = useState(false)
   const [fuelBusy, setFuelBusy] = useState(false)
   const [fuelForm, setFuelForm] = useState(newFuelForm())
+  const [incidents, setIncidents] = useState<AssetIncident[]>([])
+  const [showIncidentForm, setShowIncidentForm] = useState(false)
+  const [incidentBusy, setIncidentBusy] = useState(false)
+  const [incidentForm, setIncidentForm] = useState(newIncidentForm())
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -296,7 +343,14 @@ export default function AssetList() {
     setFuel((data ?? []) as AssetFuelLog[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  const loadIncidents = async (assetId: string) => {
+    const { data } = await supabase.from('asset_incidents')
+      .select('id, incident_date, incident_type, severity, description, location, driver, cost, insurance_claim, claim_number, claim_amount, claim_status, resolved, expense_id')
+      .eq('asset_id', assetId).order('incident_date', { ascending: false })
+    setIncidents((data ?? []) as AssetIncident[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setIncidents([]); setShowIncidentForm(false); setIncidentForm(newIncidentForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -321,6 +375,9 @@ export default function AssetList() {
     setFuel([])
     setShowFuelForm(false)
     setFuelForm(newFuelForm())
+    setIncidents([])
+    setShowIncidentForm(false)
+    setIncidentForm(newIncidentForm())
     setShowExpForm(false)
     setExpForm(newExpForm())
     loadDocs(a.id)
@@ -328,6 +385,7 @@ export default function AssetList() {
     loadInstallments(a.id)
     loadMaintenance(a.id)
     loadFuel(a.id)
+    loadIncidents(a.id)
     setShowForm(true)
   }
 
@@ -364,7 +422,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setShowExpForm(false); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -577,6 +635,67 @@ export default function AssetList() {
       await supabase.from('asset_fuel_logs').delete().eq('id', rec.id)
       toast.success('تم حذف التعبئة')
       if (editId) { await loadFuel(editId); await loadExpenses(editId) }
+    } catch { toast.error('تعذّر الحذف') }
+  }
+
+  const addIncident = async () => {
+    if (!editId) return
+    if (!incidentForm.description.trim()) { toast.error('اكتب وصف الحادث'); return }
+    setIncidentBusy(true)
+    try {
+      const cost = Number(incidentForm.cost) || 0
+      let expenseId: string | null = null
+      if (cost > 0) {
+        const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
+          asset_id: editId,
+          project_id: null,
+          entry_date: incidentForm.incident_date || new Date().toISOString().slice(0, 10),
+          amount: cost,
+          category: 'equipment',
+          expense_type: 'incident',
+          payment_method: 'cash',
+          description: `${INCIDENT_TYPE_LABEL[incidentForm.incident_type] ?? 'حادث'} — ${form.name}`,
+        }).select('id').single()
+        if (expErr) { toast.error('تعذّر قيد تكلفة الحادث'); return }
+        expenseId = (exp as { id: string }).id
+      }
+      const { error } = await supabase.from('asset_incidents').insert({
+        asset_id: editId,
+        incident_date: incidentForm.incident_date || null,
+        incident_type: incidentForm.incident_type,
+        severity: incidentForm.severity,
+        description: incidentForm.description.trim(),
+        location: incidentForm.location || null,
+        driver: incidentForm.driver || null,
+        cost,
+        insurance_claim: incidentForm.insurance_claim,
+        claim_number: incidentForm.insurance_claim ? (incidentForm.claim_number || null) : null,
+        claim_amount: incidentForm.insurance_claim && incidentForm.claim_amount ? Number(incidentForm.claim_amount) : null,
+        claim_status: incidentForm.insurance_claim ? incidentForm.claim_status : 'none',
+        resolved: incidentForm.resolved,
+        expense_id: expenseId,
+      })
+      if (error) throw error
+      toast.success('تم تسجيل الحادث')
+      setIncidentForm(newIncidentForm()); setShowIncidentForm(false)
+      await loadIncidents(editId); await loadExpenses(editId)
+    } catch (e) { toast.error('تعذّر التسجيل: ' + ((e as Error)?.message ?? '')) }
+    finally { setIncidentBusy(false) }
+  }
+
+  const toggleIncidentResolved = async (rec: AssetIncident) => {
+    try {
+      await supabase.from('asset_incidents').update({ resolved: !rec.resolved }).eq('id', rec.id)
+      if (editId) await loadIncidents(editId)
+    } catch { toast.error('تعذّر التحديث') }
+  }
+
+  const deleteIncident = async (rec: AssetIncident) => {
+    try {
+      if (rec.expense_id) await supabase.from('accounts_payable').delete().eq('id', rec.expense_id)
+      await supabase.from('asset_incidents').delete().eq('id', rec.id)
+      toast.success('تم حذف الحادث')
+      if (editId) { await loadIncidents(editId); await loadExpenses(editId) }
     } catch { toast.error('تعذّر الحذف') }
   }
 
@@ -1075,7 +1194,9 @@ export default function AssetList() {
             ) : (() => {
               const eff = fuel.map((f, i) => {
                 if (i === 0) return null
-                const dist = Number(f.odometer || 0) - Number(fuel[i - 1].odometer || 0)
+                const prev = fuel[i - 1]
+                if (f.odometer == null || prev.odometer == null) return null
+                const dist = Number(f.odometer) - Number(prev.odometer)
                 const lit = Number(f.liters || 0)
                 return (dist > 0 && lit > 0) ? dist / lit : null
               })
@@ -1147,6 +1268,116 @@ export default function AssetList() {
                         </table>
                       </div>
                       {avgEff !== null && <p className="text-xs text-slate-400 mt-2">⚠ = استهلاك أعلى من المعتاد (أقل من 70% من متوسط الكفاءة) — قد يشير لتسرّب أو مشكلة.</p>}
+                    </>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={16} className="text-red-600" />
+                <span className="text-sm font-semibold text-slate-700">سجل الحوادث والأعطال</span>
+                {incidents.length > 0 && <span className="text-xs text-slate-400">({incidents.length})</span>}
+              </div>
+              {editId && (
+                <button type="button" onClick={() => setShowIncidentForm(v => !v)} className="text-xs text-red-700 hover:text-red-800 flex items-center gap-1">
+                  <Plus size={13} /> تسجيل حادث
+                </button>
+              )}
+            </div>
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل الحوادث.</div>
+            ) : (() => {
+              const totalCost = incidents.reduce((s, x) => s + Number(x.cost || 0), 0)
+              const totalClaim = incidents.reduce((s, x) => s + (x.insurance_claim && (x.claim_status === 'approved' || x.claim_status === 'paid') ? Number(x.claim_amount || 0) : 0), 0)
+              const netCost = totalCost - totalClaim
+              const openCount = incidents.filter(x => !x.resolved).length
+              return (
+                <>
+                  {showIncidentForm && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="التاريخ" type="date" value={incidentForm.incident_date} onChange={e => setIncidentForm(p => ({ ...p, incident_date: e.target.value }))} />
+                        <Select label="النوع" options={INCIDENT_TYPES} value={incidentForm.incident_type} onChange={e => setIncidentForm(p => ({ ...p, incident_type: e.target.value }))} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Select label="الخطورة" options={SEVERITY_OPTS} value={incidentForm.severity} onChange={e => setIncidentForm(p => ({ ...p, severity: e.target.value }))} />
+                        <Input label="تكلفة الإصلاح (د.ب)" type="number" value={incidentForm.cost} onChange={e => setIncidentForm(p => ({ ...p, cost: e.target.value }))} dir="ltr" />
+                      </div>
+                      <Input label="الوصف" value={incidentForm.description} onChange={e => setIncidentForm(p => ({ ...p, description: e.target.value }))} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="الموقع (اختياري)" value={incidentForm.location} onChange={e => setIncidentForm(p => ({ ...p, location: e.target.value }))} />
+                        <Input label="السائق / المشغّل (اختياري)" value={incidentForm.driver} onChange={e => setIncidentForm(p => ({ ...p, driver: e.target.value }))} />
+                      </div>
+                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                        <input type="checkbox" checked={incidentForm.insurance_claim} onChange={e => setIncidentForm(p => ({ ...p, insurance_claim: e.target.checked }))} className="rounded border-slate-300" />
+                        مطالبة تأمين
+                      </label>
+                      {incidentForm.insurance_claim && (
+                        <div className="grid grid-cols-3 gap-2">
+                          <Input label="رقم المطالبة" value={incidentForm.claim_number} onChange={e => setIncidentForm(p => ({ ...p, claim_number: e.target.value }))} />
+                          <Input label="قيمة المطالبة (د.ب)" type="number" value={incidentForm.claim_amount} onChange={e => setIncidentForm(p => ({ ...p, claim_amount: e.target.value }))} dir="ltr" />
+                          <Select label="الحالة" options={CLAIM_STATUS_OPTS} value={incidentForm.claim_status} onChange={e => setIncidentForm(p => ({ ...p, claim_status: e.target.value }))} />
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                        <input type="checkbox" checked={incidentForm.resolved} onChange={e => setIncidentForm(p => ({ ...p, resolved: e.target.checked }))} className="rounded border-slate-300" />
+                        تمّت المعالجة
+                      </label>
+                      <div className="flex gap-2">
+                        <Button loading={incidentBusy} onClick={addIncident}>تسجيل الحادث</Button>
+                        <Button variant="secondary" onClick={() => { setShowIncidentForm(false); setIncidentForm(newIncidentForm()) }}>إلغاء</Button>
+                      </div>
+                      <p className="text-xs text-slate-400">تكلفة الإصلاح تُقيَّد تلقائيًا في مصاريف الأصل. أرفق صور الحادث من قسم المستندات.</p>
+                    </div>
+                  )}
+                  {incidents.length === 0 ? (
+                    <div className="text-sm text-slate-400 text-center py-4 border border-dashed border-slate-200 rounded-lg">لا يوجد سجل حوادث</div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-3 gap-2 mb-3 text-center text-xs">
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">صافي التكلفة</div><div className="font-bold text-red-600" dir="ltr">{formatCurrency(netCost)}</div></div>
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">مُسترَد التأمين</div><div className="font-bold text-emerald-600" dir="ltr">{formatCurrency(totalClaim)}</div></div>
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">غير مُعالَج</div><div className={`font-bold ${openCount > 0 ? 'text-orange-600' : 'text-slate-800'}`} dir="ltr">{openCount}</div></div>
+                      </div>
+                      <div className="space-y-2">
+                        {incidents.map(x => (
+                          <div key={x.id} className={`border rounded-lg p-3 ${x.resolved ? 'border-slate-200 bg-white' : 'border-orange-200 bg-orange-50/40'}`}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-semibold text-slate-800">{INCIDENT_TYPE_LABEL[x.incident_type ?? ''] ?? 'حادث'}</span>
+                                  <span className={`text-xs font-medium ${SEVERITY_COLOR[x.severity ?? 'minor']}`}>● {SEVERITY_LABEL[x.severity ?? 'minor']}</span>
+                                  {x.resolved
+                                    ? <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> مُعالَج</span>
+                                    : <span className="text-xs text-orange-600">قيد المعالجة</span>}
+                                </div>
+                                <p className="text-sm text-slate-600 mt-1 break-words">{x.description}</p>
+                                <div className="text-xs text-slate-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                                  <span>{x.incident_date ? formatDate(x.incident_date) : '—'}</span>
+                                  {x.location && <span>📍 {x.location}</span>}
+                                  {x.driver && <span>👤 {x.driver}</span>}
+                                  {x.cost > 0 && <span className="text-red-600 font-medium" dir="ltr">{formatCurrency(Number(x.cost))}</span>}
+                                </div>
+                                {x.insurance_claim && (
+                                  <div className="text-xs mt-1 inline-flex items-center gap-1 bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-600">
+                                    تأمين: {CLAIM_STATUS_LABEL[x.claim_status ?? 'none']}
+                                    {x.claim_number ? ` · #${x.claim_number}` : ''}
+                                    {x.claim_amount ? ` · ` : ''}{x.claim_amount ? <span dir="ltr" className="text-emerald-600 font-medium">{formatCurrency(Number(x.claim_amount))}</span> : null}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button type="button" onClick={() => toggleIncidentResolved(x)} title={x.resolved ? 'إرجاع لقيد المعالجة' : 'تحديد كمُعالَج'} className={`p-1.5 rounded-lg ${x.resolved ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'}`}><CheckCircle2 size={14} /></button>
+                                <button type="button" onClick={() => deleteIncident(x)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Trash2 size={14} /></button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </>
                   )}
                 </>
