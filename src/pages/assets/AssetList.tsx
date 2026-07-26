@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
-import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
+import { compressImage, fileToDataUrl, openStoredFile, hasApiKey, readDocumentText, extractJSON } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Badge, { type BadgeColor } from '../../components/ui/Badge'
@@ -332,6 +332,8 @@ export default function AssetList() {
   const [coverPath, setCoverPath] = useState<string | null>(null)
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const aiFileRef = useRef<HTMLInputElement>(null)
+  const [aiBusy, setAiBusy] = useState(false)
   const [showQr, setShowQr] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
   const deepLinkedRef = useRef(false)
@@ -568,6 +570,29 @@ export default function AssetList() {
       queryClient.invalidateQueries({ queryKey: ['asset-doc-counts'] })
     } catch (e) { toast.error('تعذّر الرفع: ' + ((e as Error)?.message ?? '')) }
     finally { setDocBusy(false) }
+  }
+
+  const extractDatesFromDoc = async (file: File) => {
+    if (!hasApiKey()) { toast.error('خدمة الذكاء الاصطناعي غير مُفعّلة'); return }
+    setAiBusy(true)
+    try {
+      const instruction = 'أنت تقرأ وثيقة رسمية لمركبة أو معدة (تأمين/استمارة تسجيل/فحص دوري/ضمان). استخرج الحقول التالية إن وُجدت وأعِد JSON فقط بلا أي نص آخر: {"insurance_expiry":"YYYY-MM-DD","registration_expiry":"YYYY-MM-DD","inspection_expiry":"YYYY-MM-DD","warranty_expiry":"YYYY-MM-DD","plate_number":"","serial_number":""}. استخدم null لأي حقل غير موجود. حوّل أي تاريخ هجري إلى ميلادي بصيغة YYYY-MM-DD.'
+      const text = await readDocumentText(file, instruction)
+      const data = extractJSON<{ insurance_expiry?: string | null; registration_expiry?: string | null; inspection_expiry?: string | null; warranty_expiry?: string | null; plate_number?: string | null; serial_number?: string | null }>(text)
+      if (!data) { toast.error('تعذّر قراءة الوثيقة — جرّب صورة أوضح'); return }
+      const isDate = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+      const updates: Partial<typeof emptyForm> = {}
+      const found: string[] = []
+      if (isDate(data.insurance_expiry)) { updates.insurance_expiry = data.insurance_expiry; found.push('انتهاء التأمين') }
+      if (isDate(data.registration_expiry)) { updates.registration_expiry = data.registration_expiry; found.push('انتهاء التسجيل') }
+      if (isDate(data.inspection_expiry)) { updates.inspection_expiry = data.inspection_expiry; found.push('انتهاء الفحص') }
+      if (isDate(data.warranty_expiry)) { updates.warranty_expiry = data.warranty_expiry; found.push('انتهاء الضمان') }
+      if (typeof data.plate_number === 'string' && data.plate_number.trim() && !form.plate_number) { updates.plate_number = data.plate_number.trim(); found.push('رقم اللوحة') }
+      if (typeof data.serial_number === 'string' && data.serial_number.trim() && !form.serial_number) { updates.serial_number = data.serial_number.trim(); found.push('الرقم التسلسلي') }
+      if (found.length) { setForm(f => ({ ...f, ...updates })); toast.success('تم استخراج: ' + found.join('، ') + ' — راجِعها ثم احفظ') }
+      else toast('لم يُعثر على تواريخ واضحة في الوثيقة')
+    } catch (e) { toast.error('تعذّر الاستخراج: ' + ((e as Error)?.message ?? '')) }
+    finally { setAiBusy(false) }
   }
 
   const getDocUrl = async (docId: string): Promise<string | null> => {
@@ -1964,6 +1989,13 @@ export default function AssetList() {
                     style={{ background: 'linear-gradient(135deg, #c4925a, #7b4a2d)' }}>
                     {docBusy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
                     رفع مستند / صورة
+                  </button>
+                  <input ref={aiFileRef} type="file" accept="image/*,application/pdf" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) extractDatesFromDoc(f); e.target.value = '' }} />
+                  <button type="button" onClick={() => aiFileRef.current?.click()} disabled={aiBusy}
+                    className="flex items-center gap-2 text-sm px-4 py-2 rounded-lg border border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 disabled:opacity-60">
+                    {aiBusy ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
+                    استخراج التواريخ بالذكاء الاصطناعي
                   </button>
                   <span className="text-xs text-slate-400">صور أو PDF — يمكن اختيار عدة ملفات</span>
                 </div>
