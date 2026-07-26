@@ -592,6 +592,8 @@ export default function DailyLogList() {
     setSaving(true)
     // نتتبّع الصور المرفوعة حديثاً كي ننظّفها إن فشل الحفظ (منع الملفات اليتيمة)
     let newUploads: string[] = []
+    // بمجرّد حفظ صف التقرير (ومعه مسارات الصور) لا نحذف الصور حتى لو فشلت خطوة لاحقة
+    let rowSaved = false
     try {
       // ── رفع الصور الجديدة (Data URL) إلى Storage؛ المسارات الموجودة تبقى ──
       // photoPaths يحمل: مسارات قائمة (تبقى) + Data URL جديدة (تُرفع الآن)
@@ -637,6 +639,8 @@ export default function DailyLogList() {
         if (error) throw error
         logId = (inserted as { id: string }).id
       }
+      // صف التقرير محفوظ الآن ومعه مسارات الصور → لا نحذف الصور بعد هذه النقطة مهما فشل لاحقاً
+      rowSaved = true
       for (const wid of selectedWorkers) {
         await supabase.from('daily_log_workers').insert({ log_id: logId, worker_id: wid })
       }
@@ -670,8 +674,9 @@ export default function DailyLogList() {
       resetForm()
       reload()
     } catch {
-      // فشل الحفظ → نحذف الصور التي رفعناها للتوّ كي لا تبقى يتيمة في التخزين
-      if (newUploads.length) await deleteAttachment(newUploads).catch(() => {})
+      // فشل الحفظ قبل حفظ الصف → نحذف الصور المرفوعة حديثاً كي لا تبقى يتيمة.
+      // أما لو حُفظ الصف ثم فشلت خطوة لاحقة فالصور مرتبطة به فلا نحذفها (تفادي صور مكسورة)
+      if (!rowSaved && newUploads.length) await deleteAttachment(newUploads).catch(() => {})
       toast.error('حدث خطأ أثناء الحفظ')
     } finally {
       setSaving(false)
