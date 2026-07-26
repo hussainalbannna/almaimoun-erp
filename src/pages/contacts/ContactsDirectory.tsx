@@ -158,7 +158,16 @@ export default function ContactsDirectory() {
   const handleDelete = async () => {
     if (!deleteTarget) return
     const table = deleteTarget.source === 'customer' ? 'customers' : deleteTarget.source === 'supplier' ? 'suppliers' : 'contacts'
-    await supabase.from(table).delete().eq('id', deleteTarget.id)
+    const { error } = await supabase.from(table).delete().eq('id', deleteTarget.id)
+    if (error) {
+      // 23503 = انتهاك مفتاح أجنبي: الجهة مرتبطة بسجلات أخرى (فواتير/إيصالات...) فلا يصح حذفها
+      toast.error(
+        error.code === '23503'
+          ? 'لا يمكن حذف هذه الجهة لارتباطها بسجلات أخرى (فواتير أو إيصالات). احذف تلك السجلات أولاً.'
+          : 'تعذّر الحذف: ' + error.message,
+      )
+      return
+    }
     toast.success('تم الحذف')
     setDeleteTarget(null)
     reload()
