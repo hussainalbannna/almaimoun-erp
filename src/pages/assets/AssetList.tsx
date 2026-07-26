@@ -44,6 +44,10 @@ interface Asset {
   next_installment_date: string | null
   useful_life_years: number | null
   salvage_value: number | null
+  disposal_date: string | null
+  disposal_type: string | null
+  disposal_amount: number | null
+  disposal_notes: string | null
 }
 
 interface AssetDoc {
@@ -130,7 +134,7 @@ const addMonths = (dateStr: string, delta: number): string => {
   return `${y}-${m}-${day}`
 }
 
-const computeDepreciation = (purchaseValue: number, purchaseDate: string | null, usefulLifeYears: number, salvageValue: number) => {
+const computeDepreciation = (purchaseValue: number, purchaseDate: string | null, usefulLifeYears: number, salvageValue: number, asOfMs?: number) => {
   if (!purchaseValue || purchaseValue <= 0 || !usefulLifeYears || usefulLifeYears <= 0) return null
   const salvage = Math.min(Math.max(salvageValue || 0, 0), purchaseValue)
   const base = purchaseValue - salvage
@@ -138,13 +142,23 @@ const computeDepreciation = (purchaseValue: number, purchaseDate: string | null,
   let yearsElapsed = 0
   if (purchaseDate) {
     const start = new Date(purchaseDate).getTime()
-    if (!Number.isNaN(start)) yearsElapsed = Math.max((Date.now() - start) / (365.25 * 24 * 3600 * 1000), 0)
+    const until = asOfMs ?? Date.now()
+    if (!Number.isNaN(start)) yearsElapsed = Math.max((until - start) / (365.25 * 24 * 3600 * 1000), 0)
   }
   const accumulated = Math.min(annual * yearsElapsed, base)
   const bookValue = purchaseValue - accumulated
   const fullyDepreciated = accumulated >= base - 0.005
   return { annual, accumulated, bookValue, yearsElapsed, fullyDepreciated }
 }
+
+const DISPOSAL_TYPES = [
+  { value: 'sale', label: 'بيع' },
+  { value: 'scrap', label: 'تخريد' },
+  { value: 'write_off', label: 'شطب / إتلاف' },
+  { value: 'trade_in', label: 'استبدال (Trade-in)' },
+]
+const DISPOSAL_TYPE_LABEL: Record<string, string> = Object.fromEntries(DISPOSAL_TYPES.map(t => [t.value, t.label]))
+const newDisposeForm = () => ({ disposal_date: new Date().toISOString().slice(0, 10), disposal_type: 'sale', disposal_amount: '', disposal_notes: '' })
 
 const MAINT_TYPES = [
   { value: 'routine', label: 'صيانة دورية' },
@@ -315,6 +329,10 @@ export default function AssetList() {
   const [showMoveForm, setShowMoveForm] = useState(false)
   const [moveBusy, setMoveBusy] = useState(false)
   const [moveForm, setMoveForm] = useState(newMoveForm())
+  const [disposal, setDisposal] = useState<{ disposal_date: string | null; disposal_type: string | null; disposal_amount: number | null; disposal_notes: string | null } | null>(null)
+  const [showDisposeForm, setShowDisposeForm] = useState(false)
+  const [disposeBusy, setDisposeBusy] = useState(false)
+  const [disposeForm, setDisposeForm] = useState(newDisposeForm())
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -392,7 +410,7 @@ export default function AssetList() {
     setMovements((data ?? []) as AssetMovement[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setIncidents([]); setShowIncidentForm(false); setIncidentForm(newIncidentForm()); setMovements([]); setShowMoveForm(false); setMoveForm(newMoveForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setIncidents([]); setShowIncidentForm(false); setIncidentForm(newIncidentForm()); setMovements([]); setShowMoveForm(false); setMoveForm(newMoveForm()); setDisposal(null); setShowDisposeForm(false); setDisposeForm(newDisposeForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -424,6 +442,9 @@ export default function AssetList() {
     setMovements([])
     setShowMoveForm(false)
     setMoveForm(newMoveForm())
+    setDisposal(a.disposal_date ? { disposal_date: a.disposal_date, disposal_type: a.disposal_type, disposal_amount: a.disposal_amount, disposal_notes: a.disposal_notes } : null)
+    setShowDisposeForm(false)
+    setDisposeForm(newDisposeForm())
     setShowExpForm(false)
     setExpForm(newExpForm())
     loadDocs(a.id)
@@ -471,7 +492,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setShowExpForm(false); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setDisposal(null); setShowDisposeForm(false); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -793,6 +814,44 @@ export default function AssetList() {
       toast.success('تم حذف الحركة')
       if (editId) await loadMovements(editId)
     } catch { toast.error('تعذّر الحذف') }
+  }
+
+  const disposeAsset = async () => {
+    if (!editId) return
+    setDisposeBusy(true)
+    try {
+      const payload = {
+        disposal_date: disposeForm.disposal_date || null,
+        disposal_type: disposeForm.disposal_type,
+        disposal_amount: Number(disposeForm.disposal_amount) || 0,
+        disposal_notes: disposeForm.disposal_notes || null,
+        status: 'retired',
+      }
+      const { error } = await supabase.from('assets').update(payload).eq('id', editId)
+      if (error) throw error
+      setDisposal({ disposal_date: payload.disposal_date, disposal_type: payload.disposal_type, disposal_amount: payload.disposal_amount, disposal_notes: payload.disposal_notes })
+      setForm(f => ({ ...f, status: 'retired' }))
+      setShowDisposeForm(false); setDisposeForm(newDisposeForm())
+      toast.success('تم تسجيل استبعاد الأصل')
+      reload()
+    } catch (e) { toast.error('تعذّر التسجيل: ' + ((e as Error)?.message ?? '')) }
+    finally { setDisposeBusy(false) }
+  }
+
+  const undoDispose = async () => {
+    if (!editId) return
+    setDisposeBusy(true)
+    try {
+      const { error } = await supabase.from('assets')
+        .update({ disposal_date: null, disposal_type: null, disposal_amount: null, disposal_notes: null, status: 'available' })
+        .eq('id', editId)
+      if (error) throw error
+      setDisposal(null)
+      setForm(f => ({ ...f, status: 'available' }))
+      toast.success('تم التراجع عن الاستبعاد')
+      reload()
+    } catch (e) { toast.error('تعذّر التراجع: ' + ((e as Error)?.message ?? '')) }
+    finally { setDisposeBusy(false) }
   }
 
   // حذف الأصل: يحذف مستنداته ومرفقاتها من التخزين. مصاريفه في accounts_payable تبقى سجلاً مالياً (asset_id=null تلقائياً)
@@ -1569,6 +1628,69 @@ export default function AssetList() {
           </div>
 
           <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Wallet size={16} className="text-amber-600" />
+                <span className="text-sm font-semibold text-slate-700">البيع / الاستبعاد</span>
+              </div>
+              {editId && !disposal && (
+                <button type="button" onClick={() => setShowDisposeForm(v => !v)} className="text-xs text-red-700 hover:text-red-800 flex items-center gap-1">
+                  <Plus size={13} /> تسجيل بيع/استبعاد
+                </button>
+              )}
+            </div>
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً.</div>
+            ) : disposal ? (() => {
+              const proceeds = Number(disposal.disposal_amount || 0)
+              const dep = computeDepreciation(Number(form.purchase_value) || 0, form.purchase_date || null, Number(form.useful_life_years) || 0, Number(form.salvage_value) || 0, disposal.disposal_date ? new Date(disposal.disposal_date).getTime() : undefined)
+              const bookValue = dep ? dep.bookValue : (Number(form.purchase_value) || 0)
+              const gain = proceeds - bookValue
+              return (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-800">{DISPOSAL_TYPE_LABEL[disposal.disposal_type ?? ''] ?? 'استبعاد'} · {disposal.disposal_date ? formatDate(disposal.disposal_date) : '—'}</span>
+                    <button type="button" onClick={undoDispose} disabled={disposeBusy} className="text-xs text-amber-700 hover:text-amber-800 disabled:opacity-50">التراجع عن الاستبعاد</button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="bg-white border border-slate-200 rounded-lg p-2"><div className="text-slate-500">حصيلة البيع</div><div className="font-bold text-slate-800" dir="ltr">{formatCurrency(proceeds)}</div></div>
+                    <div className="bg-white border border-slate-200 rounded-lg p-2"><div className="text-slate-500">القيمة الدفترية</div><div className="font-bold text-slate-700" dir="ltr">{formatCurrency(bookValue)}</div></div>
+                    <div className="bg-white border border-slate-200 rounded-lg p-2"><div className="text-slate-500">{gain >= 0 ? 'ربح الاستبعاد' : 'خسارة الاستبعاد'}</div><div className={`font-bold ${gain >= 0 ? 'text-emerald-600' : 'text-red-600'}`} dir="ltr">{formatCurrency(Math.abs(gain))}</div></div>
+                  </div>
+                  {disposal.disposal_notes && <p className="text-xs text-slate-500 break-words">{disposal.disposal_notes}</p>}
+                  <p className="text-[11px] text-amber-600">سجّل حصيلة البيع الفعلية كإيراد في السندات/المقبوضات — لا تُقيَّد تلقائيًا منعًا للازدواج.</p>
+                </div>
+              )
+            })() : showDisposeForm ? (() => {
+              const proceeds = Number(disposeForm.disposal_amount) || 0
+              const dep = computeDepreciation(Number(form.purchase_value) || 0, form.purchase_date || null, Number(form.useful_life_years) || 0, Number(form.salvage_value) || 0, disposeForm.disposal_date ? new Date(disposeForm.disposal_date).getTime() : undefined)
+              const bookValue = dep ? dep.bookValue : (Number(form.purchase_value) || 0)
+              const gain = proceeds - bookValue
+              return (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input label="تاريخ البيع/الاستبعاد" type="date" value={disposeForm.disposal_date} onChange={e => setDisposeForm(p => ({ ...p, disposal_date: e.target.value }))} />
+                    <Select label="النوع" options={DISPOSAL_TYPES} value={disposeForm.disposal_type} onChange={e => setDisposeForm(p => ({ ...p, disposal_type: e.target.value }))} />
+                  </div>
+                  <Input label="حصيلة البيع (د.ب) — اترُكها صفرًا للتخريد/الشطب" type="number" value={disposeForm.disposal_amount} onChange={e => setDisposeForm(p => ({ ...p, disposal_amount: e.target.value }))} dir="ltr" />
+                  <Input label="ملاحظات (اختياري)" value={disposeForm.disposal_notes} onChange={e => setDisposeForm(p => ({ ...p, disposal_notes: e.target.value }))} />
+                  <div className="bg-white border border-slate-200 rounded-lg p-2 flex items-center justify-between text-xs">
+                    <span className="text-slate-500">القيمة الدفترية {formatCurrency(bookValue)} · النتيجة المتوقعة</span>
+                    <span className={`font-bold ${gain >= 0 ? 'text-emerald-600' : 'text-red-600'}`} dir="ltr">{gain >= 0 ? 'ربح ' : 'خسارة '}{formatCurrency(Math.abs(gain))}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button loading={disposeBusy} onClick={disposeAsset}>تأكيد الاستبعاد</Button>
+                    <Button variant="secondary" onClick={() => { setShowDisposeForm(false); setDisposeForm(newDisposeForm()) }}>إلغاء</Button>
+                  </div>
+                  <p className="text-[11px] text-slate-400">تسجيل الاستبعاد يحوّل حالة الأصل إلى «مستبعد». يمكن التراجع لاحقًا.</p>
+                </div>
+              )
+            })() : (
+              <div className="text-sm text-slate-400 text-center py-4 border border-dashed border-slate-200 rounded-lg">الأصل نشط — سجّل بيعه أو استبعاده عند التخلّص منه.</div>
+            )}
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
             <div className="flex items-center gap-2 mb-3">
               <Paperclip size={16} className="text-amber-600" />
               <span className="text-sm font-semibold text-slate-700">المستندات والصور</span>
@@ -1634,7 +1756,7 @@ export default function AssetList() {
 
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setDisposal(null); setShowDisposeForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
             {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
