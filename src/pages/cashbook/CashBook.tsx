@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Project } from '../../types'
-import { formatCurrency, formatDate, extractVAT } from '../../lib/utils'
+import { formatCurrency, formatDate, extractVAT, todayLocal } from '../../lib/utils'
 import { readDocumentText, extractJSON, hasApiKey, compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -124,7 +124,7 @@ function monthLabel(ym: string): string {
 }
 
 const emptyForm = (): EntryForm => ({
-  entry_date: new Date().toISOString().slice(0, 10),
+  entry_date: todayLocal(),
   description: '', vendor_name: '', category: 'materials',
   expense_type: 'general', amount: 0, payment_method: 'cash',
   project_id: null, receipt_url: '', receipt_image_data: '',
@@ -269,7 +269,7 @@ export default function CashBook() {
     setEditHasReceipt(!!e.has_receipt_image)
     setReceiptTouched(false)
     setForm({
-      entry_date: (e.entry_date ?? '').slice(0, 10) || new Date().toISOString().slice(0, 10),
+      entry_date: (e.entry_date ?? '').slice(0, 10) || todayLocal(),
       description: e.description ?? '',
       vendor_name: e.vendor_name ?? '',
       category: e.category ?? 'other',
@@ -519,7 +519,7 @@ export default function CashBook() {
       summarySheet['!cols'] = [{ wch: 5 }, { wch: 22 }, { wch: 10 }, { wch: 18 }, { wch: 16 }, { wch: 18 }]
       XLSX.utils.book_append_sheet(wb, summarySheet, 'ملخص حسب النوع')
 
-      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+      const stamp = todayLocal().replace(/-/g, '')
       const fileTag = filterMonth === 'all' ? 'الكل' : filterMonth
       XLSX.writeFile(wb, `دفتر_الصندوق_${fileTag}_${stamp}.xlsx`)
       toast.success('تم تصدير ملف Excel')

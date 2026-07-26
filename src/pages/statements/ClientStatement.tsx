@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, Printer, MessageCircle, Mail } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency, formatDate, openWhatsApp, openEmail } from '../../lib/utils'
+import { formatCurrency, formatDate, openWhatsApp, openEmail, todayLocal } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
@@ -57,7 +57,7 @@ export default function ClientStatement() {
   const navigate = useNavigate()
 
   const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10))
+  const [dateTo, setDateTo] = useState(todayLocal())
 
   const { data = EMPTY_STATEMENT_DATA, isLoading } = useQuery({
     queryKey: ['client-statement', customerId],
@@ -109,7 +109,7 @@ export default function ClientStatement() {
   const balance = totalDebit - totalCredit
 
   const overdueInvoices = useMemo(() => invoices.filter(inv =>
-    inv.status === 'overdue' || (inv.status === 'sent' && inv.due_date && inv.due_date < new Date().toISOString().slice(0, 10))
+    inv.status === 'overdue' || (inv.status === 'sent' && inv.due_date && inv.due_date < todayLocal())
   ), [invoices])
 
   const sendWhatsApp = () => {
@@ -165,7 +165,7 @@ export default function ClientStatement() {
         <h1 className="text-2xl font-bold">مؤسسة الميمون للمقاولات</h1>
         <h2 className="text-lg mt-1">كشف حساب</h2>
         <p className="text-slate-600">العميل: {customer.name}</p>
-        <p className="text-slate-500 text-sm">تاريخ الإصدار: {formatDate(new Date().toISOString().slice(0, 10))}</p>
+        <p className="text-slate-500 text-sm">تاريخ الإصدار: {formatDate(todayLocal())}</p>
       </div>
 
       {overdueInvoices.length > 0 && (

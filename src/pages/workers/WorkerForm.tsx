@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Sparkles, Loader2, Award, CalendarDays } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Worker } from '../../types'
-import { formatCurrency, calcEndOfService, calcAccruedLeave } from '../../lib/utils'
+import { formatCurrency, calcEndOfService, calcAccruedLeave, todayLocal } from '../../lib/utils'
 import { readDocumentText, extractJSON, hasApiKey } from '../../lib/ai'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -48,7 +48,7 @@ export default function WorkerForm() {
     daily_rate: 0, status: 'active', notes: '',
     passport_number: '', emergency_name: '', emergency_phone: '', emergency_relation: '',
     annual_leave_days: 30, used_leave_days: 0,
-    join_date: new Date().toISOString().slice(0, 10),
+    join_date: todayLocal(),
     visa_expiry: null, cpr_expiry: null, passport_expiry: null,
   })
 

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Globe, Building2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { todayLocal } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -57,7 +58,7 @@ export default function QuotationForm() {
     project_desc_en: 'construction for two story villa',
     location: '',
     area: '',
-    issue_date: new Date().toISOString().slice(0, 10),
+    issue_date: todayLocal(),
     language: 'en' as 'ar' | 'en',
     building_type: 'precast' as 'post_tension' | 'precast',  // داخلي — لا يظهر للعميل
     status: 'draft',
@@ -111,7 +112,7 @@ export default function QuotationForm() {
             project_desc_en: q.project_desc_en ?? 'construction for two story villa',
             location: q.location ?? '',
             area: q.area ?? '',
-            issue_date: q.issue_date ?? new Date().toISOString().slice(0, 10),
+            issue_date: q.issue_date ?? todayLocal(),
             language: (q.language as 'ar' | 'en') ?? 'en',
             building_type: (q.building_type as 'post_tension' | 'precast') ?? 'precast',
             price_per_meter: q.price_per_meter ? String(q.price_per_meter) : '',

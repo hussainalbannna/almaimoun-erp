@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Truck, CheckCircle } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { LPO, LPOItem, LPODelivery, LPODeliveryItem } from '../../types'
-import { formatDate } from '../../lib/utils'
+import { formatDate, todayLocal } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Textarea from '../../components/ui/Textarea'
@@ -43,7 +43,7 @@ export default function LPODeliveries() {
   const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ delivery_date: new Date().toISOString().slice(0, 10), notes: '' })
+  const [form, setForm] = useState({ delivery_date: todayLocal(), notes: '' })
   const [quantities, setQuantities] = useState<Record<string, number>>({})
 
   const { data, isLoading } = useQuery({ queryKey: ['lpo-deliveries', id], queryFn: () => fetchLPODeliveries(id!), enabled: !!id })

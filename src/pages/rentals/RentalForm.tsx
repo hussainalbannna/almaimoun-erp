@@ -6,6 +6,7 @@ import {
   Calendar, Wallet, Receipt, Repeat, Clock
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -24,7 +25,7 @@ const CATEGORIES = [
   { value: 'electricity', label: 'كهرباء', icon: <Zap size={16} /> },
   { value: 'other', label: 'أخرى', icon: <Package size={16} /> },
 ]
-const todayISO = () => new Date().toISOString().slice(0, 10)
+const todayISO = () => todayLocal()
 const isPdfData = (data: string) => !!data && data.startsWith('data:application/pdf')
 
 export default function RentalForm() {

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Project, ProjectMilestone, Customer } from '../../types'
-import { nextSerial, formatCurrency } from '../../lib/utils'
+import { nextSerial, formatCurrency, todayLocal } from '../../lib/utils'
 import { readDocumentText, extractJSON, compressImage, openStoredFile, hasApiKey } from '../../lib/ai'
 import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -100,7 +100,7 @@ export default function ProjectForm() {
   const [form, setForm] = useState<ProjectFormState>({
     project_name: '', client_name: '', client_phone: '', client_cpr: '',
     location: '', contract_value: 0, status: 'active', notes: '',
-    start_date: new Date().toISOString().slice(0, 10), client_id: null,
+    start_date: todayLocal(), client_id: null,
     estimated_cost: 0, handover_date: null, warranty_months: 12,
     soil_type: '', building_permit: '', consultant_name: '', consultant_phone: '',
   })

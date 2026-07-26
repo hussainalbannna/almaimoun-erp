@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2, Upload, ClipboardList } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { nextSerial, formatCurrency } from '../../lib/utils'
+import { nextSerial, formatCurrency, todayLocal } from '../../lib/utils'
 import type { LPO, LPOItem, Supplier, ExtractedDocumentData } from '../../types'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -49,7 +49,7 @@ export default function LPOForm() {
     supplier_address: '',
     supplier_tax_number: '',
     project_id: '',
-    issue_date: new Date().toISOString().slice(0, 10),
+    issue_date: todayLocal(),
     delivery_date: '',
     status: 'draft',
     tax_rate: 0, // بلا ضريبة تلقائية — بناء الفلل معفى؛ تُعدّل يدوياً للحالات الاستثنائية (صيانة)

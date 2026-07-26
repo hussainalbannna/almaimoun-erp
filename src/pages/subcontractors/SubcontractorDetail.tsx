@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Plus, DollarSign, MessageCircle, Paperclip, Eye, X, FileText, Image as ImageIcon, Upload, Loader2, Edit, Trash2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency, formatDate, subcontractorSpecialtyLabel, openWhatsApp } from '../../lib/utils'
+import { formatCurrency, formatDate, subcontractorSpecialtyLabel, openWhatsApp, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -216,7 +216,7 @@ export default function SubcontractorDetail() {
   const [showPayForm, setShowPayForm] = useState(false)
   const [editPayId, setEditPayId] = useState<string | null>(null)
   const [payForm, setPayForm] = useState({
-    assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10),
+    assignment_id: '', amount: '', payment_date: todayLocal(),
     payment_method: 'cash', check_due_date: '', check_number: '', notes: '',
     payment_proof_data: '', invoice_copy_data: '',       // قيم العرض
     payment_proof_save: '', invoice_copy_save: '',        // قيم الحفظ الموازية
@@ -429,7 +429,7 @@ export default function SubcontractorDetail() {
       })
     } else {
       setEditPayId(null)
-      setPayForm({ assignment_id: '', amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'cash', check_due_date: '', check_number: '', notes: '', payment_proof_data: '', invoice_copy_data: '', payment_proof_save: '', invoice_copy_save: '' })
+      setPayForm({ assignment_id: '', amount: '', payment_date: todayLocal(), payment_method: 'cash', check_due_date: '', check_number: '', notes: '', payment_proof_data: '', invoice_copy_data: '', payment_proof_save: '', invoice_copy_save: '' })
     }
     setShowPayForm(true)
   }

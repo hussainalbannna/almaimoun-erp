@@ -6,7 +6,7 @@ import {
   FileText, Image as ImageIcon, Link2, RotateCcw
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency, formatDate, daysUntil } from '../../lib/utils'
+import { formatCurrency, formatDate, daysUntil, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -93,7 +93,7 @@ const emptyForm = {
   party_name: '',
   amount: '',
   bank_name: '',
-  issue_date: new Date().toISOString().slice(0, 10),
+  issue_date: todayLocal(),
   due_date: '',
   project_id: '',
   cheque_image_data: '',
@@ -144,9 +144,9 @@ export default function ChequesCenter() {
 
   // مودال التسوية (صُرف بتاريخ فعلي)
   const [clearTarget, setClearTarget] = useState<Cheque | null>(null)
-  const [clearDate, setClearDate] = useState(new Date().toISOString().slice(0, 10))
+  const [clearDate, setClearDate] = useState(todayLocal())
 
-  const t = new Date().toISOString().slice(0, 10)
+  const t = todayLocal()
 
   const { data: cheques = [], isLoading } = useQuery({ queryKey: ['cheques'], queryFn: fetchAllCheques })
   const { data: projects = [] } = useQuery({ queryKey: ['projects-list'], queryFn: fetchProjectsList })
@@ -232,7 +232,7 @@ export default function ChequesCenter() {
       party_name: c.party_name,
       amount: String(c.amount || ''),
       bank_name: c.bank_name,
-      issue_date: c.issue_date ?? new Date().toISOString().slice(0, 10),
+      issue_date: c.issue_date ?? todayLocal(),
       due_date: c.due_date ?? '',
       project_id: c.project_id ?? '',
       cheque_image_data: '',

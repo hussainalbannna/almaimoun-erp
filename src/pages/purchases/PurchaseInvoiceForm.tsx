@@ -5,6 +5,7 @@ import {
   Building2, User, Calendar, Hash, Wallet, CreditCard, Paperclip, Truck, Receipt
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { todayLocal } from '../../lib/utils'
 import type { PurchaseInvoice, PurchasePaymentMethod } from '../../types'
 import { readDocumentText, extractJSON, compressImage, fileToDataUrl, hasApiKey, openStoredFile } from '../../lib/ai'
 import { uploadDataUrl, getAttachmentUrl } from '../../lib/storage'
@@ -35,7 +36,7 @@ const PAYMENT_METHODS: { value: PurchasePaymentMethod; label: string; icon: Reac
   { value: 'deferred_cheque', label: 'شيك آجل', icon: <CreditCard size={16} /> },
 ]
 
-const todayISO = () => new Date().toISOString().slice(0, 10)
+const todayISO = () => todayLocal()
 const isDataUrl = (v?: string): boolean => !!v && v.startsWith('data:')
 const isImageData = (v?: string): boolean => !!v && v.startsWith('data:image')
 const kindFromPath = (p: string): AttachKind => (/\.(jpe?g|png|webp|gif)$/i.test(p) ? 'image' : 'file')

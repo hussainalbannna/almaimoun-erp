@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency } from '../../lib/utils'
+import { formatCurrency, todayLocal } from '../../lib/utils'
 import type { Invoice, InvoiceItem, Customer, Project, ProjectMilestone, ExtractedDocumentData } from '../../types'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -21,7 +21,7 @@ const makeUid = (): string =>
 // أعمدة DATE في قاعدة البيانات ترفض السلسلة الفارغة "" — نحوّل التاريخ الفارغ إلى null
 const sanitizeDate = (v: string): string | null => (v && v.trim() ? v : null)
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => todayLocal()
 
 type ItemRow = Omit<InvoiceItem, 'id' | 'invoice_id'> & { _uid: string }
 

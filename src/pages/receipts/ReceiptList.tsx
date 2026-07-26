@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Eye, Trash2, Search } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Receipt } from '../../types'
-import { formatCurrency, formatDate } from '../../lib/utils'
+import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
@@ -38,7 +38,7 @@ export default function ReceiptList() {
         const { data: rem } = await supabase.from('receipts').select('amount').eq('invoice_id', invoiceId)
         const paid = ((rem ?? []) as { amount: number }[]).reduce((s, r) => s + Number(r.amount || 0), 0)
         const total = Number(invRow.total || 0)
-        const today = new Date().toISOString().slice(0, 10)
+        const today = todayLocal()
         const newStatus = paid >= total && total > 0
           ? 'paid'
           : (invRow.due_date && invRow.due_date < today ? 'overdue' : 'sent')

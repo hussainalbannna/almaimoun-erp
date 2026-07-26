@@ -7,7 +7,7 @@ import {
   LayoutDashboard, ListChecks, Receipt, TrendingUp, Clock, CheckCircle2, DollarSign
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { formatCurrency, formatDate } from '../../lib/utils'
+import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import { openStoredFile, compressImage, fileToDataUrl } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -64,7 +64,7 @@ const CYCLE_LABELS: Record<string, string> = { daily: 'يومي', weekly: 'أس�
 const PAYMENT_LABELS: Record<string, string> = { cash: 'نقداً', bank_transfer: 'تحويل بنكي', deferred_cheque: 'شيك آجل' }
 
 const num = (v: unknown): number => Number(v) || 0
-const todayStr = () => new Date().toISOString().slice(0, 10)
+const todayStr = () => todayLocal()
 const isImageData = (d?: string) => !!d && d.startsWith('data:image')
 const isPdfData = (d?: string) => !!d && d.startsWith('data:application/pdf')
 const daysUntil = (date: string): number =>

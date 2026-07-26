@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bot, Send, Loader2, Sparkles, User, Trash2, AlertCircle, RefreshCw } from 'lucide-react'
 import { safeSelect } from '../../lib/supabase'
+import { todayLocal } from '../../lib/utils'
 import { askAI, hasApiKey, type ChatMessage } from '../../lib/ai'
 import { fetchCheques, computePendingChequeSets, computeProjectProfit, type ChequeRow, type WorkerPayLike, type PurchaseLike, type SubPaymentLike } from '../../lib/finance'
 
@@ -94,7 +95,7 @@ export default function AIAssistant() {
     const d = bizData
     if (!d) return 'لا توجد بيانات محمّلة.'
 
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayLocal()
     const lines: string[] = []
     lines.push(`التاريخ اليوم: ${today}`)
     lines.push(`العملة: دينار بحريني (د.ب) بثلاث خانات عشرية`)

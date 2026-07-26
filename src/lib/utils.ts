@@ -5,6 +5,16 @@ import type { InvoiceStatus, LPOStatus } from '../types'
 // ═══════════════════════════════════════════
 //  تنسيق التاريخ
 // ═══════════════════════════════════════════
+// تاريخ اليوم المحلي بصيغة YYYY-MM-DD (بمكوّنات محلية، لا UTC).
+// بديل آمن عن التوقيت العالمي الذي يعطي تاريخ الأمس في +3 بعد منتصف الليل.
+export function todayLocal(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 export function formatDate(date: string | null | undefined, pattern = 'dd/MM/yyyy'): string {
   if (!date) return ''
   try {

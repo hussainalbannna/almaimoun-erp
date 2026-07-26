@@ -10,7 +10,7 @@ import { supabase } from '../../lib/supabase';
 import type {
   Project, ProjectMilestone, VariationOrder, DailyLog, ProjectLaborEntry
 } from '../../types';
-import { formatCurrency, formatDate } from '../../lib/utils';
+import { formatCurrency, formatDate, todayLocal } from '../../lib/utils';
 import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage';
 import { compressImage, openStoredFile } from '../../lib/ai';
 import { fetchCheques, computePendingChequeSets, splitPurchases, splitSubPayments, workerDayCost } from '../../lib/finance';
@@ -34,7 +34,7 @@ const MILESTONE_STATUS_COLORS: Record<string, string> = {
   paid: 'green'
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayLocal();
 
 // أنواع المستندات القابلة للاختيار عند الإرفاق
 const DOC_TYPES: { value: string; label: string }[] = [

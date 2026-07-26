@@ -14,12 +14,13 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { supabase } from './supabase'
+import { todayLocal } from './utils'
 
 // ─── ثوابت معتمدة ────────────────────────────────────────────────────
 export const MONTHLY_WORK_DAYS = 26 // الجمعة إجازة مدفوعة
 
 // ─── أدوات التاريخ ───────────────────────────────────────────────────
-export const todayStr = (): string => new Date().toISOString().slice(0, 10)
+export const todayStr = (): string => todayLocal()
 
 // ─── أنواع مشتركة ────────────────────────────────────────────────────
 export interface PurchaseLike {

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp, ShoppingCart, Sparkles, Loader2, Cloud, Users, Eye } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
-import { formatDate, formatCurrency } from '../../lib/utils'
+import { formatDate, formatCurrency, todayLocal } from '../../lib/utils'
 import { readDocumentText, hasApiKey } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -30,7 +30,7 @@ const SHIFT_PRESETS: { label: string; start: string; end: string }[] = [
 
 const EMPTY_FORM = (projectId = '') => ({
   project_id: projectId,
-  log_date: new Date().toISOString().slice(0, 10),
+  log_date: todayLocal(),
   description: '',
   material_requests: '',
   inspector_meeting: false,

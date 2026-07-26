@@ -7,7 +7,7 @@ import {
   Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench, Fuel, Disc, QrCode,
 } from 'lucide-react'
 import { supabase, safeSelect } from '../../lib/supabase'
-import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
+import { formatCurrency, formatDate, daysUntilOrNull, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile, hasApiKey, readDocumentText, extractJSON } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -111,7 +111,7 @@ const EXPENSE_PAYMENT_METHODS = [
   { value: 'card', label: 'بطاقة' },
 ]
 const PAYMENT_LABEL: Record<string, string> = Object.fromEntries(EXPENSE_PAYMENT_METHODS.map(m => [m.value, m.label]))
-const newExpForm = () => ({ entry_date: new Date().toISOString().slice(0, 10), amount: '', expense_type: 'fuel', payment_method: 'cash', description: '' })
+const newExpForm = () => ({ entry_date: todayLocal(), amount: '', expense_type: 'fuel', payment_method: 'cash', description: '' })
 
 interface AssetExpense {
   id: string
@@ -162,7 +162,7 @@ const DISPOSAL_TYPES = [
   { value: 'trade_in', label: 'استبدال (Trade-in)' },
 ]
 const DISPOSAL_TYPE_LABEL: Record<string, string> = Object.fromEntries(DISPOSAL_TYPES.map(t => [t.value, t.label]))
-const newDisposeForm = () => ({ disposal_date: new Date().toISOString().slice(0, 10), disposal_type: 'sale', disposal_amount: '', disposal_notes: '' })
+const newDisposeForm = () => ({ disposal_date: todayLocal(), disposal_type: 'sale', disposal_amount: '', disposal_notes: '' })
 
 const MAINT_TYPES = [
   { value: 'routine', label: 'صيانة دورية' },
@@ -186,7 +186,7 @@ interface AssetMaintenance {
   next_service_odometer: number | null
   expense_id: string | null
 }
-const newMaintForm = () => ({ service_date: new Date().toISOString().slice(0, 10), service_type: 'routine', description: '', cost: '', vendor: '', odometer: '', next_service_date: '', next_service_odometer: '' })
+const newMaintForm = () => ({ service_date: todayLocal(), service_type: 'routine', description: '', cost: '', vendor: '', odometer: '', next_service_date: '', next_service_odometer: '' })
 
 interface AssetFuelLog {
   id: string
@@ -198,7 +198,7 @@ interface AssetFuelLog {
   notes: string | null
   expense_id: string | null
 }
-const newFuelForm = () => ({ fill_date: new Date().toISOString().slice(0, 10), odometer: '', liters: '', cost: '', station: '', notes: '' })
+const newFuelForm = () => ({ fill_date: todayLocal(), odometer: '', liters: '', cost: '', station: '', notes: '' })
 
 const PART_TYPES = [
   { value: 'spare_part', label: 'قطعة غيار' },
@@ -223,7 +223,7 @@ interface AssetSparePart {
   notes: string | null
   expense_id: string | null
 }
-const newPartForm = () => ({ part_name: '', part_type: 'spare_part', install_date: new Date().toISOString().slice(0, 10), odometer: '', quantity: '1', cost: '', vendor: '', next_replace_date: '', notes: '' })
+const newPartForm = () => ({ part_name: '', part_type: 'spare_part', install_date: todayLocal(), odometer: '', quantity: '1', cost: '', vendor: '', next_replace_date: '', notes: '' })
 
 const INCIDENT_TYPES = [
   { value: 'accident', label: 'حادث مروري' },
@@ -265,7 +265,7 @@ interface AssetIncident {
   resolved: boolean
   expense_id: string | null
 }
-const newIncidentForm = () => ({ incident_date: new Date().toISOString().slice(0, 10), incident_type: 'accident', severity: 'minor', description: '', location: '', driver: '', cost: '', insurance_claim: false, claim_number: '', claim_amount: '', claim_status: 'none', resolved: false })
+const newIncidentForm = () => ({ incident_date: todayLocal(), incident_type: 'accident', severity: 'minor', description: '', location: '', driver: '', cost: '', insurance_claim: false, claim_number: '', claim_amount: '', claim_status: 'none', resolved: false })
 
 interface AssetMovement {
   id: string
@@ -277,7 +277,7 @@ interface AssetMovement {
   moved_by: string | null
   notes: string | null
 }
-const newMoveForm = () => ({ movement_date: new Date().toISOString().slice(0, 10), to_location: '', to_project_id: '', moved_by: '', notes: '' })
+const newMoveForm = () => ({ movement_date: todayLocal(), to_location: '', to_project_id: '', moved_by: '', notes: '' })
 
 const ASSET_TYPE_OPTIONS = Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
@@ -671,7 +671,7 @@ export default function AssetList() {
       const { error } = await supabase.from('accounts_payable').insert({
         asset_id: editId,
         project_id: null,
-        entry_date: expForm.entry_date || new Date().toISOString().slice(0, 10),
+        entry_date: expForm.entry_date || todayLocal(),
         amount: amt,
         category: 'equipment',
         expense_type: expForm.expense_type,
@@ -755,7 +755,7 @@ export default function AssetList() {
         const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
           asset_id: editId,
           project_id: null,
-          entry_date: fuelForm.fill_date || new Date().toISOString().slice(0, 10),
+          entry_date: fuelForm.fill_date || todayLocal(),
           amount: cost,
           category: 'equipment',
           expense_type: 'fuel',
@@ -803,7 +803,7 @@ export default function AssetList() {
         const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
           asset_id: editId,
           project_id: null,
-          entry_date: incidentForm.incident_date || new Date().toISOString().slice(0, 10),
+          entry_date: incidentForm.incident_date || todayLocal(),
           amount: cost,
           category: 'equipment',
           expense_type: 'incident',
@@ -949,7 +949,7 @@ export default function AssetList() {
         const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
           asset_id: editId,
           project_id: null,
-          entry_date: partForm.install_date || new Date().toISOString().slice(0, 10),
+          entry_date: partForm.install_date || todayLocal(),
           amount: cost,
           category: 'equipment',
           expense_type: 'tools',
@@ -1090,7 +1090,7 @@ export default function AssetList() {
     const monthly = Number(form.monthly_installment) || 0
     const paid = Number(form.paid_installments) || 0
     if (total <= 0 || monthly <= 0) { toast.error('أدخل عدد الأقساط والقسط الشهري أولاً'); return }
-    const anchor = form.next_installment_date || new Date().toISOString().slice(0, 10)
+    const anchor = form.next_installment_date || todayLocal()
     setInstBusy(true)
     try {
       const rows = Array.from({ length: total }, (_, i) => {
@@ -1117,7 +1117,7 @@ export default function AssetList() {
   const payScheduleRow = async (row: AssetInstallment) => {
     if (!editId || instBusy) return
     setInstBusy(true)
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayLocal()
     try {
       const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
         asset_id: editId,
@@ -1154,7 +1154,7 @@ export default function AssetList() {
     try {
       const nextDate = a.next_installment_date ? new Date(a.next_installment_date) : new Date()
       nextDate.setMonth(nextDate.getMonth() + 1)
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayLocal()
       const { error } = await supabase.from('assets').update({
         paid_installments: a.paid_installments + 1,
         next_installment_date: nextDate.toISOString().slice(0, 10),

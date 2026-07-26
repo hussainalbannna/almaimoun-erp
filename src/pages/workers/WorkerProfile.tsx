@@ -11,7 +11,7 @@ import type {
   WorkerMedicalRecord, WorkerTravelRecord, WorkerDocument,
   WorkerDisciplinary, WorkerDocType, DisciplinaryType, AttendanceStatus
 } from '../../types'
-import { formatDate } from '../../lib/utils'
+import { formatDate, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import { resolveAttachmentUrl, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -502,7 +502,7 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
 function AttendanceTab({ workerId, attendance, setAttendance }: {
   workerId: string; attendance: WorkerAttendance[]; setAttendance: React.Dispatch<React.SetStateAction<WorkerAttendance[]>>
 }) {
-  const [addForm, setAddForm] = useState({ date: new Date().toISOString().slice(0, 10), status: 'present' as AttendanceStatus, notes: '' })
+  const [addForm, setAddForm] = useState({ date: todayLocal(), status: 'present' as AttendanceStatus, notes: '' })
   const [adding, setAdding] = useState(false)
 
   const handleAdd = async () => {
@@ -517,7 +517,7 @@ function AttendanceTab({ workerId, attendance, setAttendance }: {
         return [data as WorkerAttendance, ...filtered].sort((a, b) => b.attendance_date.localeCompare(a.attendance_date))
       })
       toast.success('تم تسجيل الحضور')
-      setAddForm({ date: new Date().toISOString().slice(0, 10), status: 'present', notes: '' })
+      setAddForm({ date: todayLocal(), status: 'present', notes: '' })
     }
     setAdding(false)
   }
@@ -578,8 +578,8 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
   workerId: string; advances: WorkerAdvance[]; setAdvances: React.Dispatch<React.SetStateAction<WorkerAdvance[]>>
   loans: WorkerLoan[]; setLoans: React.Dispatch<React.SetStateAction<WorkerLoan[]>>
 }) {
-  const [advForm, setAdvForm] = useState({ amount: 0, advance_date: new Date().toISOString().slice(0, 10), notes: '' })
-  const [loanForm, setLoanForm] = useState({ loan_amount: 0, monthly_installment: 0, loan_date: new Date().toISOString().slice(0, 10), notes: '' })
+  const [advForm, setAdvForm] = useState({ amount: 0, advance_date: todayLocal(), notes: '' })
+  const [loanForm, setLoanForm] = useState({ loan_amount: 0, monthly_installment: 0, loan_date: todayLocal(), notes: '' })
   const [addingAdv, setAddingAdv] = useState(false)
   const [addingLoan, setAddingLoan] = useState(false)
 
@@ -589,7 +589,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
     const { data, error } = await supabase.from('worker_advances').insert({ ...advForm, worker_id: workerId }).select().single()
     if (error) toast.error('حدث خطأ')
     else { setAdvances(prev => [data as WorkerAdvance, ...prev]); toast.success('تم تسجيل السلفة') }
-    setAdvForm({ amount: 0, advance_date: new Date().toISOString().slice(0, 10), notes: '' })
+    setAdvForm({ amount: 0, advance_date: todayLocal(), notes: '' })
     setAddingAdv(false)
   }
 
@@ -601,7 +601,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
     const { data, error } = await supabase.from('worker_loans').insert(payload).select().single()
     if (error) toast.error('حدث خطأ')
     else { setLoans(prev => [data as WorkerLoan, ...prev]); toast.success('تم تسجيل القرض') }
-    setLoanForm({ loan_amount: 0, monthly_installment: 0, loan_date: new Date().toISOString().slice(0, 10), notes: '' })
+    setLoanForm({ loan_amount: 0, monthly_installment: 0, loan_date: todayLocal(), notes: '' })
     setAddingLoan(false)
   }
 
@@ -713,7 +713,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
 function MedicalTab({ workerId, records, setRecords }: {
   workerId: string; records: WorkerMedicalRecord[]; setRecords: React.Dispatch<React.SetStateAction<WorkerMedicalRecord[]>>
 }) {
-  const [form, setForm] = useState({ hospital: '', diagnosis: '', treatment_cost: 0, visit_date: new Date().toISOString().slice(0, 10), notes: '' })
+  const [form, setForm] = useState({ hospital: '', diagnosis: '', treatment_cost: 0, visit_date: todayLocal(), notes: '' })
   const [adding, setAdding] = useState(false)
 
   const handleAdd = async () => {
@@ -722,7 +722,7 @@ function MedicalTab({ workerId, records, setRecords }: {
     const { data, error } = await supabase.from('worker_medical_records').insert({ ...form, worker_id: workerId }).select().single()
     if (error) toast.error('حدث خطأ')
     else { setRecords(prev => [data as WorkerMedicalRecord, ...prev]); toast.success('تم تسجيل الزيارة') }
-    setForm({ hospital: '', diagnosis: '', treatment_cost: 0, visit_date: new Date().toISOString().slice(0, 10), notes: '' })
+    setForm({ hospital: '', diagnosis: '', treatment_cost: 0, visit_date: todayLocal(), notes: '' })
     setAdding(false)
   }
 
@@ -837,7 +837,7 @@ function TravelTab({ workerId, records, setRecords }: {
 function DisciplinaryTab({ workerId, records, setRecords }: {
   workerId: string; records: WorkerDisciplinary[]; setRecords: React.Dispatch<React.SetStateAction<WorkerDisciplinary[]>>
 }) {
-  const [form, setForm] = useState({ record_type: 'request' as DisciplinaryType, title: '', description: '', record_date: new Date().toISOString().slice(0, 10) })
+  const [form, setForm] = useState({ record_type: 'request' as DisciplinaryType, title: '', description: '', record_date: todayLocal() })
   const [adding, setAdding] = useState(false)
 
   const TYPE_LABELS: Record<DisciplinaryType, { label: string; color: string }> = {
@@ -852,7 +852,7 @@ function DisciplinaryTab({ workerId, records, setRecords }: {
     const { data, error } = await supabase.from('worker_disciplinary').insert({ ...form, worker_id: workerId }).select().single()
     if (error) toast.error('حدث خطأ')
     else { setRecords(prev => [data as WorkerDisciplinary, ...prev]); toast.success('تم التسجيل') }
-    setForm({ record_type: 'request', title: '', description: '', record_date: new Date().toISOString().slice(0, 10) })
+    setForm({ record_type: 'request', title: '', description: '', record_date: todayLocal() })
     setAdding(false)
   }
 

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
-import { formatCurrency, formatDate } from '../../lib/utils'
+import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import { openStoredFile } from '../../lib/ai'
 import { getAttachmentUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
@@ -24,7 +24,7 @@ const PAYMENT_COLOR = (m: string): 'green' | 'blue' | 'amber' =>
   m === 'deferred_cheque' ? 'amber' : m === 'bank_transfer' ? 'blue' : 'green'
 
 const num = (v: unknown): number => Number(v) || 0
-const todayStr = () => new Date().toISOString().slice(0, 10)
+const todayStr = () => todayLocal()
 const isImageData = (d?: string) => !!d && d.startsWith('data:image')
 const isPdfData = (d?: string) => !!d && d.startsWith('data:application/pdf')
 const hasFile = (d?: string) => isImageData(d) || isPdfData(d)

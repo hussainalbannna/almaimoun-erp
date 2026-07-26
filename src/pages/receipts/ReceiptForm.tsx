@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Receipt, Customer, Invoice } from '../../types'
-import { formatCurrency } from '../../lib/utils'
+import { formatCurrency, todayLocal } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -37,7 +37,7 @@ export default function ReceiptForm() {
 
   const [form, setForm] = useState<Partial<Receipt>>({
     receipt_number: '',
-    receipt_date: new Date().toISOString().slice(0, 10),
+    receipt_date: todayLocal(),
     payment_method: 'cash',
     amount: 0,
     original_amount: 0,
@@ -161,7 +161,7 @@ export default function ReceiptForm() {
         newStatus = 'paid'
       } else {
         // دفعة جزئية: لا نُلغي تأخّر الفاتورة — تبقى 'overdue' إن كانت متأخرة أو حلّ موعدها
-        const today = new Date().toISOString().slice(0, 10)
+        const today = todayLocal()
         const isOverdue = selectedInvoice.status === 'overdue' || (!!selectedInvoice.due_date && selectedInvoice.due_date < today)
         newStatus = isOverdue ? 'overdue' : 'sent'
       }

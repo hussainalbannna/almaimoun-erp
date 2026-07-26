@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, PenLine, Eraser, Camera, X, ImagePlus, Wallet, CreditCard, Clock } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { todayLocal } from '../../lib/utils'
 import type { VariationOrder, Project } from '../../types'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -176,7 +177,7 @@ export default function VOForm() {
     client_signature?: string; photos_before?: string[]; photos_after?: string[]
   }>({
     description: '', amount: 0, billable: false, status: 'pending',
-    request_date: new Date().toISOString().slice(0, 10), notes: '',
+    request_date: todayLocal(), notes: '',
     requested_by: '', request_method: '', duration_impact_days: 0,
     client_signature: '', photos_before: [], photos_after: [],
   })
