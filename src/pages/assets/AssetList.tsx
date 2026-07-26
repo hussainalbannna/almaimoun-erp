@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2,
-  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench, Fuel,
+  Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench, Fuel, Disc,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
@@ -195,6 +195,31 @@ interface AssetFuelLog {
 }
 const newFuelForm = () => ({ fill_date: new Date().toISOString().slice(0, 10), odometer: '', liters: '', cost: '', station: '', notes: '' })
 
+const PART_TYPES = [
+  { value: 'spare_part', label: 'قطعة غيار' },
+  { value: 'tire', label: 'إطار' },
+  { value: 'battery', label: 'بطارية' },
+  { value: 'filter', label: 'فلتر' },
+  { value: 'belt', label: 'سير / حزام' },
+  { value: 'other', label: 'أخرى' },
+]
+const PART_TYPE_LABEL: Record<string, string> = Object.fromEntries(PART_TYPES.map(t => [t.value, t.label]))
+
+interface AssetSparePart {
+  id: string
+  part_name: string | null
+  part_type: string | null
+  install_date: string | null
+  odometer: number | null
+  quantity: number
+  cost: number
+  vendor: string | null
+  next_replace_date: string | null
+  notes: string | null
+  expense_id: string | null
+}
+const newPartForm = () => ({ part_name: '', part_type: 'spare_part', install_date: new Date().toISOString().slice(0, 10), odometer: '', quantity: '1', cost: '', vendor: '', next_replace_date: '', notes: '' })
+
 const INCIDENT_TYPES = [
   { value: 'accident', label: 'حادث مروري' },
   { value: 'damage', label: 'تلف / ضرر' },
@@ -333,6 +358,10 @@ export default function AssetList() {
   const [showDisposeForm, setShowDisposeForm] = useState(false)
   const [disposeBusy, setDisposeBusy] = useState(false)
   const [disposeForm, setDisposeForm] = useState(newDisposeForm())
+  const [parts, setParts] = useState<AssetSparePart[]>([])
+  const [showPartForm, setShowPartForm] = useState(false)
+  const [partBusy, setPartBusy] = useState(false)
+  const [partForm, setPartForm] = useState(newPartForm())
 
   const { data: assets = [], isLoading } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   const { data: docCounts = {} } = useQuery({ queryKey: ['asset-doc-counts'], queryFn: fetchDocCounts })
@@ -410,7 +439,14 @@ export default function AssetList() {
     setMovements((data ?? []) as AssetMovement[])
   }
 
-  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setIncidents([]); setShowIncidentForm(false); setIncidentForm(newIncidentForm()); setMovements([]); setShowMoveForm(false); setMoveForm(newMoveForm()); setDisposal(null); setShowDisposeForm(false); setDisposeForm(newDisposeForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
+  const loadParts = async (assetId: string) => {
+    const { data } = await supabase.from('asset_spare_parts')
+      .select('id, part_name, part_type, install_date, odometer, quantity, cost, vendor, next_replace_date, notes, expense_id')
+      .eq('asset_id', assetId).order('install_date', { ascending: false })
+    setParts((data ?? []) as AssetSparePart[])
+  }
+
+  const openNew = () => { setEditId(null); setForm(emptyForm); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setMaintForm(newMaintForm()); setFuel([]); setShowFuelForm(false); setFuelForm(newFuelForm()); setIncidents([]); setShowIncidentForm(false); setIncidentForm(newIncidentForm()); setMovements([]); setShowMoveForm(false); setMoveForm(newMoveForm()); setDisposal(null); setShowDisposeForm(false); setDisposeForm(newDisposeForm()); setParts([]); setShowPartForm(false); setPartForm(newPartForm()); setShowExpForm(false); setExpForm(newExpForm()); setCoverPath(null); setDocType('photo'); setShowForm(true) }
   const openEdit = (a: Asset) => {
     setEditId(a.id)
     setCoverPath(a.cover_image_path ?? null)
@@ -445,6 +481,9 @@ export default function AssetList() {
     setDisposal(a.disposal_date ? { disposal_date: a.disposal_date, disposal_type: a.disposal_type, disposal_amount: a.disposal_amount, disposal_notes: a.disposal_notes } : null)
     setShowDisposeForm(false)
     setDisposeForm(newDisposeForm())
+    setParts([])
+    setShowPartForm(false)
+    setPartForm(newPartForm())
     setShowExpForm(false)
     setExpForm(newExpForm())
     loadDocs(a.id)
@@ -454,6 +493,7 @@ export default function AssetList() {
     loadFuel(a.id)
     loadIncidents(a.id)
     loadMovements(a.id)
+    loadParts(a.id)
     setShowForm(true)
   }
 
@@ -492,7 +532,7 @@ export default function AssetList() {
         if (error) throw error
         toast.success('تم إضافة الأصل — افتحه من القائمة لإرفاق المستندات')
       }
-      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setDisposal(null); setShowDisposeForm(false); setShowExpForm(false); setCoverPath(null); reload()
+      setShowForm(false); setForm(emptyForm); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setDisposal(null); setShowDisposeForm(false); setParts([]); setShowPartForm(false); setShowExpForm(false); setCoverPath(null); reload()
     } catch (e) { toast.error('حدث خطأ: ' + ((e as Error)?.message ?? '')) }
     finally { setSaving(false) }
   }
@@ -852,6 +892,57 @@ export default function AssetList() {
       reload()
     } catch (e) { toast.error('تعذّر التراجع: ' + ((e as Error)?.message ?? '')) }
     finally { setDisposeBusy(false) }
+  }
+
+  const addPart = async () => {
+    if (!editId) return
+    if (!partForm.part_name.trim()) { toast.error('أدخل اسم القطعة'); return }
+    setPartBusy(true)
+    try {
+      const cost = Number(partForm.cost) || 0
+      let expenseId: string | null = null
+      if (cost > 0) {
+        const { data: exp, error: expErr } = await supabase.from('accounts_payable').insert({
+          asset_id: editId,
+          project_id: null,
+          entry_date: partForm.install_date || new Date().toISOString().slice(0, 10),
+          amount: cost,
+          category: 'equipment',
+          expense_type: 'tools',
+          payment_method: 'cash',
+          description: `${PART_TYPE_LABEL[partForm.part_type] ?? 'قطعة'} — ${partForm.part_name.trim()} / ${form.name}`,
+        }).select('id').single()
+        if (expErr) { toast.error('تعذّر قيد تكلفة القطعة'); return }
+        expenseId = (exp as { id: string }).id
+      }
+      const { error } = await supabase.from('asset_spare_parts').insert({
+        asset_id: editId,
+        part_name: partForm.part_name.trim(),
+        part_type: partForm.part_type,
+        install_date: partForm.install_date || null,
+        odometer: partForm.odometer ? Number(partForm.odometer) : null,
+        quantity: Number(partForm.quantity) || 1,
+        cost,
+        vendor: partForm.vendor || null,
+        next_replace_date: partForm.next_replace_date || null,
+        notes: partForm.notes || null,
+        expense_id: expenseId,
+      })
+      if (error) throw error
+      toast.success('تم تسجيل القطعة')
+      setPartForm(newPartForm()); setShowPartForm(false)
+      await loadParts(editId); await loadExpenses(editId)
+    } catch (e) { toast.error('تعذّر التسجيل: ' + ((e as Error)?.message ?? '')) }
+    finally { setPartBusy(false) }
+  }
+
+  const deletePart = async (rec: AssetSparePart) => {
+    try {
+      if (rec.expense_id) await supabase.from('accounts_payable').delete().eq('id', rec.expense_id)
+      await supabase.from('asset_spare_parts').delete().eq('id', rec.id)
+      toast.success('تم حذف القطعة')
+      if (editId) { await loadParts(editId); await loadExpenses(editId) }
+    } catch { toast.error('تعذّر الحذف') }
   }
 
   // حذف الأصل: يحذف مستنداته ومرفقاتها من التخزين. مصاريفه في accounts_payable تبقى سجلاً مالياً (asset_id=null تلقائياً)
@@ -1630,6 +1721,97 @@ export default function AssetList() {
           <div className="border-t border-slate-100 pt-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
+                <Disc size={16} className="text-amber-600" />
+                <span className="text-sm font-semibold text-slate-700">قطع الغيار والإطارات</span>
+                {parts.length > 0 && <span className="text-xs text-slate-400">({parts.length})</span>}
+              </div>
+              {editId && (
+                <button type="button" onClick={() => setShowPartForm(v => !v)} className="text-xs text-amber-700 hover:text-amber-800 flex items-center gap-1">
+                  <Plus size={13} /> تسجيل قطعة
+                </button>
+              )}
+            </div>
+            {!editId ? (
+              <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل قطع الغيار.</div>
+            ) : (() => {
+              const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
+              const totalCost = parts.reduce((s, p) => s + Number(p.cost || 0), 0)
+              const dueSoon = parts.filter(p => p.next_replace_date && p.next_replace_date <= today)
+              return (
+                <>
+                  {dueSoon.length > 0 && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-2 mb-2 text-xs text-red-700">
+                      ⚠ {dueSoon.length} قطعة حان موعد استبدالها: {dueSoon.map(p => p.part_name).filter(Boolean).join('، ')}
+                    </div>
+                  )}
+                  {showPartForm && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="اسم القطعة" value={partForm.part_name} onChange={e => setPartForm(p => ({ ...p, part_name: e.target.value }))} />
+                        <Select label="النوع" options={PART_TYPES} value={partForm.part_type} onChange={e => setPartForm(p => ({ ...p, part_type: e.target.value }))} />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input label="التاريخ" type="date" value={partForm.install_date} onChange={e => setPartForm(p => ({ ...p, install_date: e.target.value }))} />
+                        <Input label="الكمية" type="number" value={partForm.quantity} onChange={e => setPartForm(p => ({ ...p, quantity: e.target.value }))} dir="ltr" />
+                        <Input label="التكلفة (د.ب)" type="number" value={partForm.cost} onChange={e => setPartForm(p => ({ ...p, cost: e.target.value }))} dir="ltr" />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input label="العدّاد عند التركيب" type="number" value={partForm.odometer} onChange={e => setPartForm(p => ({ ...p, odometer: e.target.value }))} dir="ltr" />
+                        <Input label="المورّد (اختياري)" value={partForm.vendor} onChange={e => setPartForm(p => ({ ...p, vendor: e.target.value }))} />
+                        <Input label="موعد الاستبدال القادم" type="date" value={partForm.next_replace_date} onChange={e => setPartForm(p => ({ ...p, next_replace_date: e.target.value }))} />
+                      </div>
+                      <Input label="ملاحظات (اختياري)" value={partForm.notes} onChange={e => setPartForm(p => ({ ...p, notes: e.target.value }))} />
+                      <div className="flex gap-2">
+                        <Button loading={partBusy} onClick={addPart}>تسجيل القطعة</Button>
+                        <Button variant="secondary" onClick={() => { setShowPartForm(false); setPartForm(newPartForm()) }}>إلغاء</Button>
+                      </div>
+                      <p className="text-xs text-slate-400">التكلفة تُقيَّد تلقائيًا في مصاريف الأصل.</p>
+                    </div>
+                  )}
+                  {parts.length === 0 ? (
+                    <div className="text-sm text-slate-400 text-center py-4 border border-dashed border-slate-200 rounded-lg">لا يوجد سجل قطع غيار بعد</div>
+                  ) : (
+                    <>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-2 flex items-center justify-between text-xs">
+                        <span className="text-slate-500">إجمالي تكلفة القطع والإطارات</span>
+                        <span className="font-bold text-red-600" dir="ltr">{formatCurrency(totalCost)}</span>
+                      </div>
+                      <div className="space-y-2">
+                        {parts.map(p => {
+                          const due = p.next_replace_date && p.next_replace_date <= today
+                          return (
+                            <div key={p.id} className={`border rounded-lg p-3 ${due ? 'border-red-200 bg-red-50/40' : 'border-slate-200 bg-white'}`}>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-sm font-semibold text-slate-800">{p.part_name}</span>
+                                    <span className="text-xs text-slate-400">{PART_TYPE_LABEL[p.part_type ?? ''] ?? ''}{Number(p.quantity || 1) > 1 ? ` ×${Number(p.quantity)}` : ''}</span>
+                                  </div>
+                                  <div className="text-xs text-slate-400 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                                    <span>{p.install_date ? formatDate(p.install_date) : '—'}</span>
+                                    {p.odometer != null && <span dir="ltr">{Number(p.odometer).toLocaleString('en-US')} كم</span>}
+                                    {p.vendor && <span>{p.vendor}</span>}
+                                    {p.cost > 0 && <span className="text-red-600 font-medium" dir="ltr">{formatCurrency(Number(p.cost))}</span>}
+                                    {p.next_replace_date && <span className={due ? 'text-red-600 font-medium' : 'text-amber-600'}>استبدال: {formatDate(p.next_replace_date)}</span>}
+                                  </div>
+                                  {p.notes && <p className="text-xs text-slate-500 mt-0.5 break-words">{p.notes}</p>}
+                                </div>
+                                <button type="button" onClick={() => deletePart(p)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 shrink-0"><Trash2 size={14} /></button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
                 <Wallet size={16} className="text-amber-600" />
                 <span className="text-sm font-semibold text-slate-700">البيع / الاستبعاد</span>
               </div>
@@ -1756,7 +1938,7 @@ export default function AssetList() {
 
           <div className="flex gap-2 pt-2">
             <Button loading={saving} onClick={handleSave}>{editId ? 'حفظ التعديلات' : 'حفظ'}</Button>
-            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setDisposal(null); setShowDisposeForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
+            <Button variant="secondary" onClick={() => { setShowForm(false); setEditId(null); setDocs([]); setExpenses([]); setInstallments([]); setMaintenance([]); setShowMaintForm(false); setFuel([]); setShowFuelForm(false); setIncidents([]); setShowIncidentForm(false); setMovements([]); setShowMoveForm(false); setDisposal(null); setShowDisposeForm(false); setParts([]); setShowPartForm(false); setShowExpForm(false); setCoverPath(null) }}>إغلاق</Button>
             {editId && (
               <button type="button" onClick={() => setConfirmDelete(true)}
                 className="mr-auto flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg hover:bg-red-50">
