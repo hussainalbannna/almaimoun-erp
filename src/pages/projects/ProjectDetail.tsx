@@ -77,6 +77,7 @@ export default function ProjectDetail() {
   const [logs, setLogs] = useState<DailyLog[]>([]);
   const [tab, setTab] = useState<'milestones' | 'vos' | 'logs' | 'documents'>('milestones');
   const [loading, setLoading] = useState(true);
+  const [generatingId, setGeneratingId] = useState<string | null>(null); // منع النقر المزدوج على إصدار الفاتورة
 
   // ── تبويب المستندات (مستندات المشروع + العميل) ──
   const [docs, setDocs] = useState<ProjectDoc[]>([]);
@@ -262,6 +263,12 @@ export default function ProjectDetail() {
 
   const generateInvoice = async (milestone: ProjectMilestone) => {
     if (!project) return;
+    if (generatingId) return; // حارس النقر المزدوج
+    if (milestone.invoice_id) { // منع فاتورة مكرّرة/يتيمة: المرحلة لها فاتورة بالفعل
+      toast.error('هذه المرحلة لها فاتورة بالفعل — افتحها للتعديل أو احذفها قبل إعادة الإصدار');
+      return;
+    }
+    setGeneratingId(milestone.id);
     try {
       const { data: gen, error: genErr } = await supabase.rpc('next_invoice_number', { p_prefix: 'INV' });
       if (genErr || !gen) throw new Error('تعذّر توليد رقم الفاتورة');
@@ -308,6 +315,8 @@ export default function ProjectDetail() {
       load();
     } catch (e) {
       toast.error('حدث خطأ أثناء إصدار الفاتورة');
+    } finally {
+      setGeneratingId(null);
     }
   };
 
@@ -732,7 +741,7 @@ export default function ProjectDetail() {
                     <td className="p-3 flex gap-2 flex-wrap">
                       {m.status === 'pending' && <Button onClick={() => updateMilestoneStatus(m.id, 'in_progress')}>تفعيل جاري</Button>}
                       {m.status === 'in_progress' && <Button onClick={() => updateMilestoneStatus(m.id, 'completed')}>اكتمال المرحلة</Button>}
-                      {m.status === 'completed' && <Button onClick={() => generateInvoice(m)}>إصدار الفاتورة</Button>}
+                      {m.status === 'completed' && <Button loading={generatingId === m.id} onClick={() => generateInvoice(m)}>إصدار الفاتورة</Button>}
                       {/* إرجاع المرحلة من مفوتر إلى جاري (لتعديل الفاتورة عند الحاجة) */}
                       {m.status === 'invoiced' && <Button variant="outline" onClick={() => updateMilestoneStatus(m.id, 'in_progress')}>إرجاع إلى جاري</Button>}
                       {m.invoice_id && <Link to={`/invoices/${m.invoice_id}/view`} className="p-1.5 text-xs bg-blue-50 text-blue-600 rounded-lg flex items-center gap-1"><FileText size={14} /> عرض الفاتورة</Link>}
