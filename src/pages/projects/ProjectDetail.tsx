@@ -13,7 +13,7 @@ import type {
 import { formatCurrency, formatDate } from '../../lib/utils';
 import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage';
 import { compressImage, openStoredFile } from '../../lib/ai';
-import { fetchCheques, computePendingChequeSets, splitPurchases, splitSubPayments } from '../../lib/finance';
+import { fetchCheques, computePendingChequeSets, splitPurchases, splitSubPayments, workerDayCost } from '../../lib/finance';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import { toast } from 'react-hot-toast';
@@ -153,7 +153,6 @@ export default function ProjectDetail() {
       const rentalIds = ((rentalsRes.data ?? []) as Array<{ id: string }>).map(r => r.id);
 
       // عدّ أيام حضور كل عامل في هذا الموقع (من بيانات الموجة الأولى)
-      const MONTHLY_WORK_DAYS = 26;
       const daysByWorker = new Map<string, number>();
       for (const a of ((attRes.data ?? []) as Array<{ worker_id: string; status?: string }>)) {
         if (a.status && a.status !== 'present') continue; // نحسب الحضور فقط
@@ -222,19 +221,9 @@ export default function ProjectDetail() {
       const details: { name: string; days: number; cost: number; type: string }[] = [];
       for (const w of workersData) {
         const days = daysByWorker.get(w.id) || 0;
-        let dayCost = 0;
-        let type = '';
-        if (w.pay_type === 'daily') {
-          dayCost = Number(w.daily_rate || 0);
-          type = 'يومي';
-        } else {
-          // شهري: الراتب الكامل ÷ 26
-          const fullSalary = Number(w.actual_salary || 0) > 0
-            ? Number(w.actual_salary || 0)
-            : Number(w.basic_salary || 0) + Number(w.social_allowance || 0);
-          dayCost = fullSalary / MONTHLY_WORK_DAYS;
-          type = 'شهري';
-        }
+        // تكلفة يوم العامل من المصدر الموحّد finance.ts (يومي: أجر اليوم · شهري: الراتب الكامل ÷ 26)
+        const dayCost = workerDayCost(w);
+        const type = w.pay_type === 'daily' ? 'يومي' : 'شهري';
         const cost = dayCost * days;
         laborTotal += cost;
         details.push({ name: w.name_en || w.name, days, cost, type });
