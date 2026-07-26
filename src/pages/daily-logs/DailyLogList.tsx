@@ -162,13 +162,13 @@ function buildPrintHTML(logs: PrintLog[]): string {
 
       <div class="section">
         <div class="section-title">وصف الأعمال المنجزة</div>
-        <div class="section-body">${(log.description ?? '').replace(/\n/g, '<br/>')}</div>
+        <div class="section-body">${escHtml(log.description ?? '').replace(/\n/g, '<br/>')}</div>
       </div>
 
       ${log.material_requests ? `
       <div class="section">
         <div class="section-title">طلبات المواد</div>
-        <div class="section-body">${log.material_requests.replace(/\n/g, '<br/>')}</div>
+        <div class="section-body">${escHtml(log.material_requests).replace(/\n/g, '<br/>')}</div>
       </div>` : ''}
 
       ${(log.worker_names?.length ?? 0) > 0 ? `
@@ -189,7 +189,7 @@ function buildPrintHTML(logs: PrintLog[]): string {
       ${log.additional_notes ? `
       <div class="section">
         <div class="section-title">ملاحظات إضافية</div>
-        <div class="section-body notes-body">${log.additional_notes.replace(/\n/g, '<br/>')}</div>
+        <div class="section-body notes-body">${escHtml(log.additional_notes).replace(/\n/g, '<br/>')}</div>
       </div>` : ''}
 
       ${photoGrid(log.photos ?? [])}

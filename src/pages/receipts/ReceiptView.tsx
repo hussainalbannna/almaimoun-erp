@@ -291,7 +291,32 @@ export default function ReceiptView() {
   )
 }
 
-function buildPrintableHTML(receipt: Receipt, company: CompanySettings | null): string {
+// تهريب HTML لكل قيمة يتحكّم بها المستخدم قبل حقنها في قوالب الطباعة/البريد (منع XSS)
+function escHtml(s: unknown): string {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
+}
+// نسخ مُهرَّبة من الحقول النصّية فقط (طريقة الدفع مفتاح تسمية، والأرقام تبقى كما هي)
+function sanitizeReceipt(r: Receipt): Receipt {
+  return {
+    ...r,
+    receipt_number: escHtml(r.receipt_number), customer_name: escHtml(r.customer_name),
+    receipt_date: escHtml(r.receipt_date), reference_no: escHtml(r.reference_no),
+    invoice_number: escHtml(r.invoice_number), invoice_date: escHtml(r.invoice_date), memo: escHtml(r.memo),
+  } as Receipt
+}
+function sanitizeCompany(c: CompanySettings | null): CompanySettings | null {
+  if (!c) return null
+  return {
+    ...c,
+    address: escHtml(c.address), phone: escHtml(c.phone), email: escHtml(c.email),
+    tax_number: escHtml(c.tax_number), commercial_reg: escHtml(c.commercial_reg), name_en: escHtml(c.name_en),
+    bank_name: escHtml(c.bank_name), bank_account: escHtml(c.bank_account), bank_iban: escHtml(c.bank_iban),
+  } as CompanySettings
+}
+
+function buildPrintableHTML(receiptRaw: Receipt, companyRaw: CompanySettings | null): string {
+  const receipt = sanitizeReceipt(receiptRaw)
+  const company = sanitizeCompany(companyRaw)
   return `<!DOCTYPE html>
 <html dir="ltr">
 <head>
@@ -373,7 +398,9 @@ function buildPrintableHTML(receipt: Receipt, company: CompanySettings | null): 
 </html>`
 }
 
-function buildEmailHTML(receipt: Receipt, company: CompanySettings | null): string {
+function buildEmailHTML(receiptRaw: Receipt, companyRaw: CompanySettings | null): string {
+  const receipt = sanitizeReceipt(receiptRaw)
+  const company = sanitizeCompany(companyRaw)
   return `<!DOCTYPE html>
 <html dir="ltr">
 <head><meta charset="utf-8" /></head>
