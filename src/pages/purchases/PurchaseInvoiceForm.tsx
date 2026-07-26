@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowRight, Plus, Trash2, X, Sparkles, Loader2, Upload, FileText,
@@ -148,6 +148,9 @@ export default function PurchaseInvoiceForm() {
 
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([])
 
+  // مسارات المرفقات الرئيسية الأصلية عند فتح فاتورة للتعديل — لحذف ما استُبدل منها بعد نجاح الحفظ
+  const originalMainPaths = useRef<{ ic: string; pp: string; ch: string }>({ ic: '', pp: '', ch: '' })
+
   useEffect(() => {
     const loadOptions = async () => {
       const [sRes, pRes, lRes] = await Promise.all([
@@ -180,6 +183,13 @@ export default function PurchaseInvoiceForm() {
           const icVal = inv.invoice_copy_path || inv.invoice_copy_data || ''
           const ppVal = inv.payment_proof_path || inv.payment_proof_data || ''
           const chVal = inv.check_image_path || inv.check_image_data || ''
+
+          // نحفظ المسارات الأصلية فقط (نتجاهل base64 القديمة) لحذف المستبدَل منها لاحقاً
+          originalMainPaths.current = {
+            ic: isDataUrl(icVal) ? '' : icVal,
+            pp: isDataUrl(ppVal) ? '' : ppVal,
+            ch: isDataUrl(chVal) ? '' : chVal,
+          }
 
           setForm({
             supplier_id: inv.supplier_id ?? '',
@@ -431,7 +441,11 @@ export default function PurchaseInvoiceForm() {
     }
 
     // إعادة بناء بيانات التوصيل (نحذف القديمة ثم ندرج الصالحة بمساراتها)
+    // نقرأ مسارات صور التوصيل القديمة قبل الحذف لتنظيف ما لم يعد مستخدماً منها لاحقاً
+    let oldDeliveryPaths: string[] = []
     if (isEdit) {
+      const { data: oldDel } = await supabase.from('purchase_invoice_deliveries').select('delivery_image_path').eq('purchase_invoice_id', id)
+      oldDeliveryPaths = (oldDel ?? []).map(r => (r as { delivery_image_path?: string }).delivery_image_path ?? '').filter(Boolean)
       await supabase.from('purchase_invoice_deliveries').delete().eq('purchase_invoice_id', id)
     }
     const deliveryPayload = deliveries
@@ -450,6 +464,21 @@ export default function PurchaseInvoiceForm() {
         await deleteAttachment(newDeliveryUploads).catch(() => {})
         toast.error('حُفظت الفاتورة، لكن تعذّر حفظ بيانات التوصيل: ' + delErr.message); setSaving(false); navigate('/purchases'); return
       }
+    }
+
+    // تنظيف التخزين بعد نجاح الحفظ: حذف المرفقات القديمة التي استُبدلت أو أُزيلت كي لا تبقى يتيمة
+    if (isEdit) {
+      const replacedMain = ([
+        [originalMainPaths.current.ic, invoiceCopyPath],
+        [originalMainPaths.current.pp, paymentProofPath],
+        [originalMainPaths.current.ch, checkImagePath],
+      ] as [string, string][])
+        .filter(([oldP, newP]) => oldP && oldP !== newP)
+        .map(([oldP]) => oldP)
+      const keptDelivery = new Set(deliveryPayload.map(d => d.delivery_image_path).filter(Boolean))
+      const removedDelivery = oldDeliveryPaths.filter(p => !keptDelivery.has(p))
+      const toRemove = [...replacedMain, ...removedDelivery]
+      if (toRemove.length > 0) await deleteAttachment(toRemove).catch(() => {})
     }
 
     toast.success(isEdit ? 'تم تحديث الفاتورة بنجاح' : 'تم تسجيل فاتورة الشراء بنجاح')
