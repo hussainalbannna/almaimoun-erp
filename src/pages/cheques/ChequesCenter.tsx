@@ -160,17 +160,20 @@ export default function ChequesCenter() {
     let overdueCount = 0, overdueTotal = 0
     let guaranteeCount = 0, guaranteeTotal = 0
     let bouncedCount = 0
+    let incomingCount = 0, incomingTotal = 0 // شيكات واردة (من العملاء) = مستحقات لك، ليست التزامًا
     const in7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
     for (const c of cheques) {
       if (c.status === 'bounced') bouncedCount++
       if (c.status !== 'pending') continue
       const amt = Number(c.amount || 0)
+      // الوارد مالٌ ستستلمه — يُتتبَّع كمستحق منفصل ولا يدخل في بطاقات الالتزام
+      if (c.direction === 'incoming') { incomingCount++; incomingTotal += amt; continue }
       if (c.cheque_type === 'guarantee') { guaranteeCount++; guaranteeTotal += amt; continue }
       pendingCount++; pendingTotal += amt
       if (c.due_date && c.due_date < t) { overdueCount++; overdueTotal += amt }
       else if (c.due_date && c.due_date <= in7) { due7Count++; due7Total += amt }
     }
-    return { pendingCount, pendingTotal, due7Count, due7Total, overdueCount, overdueTotal, guaranteeCount, guaranteeTotal, bouncedCount }
+    return { pendingCount, pendingTotal, due7Count, due7Total, overdueCount, overdueTotal, guaranteeCount, guaranteeTotal, bouncedCount, incomingCount, incomingTotal }
   }, [cheques, t])
 
   // ─── الفلترة حسب التبويب والبحث ─────────────────────────────────
@@ -407,7 +410,8 @@ export default function ChequesCenter() {
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <div className="flex items-center gap-2 text-xs text-slate-500 mb-1"><CalendarClock size={14} /> شيكات معلّقة (آجلة)</div>
           <div className="text-lg font-bold text-slate-800">{formatCurrency(stats.pendingTotal)}</div>
-          <div className="text-[11px] text-slate-400 mt-0.5">{stats.pendingCount} شيك — التزام قادم</div>
+          <div className="text-[11px] text-slate-400 mt-0.5">{stats.pendingCount} شيك صادر — التزام عليك</div>
+          {stats.incomingCount > 0 && <div className="text-[11px] text-emerald-600 mt-0.5">+ {stats.incomingCount} وارد لك: {formatCurrency(stats.incomingTotal)}</div>}
         </div>
         <div className={`rounded-xl border p-4 ${stats.overdueCount > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-2 text-xs text-slate-500 mb-1"><AlertTriangle size={14} className={stats.overdueCount > 0 ? 'text-red-500' : ''} /> استحقت وتحتاج تسوية</div>
