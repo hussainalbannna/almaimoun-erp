@@ -89,14 +89,17 @@ export async function safeSelect<T = Record<string, unknown>>(
   const PAGE = 1000
   const all: T[] = []
   try {
-    for (let from = 0; ; from += PAGE) {
+    // نتقدّم بمقدار عدد الصفوف الفعلي في كل دفعة ونتوقّف فقط عند دفعة فارغة —
+    // فيصمد الترقيم حتى لو كان سقف الخادم (db.max_rows) أقل من PAGE.
+    for (let from = 0; ; ) {
       let query: any = supabase.from(table).select(columns)
       if (modify) query = modify(query)
       const { data, error } = await query.range(from, from + PAGE - 1)
       if (error) { console.error(`[${table}] خطأ في القراءة:`, error.message); break }
       const rows = (data ?? []) as T[]
       all.push(...rows)
-      if (rows.length < PAGE) break
+      if (rows.length === 0) break
+      from += rows.length
     }
     return all
   } catch (e) {
