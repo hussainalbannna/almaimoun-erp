@@ -84,15 +84,24 @@ export async function safeSelect<T = Record<string, unknown>>(
   // نستخدم any داخلياً لتفادي تعقيد أنواع supabase-js العميق؛ التوقيع العام يبقى مُنمَّطاً (T[])
   modify?: (q: any) => any
 ): Promise<T[]> {
+  // ترقيم تلقائي: Supabase يُعيد 1000 صف كحدّ أقصى للطلب الواحد، فنجلب على دفعات حتى تكتمل كل الصفوف
+  // (حرج للإجماليات المالية: الحضور/المصاريف قد تتجاوز 1000 صف مع الوقت فتُقتطع بصمت).
+  const PAGE = 1000
+  const all: T[] = []
   try {
-    let query: any = supabase.from(table).select(columns)
-    if (modify) query = modify(query)
-    const { data, error } = await query
-    if (error) { console.error(`[${table}] خطأ في القراءة:`, error.message); return [] }
-    return (data ?? []) as T[]
+    for (let from = 0; ; from += PAGE) {
+      let query: any = supabase.from(table).select(columns)
+      if (modify) query = modify(query)
+      const { data, error } = await query.range(from, from + PAGE - 1)
+      if (error) { console.error(`[${table}] خطأ في القراءة:`, error.message); break }
+      const rows = (data ?? []) as T[]
+      all.push(...rows)
+      if (rows.length < PAGE) break
+    }
+    return all
   } catch (e) {
     console.error(`[${table}] استثناء:`, e)
-    return []
+    return all
   }
 }
 

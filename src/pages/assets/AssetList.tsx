@@ -6,7 +6,7 @@ import {
   Plus, Truck, MapPin, CreditCard, Wallet, CalendarClock, CheckCircle2, AlertTriangle, Building2,
   Paperclip, Upload, Eye, Download, Trash2, FileText, Image as ImageIcon, Loader2, Star, X, User, Wrench, Fuel, Disc, QrCode,
 } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile, hasApiKey, readDocumentText, extractJSON } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
@@ -992,9 +992,12 @@ export default function AssetList() {
   const openReport = async () => {
     setReportBusy(true); setShowReport(true)
     try {
-      const { data } = await supabase.from('accounts_payable').select('asset_id, amount').not('asset_id', 'is', null)
+      // جلب مُرقَّم (كل الصفوف مهما كثرت) لضمان دقّة إجمالي مصاريف كل أصل
+      const rows = await safeSelect<{ asset_id: string | null; amount: number | null }>(
+        'accounts_payable', 'asset_id, amount', q => q.not('asset_id', 'is', null),
+      )
       const map: Record<string, number> = {}
-      for (const r of (data ?? []) as { asset_id: string; amount: number }[]) {
+      for (const r of rows) {
         if (r.asset_id) map[r.asset_id] = (map[r.asset_id] || 0) + Number(r.amount || 0)
       }
       setReportExpenses(map)
