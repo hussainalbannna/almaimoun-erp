@@ -1293,7 +1293,8 @@ export default function AssetList() {
               <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">احفظ الأصل أولاً لتسجيل الحوادث.</div>
             ) : (() => {
               const totalCost = incidents.reduce((s, x) => s + Number(x.cost || 0), 0)
-              const totalClaim = incidents.reduce((s, x) => s + (x.insurance_claim && (x.claim_status === 'approved' || x.claim_status === 'paid') ? Number(x.claim_amount || 0) : 0), 0)
+              const totalClaim = incidents.reduce((s, x) => s + (x.insurance_claim && x.claim_status === 'paid' ? Number(x.claim_amount || 0) : 0), 0)
+              const pendingClaim = incidents.reduce((s, x) => s + (x.insurance_claim && (x.claim_status === 'submitted' || x.claim_status === 'approved') ? Number(x.claim_amount || 0) : 0), 0)
               const netCost = totalCost - totalClaim
               const openCount = incidents.filter(x => !x.resolved).length
               return (
@@ -1341,7 +1342,7 @@ export default function AssetList() {
                     <>
                       <div className="grid grid-cols-3 gap-2 mb-3 text-center text-xs">
                         <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">صافي التكلفة</div><div className="font-bold text-red-600" dir="ltr">{formatCurrency(netCost)}</div></div>
-                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">مُسترَد التأمين</div><div className="font-bold text-emerald-600" dir="ltr">{formatCurrency(totalClaim)}</div></div>
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">مُسترَد التأمين</div><div className="font-bold text-emerald-600" dir="ltr">{formatCurrency(totalClaim)}</div>{pendingClaim > 0 && <div className="text-[10px] text-amber-600 mt-0.5" dir="ltr">قيد التحصيل {formatCurrency(pendingClaim)}</div>}</div>
                         <div className="bg-slate-50 border border-slate-200 rounded-lg p-2"><div className="text-slate-500">غير مُعالَج</div><div className={`font-bold ${openCount > 0 ? 'text-orange-600' : 'text-slate-800'}`} dir="ltr">{openCount}</div></div>
                       </div>
                       <div className="space-y-2">
