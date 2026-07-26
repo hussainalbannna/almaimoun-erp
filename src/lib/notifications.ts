@@ -64,7 +64,7 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     try { const { data } = await p; return data ?? [] } catch { return [] }
   }
 
-  const [workers, assets, invoices, cheques, tasks, quotes, maintenance, spareParts] = await Promise.all([
+  const [workers, assets, invoices, cheques, tasks, quotes, maintenance, spareParts, fuelLogs] = await Promise.all([
     safe(supabase.from('workers').select('id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status')),
     safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,inspection_expiry,warranty_expiry,operation_license_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
     safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
@@ -72,8 +72,9 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     safe(supabase.from('cheques').select('id,party_name,amount,due_date,status,cheque_type,direction')),
     safe(supabase.from('tasks').select('id,title,due_date,status')),
     safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status,total')),
-    safe(supabase.from('asset_maintenance').select('id,asset_id,service_date,next_service_date')),
+    safe(supabase.from('asset_maintenance').select('id,asset_id,service_date,next_service_date,next_service_odometer')),
     safe(supabase.from('asset_spare_parts').select('id,asset_id,part_name,next_replace_date')),
+    safe(supabase.from('asset_fuel_logs').select('asset_id,odometer')),
   ])
 
   const subtitleDays = (d: number, verb: { past: string; today: string; future: string }) =>
@@ -190,6 +191,41 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
       subtitle: subtitleDays(d, { past: 'تأخر منذ', today: 'مستحق اليوم', future: 'بعد' }),
       date: next,
       daysLeft: d,
+      link: '/assets',
+    })
+  }
+
+  // صيانة الأصول بالكيلومترات — العدّاد الحالي = أعلى قراءة في سجل الوقود
+  const currentKm = new Map<string, number>()
+  for (const f of fuelLogs as Record<string, unknown>[]) {
+    const od = Number(f.odometer)
+    if (!Number.isFinite(od) || od <= 0) continue
+    const aid = f.asset_id as string
+    if (od > (currentKm.get(aid) ?? 0)) currentKm.set(aid, od)
+  }
+  const latestMaintKm = new Map<string, { service_date: string; next: number }>()
+  for (const m of maintenance as Record<string, unknown>[]) {
+    const next = m.next_service_odometer as number | null
+    if (next == null) continue
+    const sd = (m.service_date as string) || ''
+    const cur = latestMaintKm.get(m.asset_id as string)
+    if (!cur || sd > cur.service_date) latestMaintKm.set(m.asset_id as string, { service_date: sd, next: Number(next) })
+  }
+  for (const [assetId, rec] of latestMaintKm) {
+    const km = currentKm.get(assetId)
+    if (km == null) continue
+    const remaining = rec.next - km
+    if (remaining > 500) continue
+    const level: AlertLevel = remaining < 0 ? 'overdue' : remaining <= 100 ? 'danger' : 'warning'
+    alerts.push({
+      id: `maint-km-${assetId}`,
+      kind: 'asset_doc',
+      level,
+      urgent: remaining >= 0 && remaining <= 100,
+      title: `صيانة ${assetNameMap.get(assetId) ?? 'أصل'} (بالكيلومترات)`,
+      subtitle: remaining < 0 ? `تجاوز الصيانة بـ ${Math.abs(remaining).toLocaleString('en-US')} كم` : `متبقٍ ${remaining.toLocaleString('en-US')} كم للصيانة`,
+      date: null,
+      daysLeft: null,
       link: '/assets',
     })
   }

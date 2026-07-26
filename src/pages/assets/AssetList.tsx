@@ -183,9 +183,10 @@ interface AssetMaintenance {
   vendor: string | null
   odometer: number | null
   next_service_date: string | null
+  next_service_odometer: number | null
   expense_id: string | null
 }
-const newMaintForm = () => ({ service_date: new Date().toISOString().slice(0, 10), service_type: 'routine', description: '', cost: '', vendor: '', odometer: '', next_service_date: '' })
+const newMaintForm = () => ({ service_date: new Date().toISOString().slice(0, 10), service_type: 'routine', description: '', cost: '', vendor: '', odometer: '', next_service_date: '', next_service_odometer: '' })
 
 interface AssetFuelLog {
   id: string
@@ -429,7 +430,7 @@ export default function AssetList() {
 
   const loadMaintenance = async (assetId: string) => {
     const { data } = await supabase.from('asset_maintenance')
-      .select('id, service_date, service_type, description, cost, vendor, odometer, next_service_date, expense_id')
+      .select('id, service_date, service_type, description, cost, vendor, odometer, next_service_date, next_service_odometer, expense_id')
       .eq('asset_id', assetId).order('service_date', { ascending: false })
     setMaintenance((data ?? []) as AssetMaintenance[])
   }
@@ -721,6 +722,7 @@ export default function AssetList() {
         vendor: maintForm.vendor || null,
         odometer: maintForm.odometer ? Number(maintForm.odometer) : null,
         next_service_date: maintForm.next_service_date || null,
+        next_service_odometer: maintForm.next_service_odometer ? Number(maintForm.next_service_odometer) : null,
         expense_id: expenseId,
       })
       if (error) throw error
@@ -1537,9 +1539,10 @@ export default function AssetList() {
                       <Input label="التكلفة (د.ب)" type="number" value={maintForm.cost} onChange={e => setMaintForm(p => ({ ...p, cost: e.target.value }))} dir="ltr" />
                       <Input label="الورشة / الفني" value={maintForm.vendor} onChange={e => setMaintForm(p => ({ ...p, vendor: e.target.value }))} />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       <Input label="عدّاد الكيلومترات" type="number" value={maintForm.odometer} onChange={e => setMaintForm(p => ({ ...p, odometer: e.target.value }))} dir="ltr" />
                       <Input label="موعد الصيانة القادمة" type="date" value={maintForm.next_service_date} onChange={e => setMaintForm(p => ({ ...p, next_service_date: e.target.value }))} />
+                      <Input label="عدّاد الصيانة القادمة (كم)" type="number" value={maintForm.next_service_odometer} onChange={e => setMaintForm(p => ({ ...p, next_service_odometer: e.target.value }))} dir="ltr" />
                     </div>
                     <Input label="الوصف / الأعمال" value={maintForm.description} onChange={e => setMaintForm(p => ({ ...p, description: e.target.value }))} />
                     <div className="flex gap-2">
@@ -1569,7 +1572,7 @@ export default function AssetList() {
                             <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{rec.service_date ? formatDate(rec.service_date) : '—'}</td>
                             <td className="px-3 py-2 text-slate-700">{MAINT_TYPE_LABEL[rec.service_type ?? ''] ?? rec.service_type ?? '—'}{rec.description ? <span className="text-xs text-slate-400"> · {rec.description}</span> : ''}{rec.vendor ? <span className="text-xs text-slate-400"> · {rec.vendor}</span> : ''}</td>
                             <td className="px-3 py-2 font-medium text-red-600 whitespace-nowrap" dir="ltr">{rec.cost > 0 ? formatCurrency(Number(rec.cost)) : '—'}</td>
-                            <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{rec.next_service_date ? formatDate(rec.next_service_date) : '—'}</td>
+                            <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{rec.next_service_date ? formatDate(rec.next_service_date) : '—'}{rec.next_service_odometer != null ? <span className="text-xs text-slate-400 block" dir="ltr">{Number(rec.next_service_odometer).toLocaleString('en-US')} كم</span> : ''}</td>
                             <td className="px-3 py-2 text-left">
                               <button type="button" onClick={() => deleteMaintenance(rec)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Trash2 size={14} /></button>
                             </td>
