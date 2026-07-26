@@ -327,6 +327,7 @@ export default function AssetList() {
   const [showReport, setShowReport] = useState(false)
   const [reportBusy, setReportBusy] = useState(false)
   const [reportExpenses, setReportExpenses] = useState<Record<string, number>>({})
+  const [showAllQr, setShowAllQr] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
@@ -1242,6 +1243,7 @@ export default function AssetList() {
           <p className="text-slate-500 text-sm">{assets.length} أصل مسجل</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" icon={<QrCode size={16} />} onClick={() => setShowAllQr(true)}>ملصقات QR</Button>
           <Button variant="secondary" icon={<FileText size={16} />} onClick={openReport}>التقرير الشامل</Button>
           <Button icon={<Plus size={16} />} onClick={openNew}>إضافة أصل</Button>
         </div>
@@ -2145,6 +2147,41 @@ export default function AssetList() {
           </div>
         </div>
       )}
+
+      {showAllQr && (() => {
+        const labelAssets = assets.filter(a => !a.archived && !a.disposal_date)
+        return (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto" onClick={() => setShowAllQr(false)}>
+            <style>{`@media print { body * { visibility: hidden !important; } #assets-qr-all-print, #assets-qr-all-print * { visibility: visible !important; } #assets-qr-all-print { position: absolute; top: 0; right: 0; left: 0; padding: 8px; } .no-print { display: none !important; } .qr-label { page-break-inside: avoid } }`}</style>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl my-4" onClick={e => e.stopPropagation()} dir="rtl">
+              <div className="flex items-center justify-between p-4 border-b border-slate-100 no-print">
+                <h2 className="text-lg font-bold text-slate-800">ملصقات QR — {labelAssets.length} أصل</h2>
+                <div className="flex items-center gap-2">
+                  <Button variant="secondary" onClick={() => window.print()}>طباعة الكل</Button>
+                  <button onClick={() => setShowAllQr(false)} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"><X size={18} /></button>
+                </div>
+              </div>
+              <div id="assets-qr-all-print" className="p-4">
+                {labelAssets.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400">لا توجد أصول نشطة لطباعة ملصقاتها</div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {labelAssets.map(a => (
+                      <div key={a.id} className="qr-label border-2 border-slate-800 rounded-xl p-3 flex flex-col items-center text-center gap-1">
+                        <div className="text-sm font-bold text-slate-900 truncate w-full">{a.name}</div>
+                        {a.plate_number && <div className="text-xs text-slate-600" dir="ltr">{a.plate_number}</div>}
+                        <QRCodeSVG value={`${window.location.origin}/assets?asset=${a.id}`} size={110} level="M" includeMargin />
+                        <div className="text-[9px] text-slate-400">شركة الميمون للمقاولات</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-slate-400 mt-3 no-print">تُطبع الملصقات النشطة فقط (غير المؤرشفة وغير المستبعدة). قصّها وألصقها على المعدات.</p>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <input className="h-9 px-4 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 min-w-[220px] flex-1 max-w-sm"
