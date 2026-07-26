@@ -42,13 +42,11 @@ export default function Settings() {
 
   const queryClient = useQueryClient()
   const { data: settingsData } = useQuery({ queryKey: ['company-settings'], queryFn: fetchCompanySettings })
-  // تعبئة النموذج عند وصول الإعدادات — مع استبعاد مفتاح الذكاء الاصطناعي حتى لا يُكتب فوقه أبداً.
-  // المفتاح صار سرّ خادم ولا يُدار من هنا إطلاقاً.
+  // تعبئة النموذج عند وصول الإعدادات. مفاتيح الأسرار (Resend/Anthropic) لم تعد أعمدة في الجدول
+  // إطلاقاً — تُدار كأسرار خادم فقط، فلا شيء حسّاس يصل المتصفّح.
   useEffect(() => {
     if (!settingsData) return
-    const { anthropic_api_key: _omit, ...rest } = settingsData as CompanySettings & { anthropic_api_key?: string }
-    void _omit
-    setForm(rest as Partial<CompanySettings>)
+    setForm(settingsData as Partial<CompanySettings>)
     setSettingsId(settingsData.id)
   }, [settingsData])
 
@@ -57,11 +55,7 @@ export default function Settings() {
 
   const handleSave = async () => {
     setLoading(true)
-    // مهم: لا نلمس مفتاح الذكاء الاصطناعي هنا أبداً — يُدار كسرّ خادم.
-    // نحذفه من الحمولة حتى لا نكتب فوقه بالخطأ لو كان العمود لا يزال موجوداً.
-    const cleanForm = { ...form } as Partial<CompanySettings> & { anthropic_api_key?: string }
-    delete cleanForm.anthropic_api_key
-    const payload = { ...cleanForm, updated_at: new Date().toISOString() }
+    const payload = { ...form, updated_at: new Date().toISOString() }
     const { error } = settingsId
       ? await supabase.from('company_settings').update(payload).eq('id', settingsId)
       : await supabase.from('company_settings').insert(payload)

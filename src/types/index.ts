@@ -18,7 +18,6 @@ export interface CompanySettings {
   currency: string
   invoice_prefix: string
   lpo_prefix: string
-  resend_api_key: string
   smtp_from: string
   created_at: string
   updated_at: string
