@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Sparkles, Loader2, Copy, Paperclip, FileText, Trash2, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Customer } from '../../types'
@@ -30,6 +31,7 @@ const DOC_FOLDER = 'documents'
 export default function CustomerForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
@@ -155,6 +157,9 @@ export default function CustomerForm() {
       : await supabase.from('customers').insert(payload)
     setLoading(false)
     if (error) { toast.error('حدث خطأ أثناء الحفظ: ' + error.message); return }
+    // إبطال كاش قائمة العملاء ودليل جهات الاتصال حتى تظهر التغييرات فورًا
+    queryClient.invalidateQueries({ queryKey: ['customers-list'] })
+    queryClient.invalidateQueries({ queryKey: ['contacts-directory'] })
     toast.success(isEdit ? 'تم تحديث العميل' : 'تم إضافة العميل')
     navigate('/customers')
   }
