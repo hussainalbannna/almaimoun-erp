@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, Plus, Trash2, X, Sparkles, Loader2, Upload, FileText,
   Building2, User, Calendar, Hash, Wallet, CreditCard, Paperclip, Truck, Receipt
@@ -112,6 +113,7 @@ function UploadField({ label, accept, onFile, children }: {
 export default function PurchaseInvoiceForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [saving, setSaving] = useState(false)
@@ -480,6 +482,13 @@ export default function PurchaseInvoiceForm() {
       const toRemove = [...replacedMain, ...removedDelivery]
       if (toRemove.length > 0) await deleteAttachment(toRemove).catch(() => {})
     }
+
+    // فاتورة الشراء مصروف يؤثّر على ربح المشروع والمالية والتقارير؛ والشيك الآجل يُنشئ صف cheque (مُشغّل)
+    queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+    queryClient.invalidateQueries({ queryKey: ['reports-data'] })
+    queryClient.invalidateQueries({ queryKey: ['cheques'] })
+    queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
 
     toast.success(isEdit ? 'تم تحديث الفاتورة بنجاح' : 'تم تسجيل فاتورة الشراء بنجاح')
     setSaving(false)
