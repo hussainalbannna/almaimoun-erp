@@ -83,7 +83,7 @@ export default function LPOView() {
         </Link>
         {lpo.supplier_email && (
           <Button variant="outline" size="sm" icon={<Mail size={15} />}
-            onClick={() => { openEmail(lpo.supplier_email, subject, emailBody); updateStatus('sent') }}>
+            onClick={() => { openEmail(lpo.supplier_email, subject, emailBody); if (lpo.status === 'draft') updateStatus('sent') }}>
             Send Email
           </Button>
         )}
@@ -92,7 +92,7 @@ export default function LPOView() {
             variant="outline" size="sm"
             icon={<MessageCircle size={15} className="text-green-600" />}
             className="border-green-300 text-green-700 hover:bg-green-50"
-            onClick={() => { openWhatsApp(supplierPhone, waMessage); updateStatus('sent') }}
+            onClick={() => { openWhatsApp(supplierPhone, waMessage); if (lpo.status === 'draft') updateStatus('sent') }}
           >
             WhatsApp
           </Button>
