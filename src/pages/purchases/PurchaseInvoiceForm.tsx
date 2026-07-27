@@ -267,11 +267,13 @@ export default function PurchaseInvoiceForm() {
 {
   "supplier_name": "اسم المورد أو الشركة",
   "vendor_invoice_number": "رقم الفاتورة",
-  "amount": المبلغ الإجمالي النهائي بالدينار رقم فقط بدون عملة,
+  "subtotal": المبلغ قبل الضريبة رقم فقط (0 إن لم يُذكر منفصلاً),
+  "tax_amount": مبلغ ضريبة القيمة المضافة VAT رقم فقط (0 إن لا توجد ضريبة),
+  "total": المبلغ الإجمالي النهائي المطلوب دفعه شامل الضريبة رقم فقط,
   "date": "YYYY-MM-DD"
 }
-أي حقل غير موجود اتركه فارغاً "" أو 0.`)
-      const parsed = extractJSON<{ supplier_name?: string; vendor_invoice_number?: string; amount?: number; date?: string }>(text)
+كل الأرقام بالدينار بدون عملة. أي حقل غير موجود اتركه "" أو 0.`)
+      const parsed = extractJSON<{ supplier_name?: string; vendor_invoice_number?: string; subtotal?: number; tax_amount?: number; total?: number; amount?: number; date?: string }>(text)
       if (!parsed) { toast.error('تعذّر فهم الفاتورة', { id: 'inv-scan' }); return }
 
       let matchedSupplierId = ''
@@ -287,10 +289,17 @@ export default function PurchaseInvoiceForm() {
       const dataUrl = isImg ? await compressImage(file) : await fileToDataUrl(file)
       const validDate = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : ''
 
-      // المبلغ المستخرج من الفاتورة شامل الضريبة → نحوّله لقبل الضريبة حسب النسبة الحالية
-      const extractedTotal = parsed.amount ? Number(parsed.amount) : 0
-      const curRate = Number(form.tax_rate) || 0
-      const extractedSubtotal = extractedTotal > 0 && curRate > 0 ? extractedTotal / (1 + curRate / 100) : extractedTotal
+      // نستخرج القبل/الضريبة/الإجمالي معًا ونحدّد تلقائيًا حالة الضريبة (0% أو 10% القياسي في البحرين)
+      // لتفادي تضخيم المبلغ: الإجمالي المخزَّن يساوي إجمالي الفاتورة تمامًا، لا 10% فوقه.
+      const scannedTotal = Number(parsed.total ?? parsed.amount) || 0  // total الجديد، مع توافق خلفي لـamount القديم
+      const scannedTax = Number(parsed.tax_amount) || 0
+      const scannedSub = Number(parsed.subtotal) || 0
+      const hasVat = scannedTax > 0.001 || (scannedSub > 0 && scannedTotal > scannedSub + 0.001)
+      // الفاتورة بها ضريبة ⇒ النسبة 10% والمُدخل هو القبل؛ بلا ضريبة ⇒ النسبة 0 والمُدخل هو الإجمالي
+      const extractedRate = hasVat ? 10 : 0
+      const extractedSubtotal = hasVat
+        ? (scannedSub > 0 ? scannedSub : scannedTotal / 1.1)
+        : (scannedTotal > 0 ? scannedTotal : scannedSub)
 
       setForm(f => ({
         ...f,
@@ -298,6 +307,7 @@ export default function PurchaseInvoiceForm() {
         supplier_name: matchedSupplierName || f.supplier_name,
         vendor_invoice_number: parsed.vendor_invoice_number || f.vendor_invoice_number,
         amount: extractedSubtotal > 0 ? String(Number(extractedSubtotal.toFixed(3))) : f.amount,
+        tax_rate: extractedSubtotal > 0 ? String(extractedRate) : f.tax_rate,
         entry_date: validDate || f.entry_date,
         invoice_copy: dataUrl,
       }))
@@ -369,6 +379,20 @@ export default function PurchaseInvoiceForm() {
     if (!form.amount || Number(form.amount) <= 0) { toast.error('يرجى إدخال المبلغ'); return }
     if (!form.entry_date) { toast.error('يرجى إدخال تاريخ الفاتورة'); return }
     if (form.payment_method === 'deferred_cheque' && !form.check_due_date) { toast.error('يرجى إدخال تاريخ استحقاق الشيك'); return }
+
+    // فحص تكرار فاتورة المورد: نفس رقم الفاتورة لنفس المورد يعني احتمال إدخال مزدوج للمصروف
+    // (نستثني الفاتورة الحالية عند التعديل). نُنبّه ونطلب تأكيدًا صريحًا بدل الحفظ الصامت.
+    const vendorNo = form.vendor_invoice_number.trim()
+    if (vendorNo) {
+      let dupQuery = supabase.from('purchase_invoices').select('id')
+        .eq('supplier_id', form.supplier_id).eq('vendor_invoice_number', vendorNo)
+      if (isEdit) dupQuery = dupQuery.neq('id', id)
+      const { data: dup } = await dupQuery.limit(1)
+      if (dup && dup.length > 0 &&
+        !window.confirm('تنبيه: توجد فاتورة مسجّلة مسبقًا بنفس رقم فاتورة المورد لنفس المورد.\nقد يكون هذا إدخالًا مزدوجًا للمصروف. هل تريد الحفظ رغم ذلك؟')) {
+        return
+      }
+    }
 
     setSaving(true)
 
