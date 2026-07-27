@@ -81,7 +81,8 @@ async function fetchDashboardStats(): Promise<Stats> {
     safe(supabase.from('rental_payments').select('rental_id, amount')),
     safe(supabase.from('variation_orders').select('project_id, status, billable, amount')),
   ])
-  const cheques = await fetchCheques()
+  // جلب الشيكات محميّ كبقية الاستعلامات: فشله يُفرّغ الشيكات فقط ولا يُسقط اللوحة كلها
+  const cheques = await fetchCheques().catch(() => [])
 
   const projects = (projRes.data ?? []) as { id: string; project_name: string; contract_value: number; status: string }[]
   const milestones = (milRes.data ?? []) as { id: string; project_id: string; name: string; amount: number; status: string }[]
