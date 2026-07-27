@@ -204,10 +204,23 @@ export default function LPOForm() {
     if (isEdit) {
       const { error } = await supabase.from('lpos').update(payload).eq('id', id)
       if (error) { toast.error('حدث خطأ'); setLoading(false); return }
-      await supabase.from('lpo_items').delete().eq('lpo_id', id)
-      await supabase.from('lpo_items').insert(
-        items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, lpo_id: id, sort_order: idx }))
-      )
+
+      const validItems = items.filter(i => i.description.trim())
+      // معرّفات البنود التي أبقاها المستخدم (كانت موجودة أصلاً)
+      const keepIds = validItems.map(i => (i as LPOItem).id).filter(Boolean) as string[]
+
+      // احذف فقط البنود التي أزالها المستخدم فعلاً — لا نحذف الكل كي لا تُمسح سجلات التسليم المرتبطة (CASCADE)
+      const { data: currentRows } = await supabase.from('lpo_items').select('id').eq('lpo_id', id)
+      const toDelete = ((currentRows ?? []) as { id: string }[]).map(r => r.id).filter(cid => !keepIds.includes(cid))
+      if (toDelete.length) await supabase.from('lpo_items').delete().in('id', toDelete)
+
+      // حدّث الموجود بمعرّفه (يحافظ على ارتباط سجلات التسليم) وأدرج الجديد فقط
+      for (const [idx, item] of validItems.entries()) {
+        const it = item as LPOItem
+        const fields = { description: it.description, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, total: it.total, sort_order: idx }
+        if (it.id) await supabase.from('lpo_items').update(fields).eq('id', it.id)
+        else await supabase.from('lpo_items').insert({ ...fields, lpo_id: id })
+      }
     } else {
       const { data: newLpo, error } = await supabase.from('lpos').insert(payload).select().single()
       if (error || !newLpo) { toast.error('حدث خطأ'); setLoading(false); return }
