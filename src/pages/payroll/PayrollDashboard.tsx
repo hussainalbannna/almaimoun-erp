@@ -245,7 +245,9 @@ export default function PayrollDashboard() {
     const newAdvance = parseFloat(e.newAdvance) || 0
     const pendingAdv = w.advances.reduce((s, a) => s + Number(a.amount), 0)
     // الأجر اليومي مصدره سجل العامل — نفس القيمة التي يستخدمها workerDayCost لتكلفة المشروع
-    const base = isLmra ? (parseFloat(e.dailyRate) || Number(w.daily_rate) || 0) * e.presentDays.length : Number(w.actual_salary)
+    // عامل الشركة: الراتب الفعلي إن سُجّل، وإلا الأساسي + البدل الاجتماعي (نفس احتياطي finance.ts، يمنع صافيًا صفرًا/سالبًا)
+    const companySalary = Number(w.actual_salary) || (Number(w.basic_salary) + Number(w.social_allowance))
+    const base = isLmra ? (parseFloat(e.dailyRate) || Number(w.daily_rate) || 0) * e.presentDays.length : companySalary
     const net = base + overtime - deduction - pendingAdv - newAdvance
     return { e, isLmra, overtime, deduction, newAdvance, pendingAdv, base, net }
   }
