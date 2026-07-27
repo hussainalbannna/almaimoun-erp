@@ -9,7 +9,7 @@ import {
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import { openStoredFile, compressImage, fileToDataUrl } from '../../lib/ai'
-import { uploadDataUrl, resolveAttachmentUrl } from '../../lib/storage'
+import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
@@ -134,7 +134,20 @@ export default function RentalsList() {
 
   const handleDelete = async () => {
     if (!deleteId) return
-    await supabase.from('rentals').delete().eq('id', deleteId)
+    // نقرأ مسار العقد قبل الحذف لتنظيفه من التخزين بعد نجاح الحذف
+    const { data: row } = await supabase.from('rentals').select('contract_path').eq('id', deleteId).maybeSingle()
+    const { error } = await supabase.from('rentals').delete().eq('id', deleteId)
+    if (error) {
+      // 23503 = ارتباط بسجلات أخرى (دفعات مسجّلة) يمنع الحذف
+      toast.error(
+        error.code === '23503'
+          ? 'لا يمكن حذف هذا الإيجار لارتباطه بدفعات مسجّلة. احذف تلك الدفعات أولاً.'
+          : 'تعذّر حذف الإيجار: ' + error.message,
+      )
+      return
+    }
+    const contractPath = (row as { contract_path?: string } | null)?.contract_path ?? ''
+    if (contractPath) await deleteAttachment(contractPath).catch(() => {})
     toast.success('تم حذف الإيجار')
     setDeleteId(null)
     if (viewRental?.id === deleteId) setViewRental(null)
