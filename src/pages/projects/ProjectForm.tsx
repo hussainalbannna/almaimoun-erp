@@ -316,8 +316,14 @@ export default function ProjectForm() {
         return { ...m, project_id: projectId, sort_order: i }
       })
       for (const m of toSave) {
-        if (m.id) await supabase.from('project_milestones').update(m).eq('id', m.id)
-        else await supabase.from('project_milestones').insert(m)
+        const { error: msErr } = m.id
+          ? await supabase.from('project_milestones').update(m).eq('id', m.id)
+          : await supabase.from('project_milestones').insert(m)
+        if (msErr) {
+          // مشروع جديد فشلت مراحله ⇒ نحذفه (تراجع) كي لا يبقى مشروعًا بمراحل ناقصة
+          if (!isEdit && projectId) await supabase.from('projects').delete().eq('id', projectId)
+          throw msErr
+        }
       }
 
       // حذف المراحل التي أُزيلت أثناء التعديل (منع بقاء مراحل يتيمة في قاعدة البيانات)
@@ -329,12 +335,13 @@ export default function ProjectForm() {
       // حفظ المستندات الجديدة غير المحفوظة بعد (للمشروع الجديد أو المضافة قبل الحفظ)
       const newDocs = docs.filter(d => !d.id)
       if (newDocs.length > 0 && projectId) {
-        await supabase.from('documents').insert(
+        const { error: docErr } = await supabase.from('documents').insert(
           newDocs.map(d => ({
             name: d.name, doc_type: d.doc_type, file_url: d.file_url,
             file_type: d.file_type, related_id: projectId, related_type: 'project',
           }))
         )
+        if (docErr) throw docErr
       }
 
       // إبطال الكاش كي تظهر التغييرات فورًا (staleTime عام = 5 دقائق) في القوائم واللوحة والتقارير
