@@ -78,7 +78,7 @@ async function fetchFinanceData(): Promise<FinanceData> {
     ...attendance
       .filter(a => !(a.status && a.status !== 'present'))
       .map(a => ({ amount: (a.worker_id ? dayCostById.get(a.worker_id) : 0) || 0, date: a.attendance_date || '', category: 'salaries' })),
-    // الأوفرتايم المدفوع فعليًا من كشف الرواتب (المصدر المعتمد) — يُنسب لمنتصف شهره ليقع ضمن فترة اللوحة الصحيحة
+    // الأوفرتايم المستحق من كشف الرواتب (المصدر المعتمد) بأسلوب الاستحقاق كالرواتب الأساسية — يُنسب لمنتصف شهره
     ...overtime
       .filter(o => Number(o.overtime) > 0 && o.month && o.year)
       .map(o => ({ amount: Number(o.overtime) || 0, date: `${o.year}-${String(o.month).padStart(2, '0')}-15`, category: 'salaries' })),
