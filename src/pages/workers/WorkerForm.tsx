@@ -98,11 +98,13 @@ export default function WorkerForm() {
     if (!form.name) { toast.error('يجب إدخال الاسم'); return }
     setSaving(true)
     try {
+      // عامل الشركة على حماية الأجور ⇒ يُحفظ «شهري» دائمًا (يغلق الباب حتى لو حُمّل سجل قديم بتركيبة ممنوعة)
+      const payload = { ...form, pay_type: form.worker_type === 'company' ? 'monthly' : form.pay_type } as Partial<Worker>
       if (isEdit) {
-        const { error } = await supabase.from('workers').update({ ...form, updated_at: new Date().toISOString() }).eq('id', id)
+        const { error } = await supabase.from('workers').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', id)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('workers').insert({ ...form })
+        const { error } = await supabase.from('workers').insert({ ...payload })
         if (error) throw error
       }
       // العامل يؤثّر على قائمة العمال وكشف الرواتب وتكلفة عمالة المشاريع
