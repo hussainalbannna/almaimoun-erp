@@ -9,7 +9,7 @@ import { supabase } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
 import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import { openStoredFile } from '../../lib/ai'
-import { getAttachmentUrl } from '../../lib/storage'
+import { getAttachmentUrl, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
@@ -111,7 +111,30 @@ export default function PurchaseInvoiceList() {
 
   const handleDelete = async () => {
     if (!deleteId) return
-    await supabase.from('purchase_invoices').delete().eq('id', deleteId)
+    // نقرأ مسارات المرفقات وصور التوصيل قبل الحذف؛ صفوف التوصيل تُحذف تلقائياً (CASCADE)
+    // لكن ملفاتها في التخزين لا تُحذف تلقائياً فننظّفها يدوياً بعد نجاح حذف الفاتورة
+    const { data: inv } = await supabase.from('purchase_invoices')
+      .select('invoice_copy_path, payment_proof_path, check_image_path')
+      .eq('id', deleteId).maybeSingle()
+    const { data: dels } = await supabase.from('purchase_invoice_deliveries')
+      .select('delivery_image_path').eq('purchase_invoice_id', deleteId)
+    const { error } = await supabase.from('purchase_invoices').delete().eq('id', deleteId)
+    if (error) {
+      toast.error(
+        error.code === '23503'
+          ? 'لا يمكن حذف هذه الفاتورة لارتباطها بسجلات أخرى. احذف تلك السجلات أولاً.'
+          : 'تعذّر حذف فاتورة الشراء: ' + error.message,
+      )
+      return
+    }
+    const invRow = inv as { invoice_copy_path?: string; payment_proof_path?: string; check_image_path?: string } | null
+    const paths = [
+      invRow?.invoice_copy_path,
+      invRow?.payment_proof_path,
+      invRow?.check_image_path,
+      ...((dels ?? []) as { delivery_image_path?: string }[]).map(d => d.delivery_image_path),
+    ].filter((p): p is string => !!p)
+    if (paths.length) await deleteAttachment(paths).catch(() => {})
     toast.success('تم حذف فاتورة الشراء')
     setDeleteId(null)
     if (viewInv?.id === deleteId) setViewInv(null)
