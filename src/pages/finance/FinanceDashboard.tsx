@@ -35,7 +35,8 @@ interface PurchaseRow { id: string; amount: number | null; entry_date: string | 
 interface SubPayRow { id: string; amount: number | null; payment_date: string | null }
 interface AttendRow { worker_id: string | null; attendance_date: string | null; status: string | null }
 interface WorkerRow { id: string; pay_type: string | null; daily_rate: number | null; actual_salary: number | null; basic_salary: number | null; social_allowance: number | null }
-interface OtRow { amount: number | null; created_at: string | null }
+// الأوفرتايم المعتمد = ما يُدفع فعلاً في كشف الرواتب الشهري (payroll_adjustments)، لا أوفرتايم التقرير اليومي
+interface OtRow { overtime: number | null; month: number | null; year: number | null }
 interface RentalPayRow { amount: number | null; payment_date: string | null; payment_method: string | null }
 
 interface FinanceData { income: Row[]; expenses: Row[] }
@@ -50,7 +51,7 @@ async function fetchFinanceData(): Promise<FinanceData> {
     safeSelect<SubPayRow>('subcontractor_payments', 'id,amount,payment_date'),
     safeSelect<AttendRow>('worker_attendance', 'worker_id,attendance_date,status'),
     safeSelect<WorkerRow>('workers', 'id,pay_type,daily_rate,actual_salary,basic_salary,social_allowance'),
-    safeSelect<OtRow>('daily_log_overtime', 'amount,created_at'),
+    safeSelect<OtRow>('payroll_adjustments', 'overtime,month,year'),
     safeSelect<RentalPayRow>('rental_payments', 'amount,payment_date,payment_method'),
     fetchCheques(),
   ])
@@ -77,8 +78,10 @@ async function fetchFinanceData(): Promise<FinanceData> {
     ...attendance
       .filter(a => !(a.status && a.status !== 'present'))
       .map(a => ({ amount: (a.worker_id ? dayCostById.get(a.worker_id) : 0) || 0, date: a.attendance_date || '', category: 'salaries' })),
-    // العمل الإضافي (الأوفرتايم) المسجّل في التقارير اليومية
-    ...overtime.map(o => ({ amount: Number(o.amount) || 0, date: (o.created_at || '').slice(0, 10), category: 'salaries' })),
+    // الأوفرتايم المدفوع فعليًا من كشف الرواتب (المصدر المعتمد) — يُنسب لمنتصف شهره ليقع ضمن فترة اللوحة الصحيحة
+    ...overtime
+      .filter(o => Number(o.overtime) > 0 && o.month && o.year)
+      .map(o => ({ amount: Number(o.overtime) || 0, date: `${o.year}-${String(o.month).padStart(2, '0')}-15`, category: 'salaries' })),
     // الإيجارات: دفعات الإيجار الفعلية، مع استبعاد ما دُفع بشيك آجل لم يُصرف بعد (نفس قاعدة اللوحة النقدية)
     ...rentalPayments
       .filter(rp => rp.payment_method !== 'deferred_cheque')
