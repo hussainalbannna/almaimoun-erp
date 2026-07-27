@@ -178,11 +178,17 @@ export default function WorkerForm() {
           <h2 className="font-semibold text-slate-700 mb-4">التصنيف</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Select label="نوع العمالة *" value={form.worker_type ?? 'company'}
-              onChange={e => setForm(p => ({ ...p, worker_type: e.target.value as Worker['worker_type'], branch: e.target.value === 'lmra' ? '' : p.branch }))}
+              onChange={e => setForm(p => ({ ...p, worker_type: e.target.value as Worker['worker_type'], branch: e.target.value === 'lmra' ? '' : p.branch, pay_type: e.target.value === 'company' ? 'monthly' : p.pay_type }))}
               options={[{ value: 'company', label: 'عمالة الشركة' }, { value: 'lmra', label: 'عمالة هيئة LMRA' }]} />
-            <Select label="طريقة الدفع" value={form.pay_type ?? 'monthly'}
+            {/* عامل الشركة على حماية الأجور ⇐ الدفع شهري دائمًا (يُقفل اليومي لمنع تركيبة ممنوعة تُسقطه من كشف الرواتب) */}
+            <Select label="طريقة الدفع"
+              value={form.worker_type === 'company' ? 'monthly' : (form.pay_type ?? 'monthly')}
+              disabled={form.worker_type === 'company'}
+              hint={form.worker_type === 'company' ? 'عمّال الشركة على حماية الأجور — الدفع شهري دائمًا' : undefined}
               onChange={e => setForm(p => ({ ...p, pay_type: e.target.value as Worker['pay_type'] }))}
-              options={[{ value: 'monthly', label: 'شهري' }, { value: 'daily', label: 'يومي' }]} />
+              options={form.worker_type === 'company'
+                ? [{ value: 'monthly', label: 'شهري' }]
+                : [{ value: 'monthly', label: 'شهري' }, { value: 'daily', label: 'يومي' }]} />
             {form.worker_type === 'company' && (
               <Select label="الفرع *" value={form.branch ?? ''} onChange={e => setForm(p => ({ ...p, branch: e.target.value }))} options={BRANCH_OPTIONS} />
             )}
