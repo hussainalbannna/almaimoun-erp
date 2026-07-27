@@ -10,6 +10,7 @@ import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
 import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import { openStoredFile } from '../../lib/ai'
 import { getAttachmentUrl, deleteAttachment } from '../../lib/storage'
+import { fetchCheques, computePendingChequeSets } from '../../lib/finance'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
@@ -66,6 +67,8 @@ export default function PurchaseInvoiceList() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   // عدد المرفقات لكل فاتورة (مؤشّر خفيف من أعمدة محسوبة — بلا تحميل بيانات base64 في القائمة)
   const [docCounts, setDocCounts] = useState<Record<string, number>>({})
+  // معرّفات فواتير شيكها الآجل ما زال معلّقًا (لم يُصرف) — من جدول cheques مصدر الحقيقة
+  const [pendingChequeIds, setPendingChequeIds] = useState<Set<string>>(new Set())
   // فاتورة قيد الاستعراض الكامل
   const [viewInv, setViewInv] = useState<InvoiceRow | null>(null)
   const [viewDeliveries, setViewDeliveries] = useState<ViewDelivery[]>([])
@@ -86,6 +89,10 @@ export default function PurchaseInvoiceList() {
         (invoiceDate(b) || '').localeCompare(invoiceDate(a) || '')
       )
       setInvoices(rows)
+
+      // حالة الشيكات الآجلة من مصدر الحقيقة (جدول cheques) لا من التاريخ — كي يختفي المصروف فورًا
+      const pending = computePendingChequeSets(await fetchCheques())
+      setPendingChequeIds(pending.purchaseIds)
 
       // مؤشّر وجود المرفقات (خفيف) من أعمدة محسوبة اختيارية — يُتجاهل بأمان إن لم تكن موجودة بعد
       const { data: flags } = await supabase
@@ -212,8 +219,10 @@ export default function PurchaseInvoiceList() {
 
   // ── الإجماليات ──
   const today = todayStr()
+  // شيك آجل لم يُصرف بعد — الحقيقة من جدول cheques (لا من التاريخ) كي يختفي المصروف فورًا من القائمة
+  const isUncashedCheque = (inv: InvoiceRow) => inv.payment_method === 'deferred_cheque' && pendingChequeIds.has(inv.id)
   const totalAmount = invoices.reduce((s, inv) => s + num(inv.amount), 0)
-  const pendingCheques = invoices.filter(inv => inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today)
+  const pendingCheques = invoices.filter(inv => isUncashedCheque(inv) && inv.check_due_date && inv.check_due_date > today)
   const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
   const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
   const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
@@ -259,7 +268,7 @@ export default function PurchaseInvoiceList() {
       'المجموع الشامل': Number(invTotal(inv).toFixed(3)),
       'طريقة الدفع': PAYMENT_LABELS[inv.payment_method] ?? inv.payment_method,
       'استحقاق الشيك': inv.check_due_date ? formatDate(inv.check_due_date) : '',
-      'حالة الدفع': inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today ? 'شيك آجل (لم يُصرف)' : 'مدفوع',
+      'حالة الدفع': isUncashedCheque(inv) ? 'شيك آجل (لم يُصرف)' : 'مدفوع',
       'ملاحظات': inv.notes || '',
     }))
     const sumSub = list.reduce((s, inv) => s + invSubtotal(inv), 0)
@@ -342,8 +351,9 @@ export default function PurchaseInvoiceList() {
   // صف فاتورة (يُستخدم في وضع التجميع والوضع المسطّح)
   const InvoiceRowEl = ({ inv }: { inv: InvoiceRow }) => {
     const docCount = docCounts[inv.id] ?? 0
-    const isSoonCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date > today && daysUntil(inv.check_due_date) <= 7
-    const isOverdueCheque = inv.payment_method === 'deferred_cheque' && inv.check_due_date && inv.check_due_date <= today
+    const uncashed = isUncashedCheque(inv)
+    const isSoonCheque = uncashed && inv.check_due_date && inv.check_due_date > today && daysUntil(inv.check_due_date) <= 7
+    const isOverdueCheque = uncashed && inv.check_due_date && inv.check_due_date <= today
     return (
       <tr className={`transition-colors cursor-pointer ${isSoonCheque ? 'bg-red-50/40 hover:bg-red-50' : 'hover:bg-amber-50/40'}`}
         onClick={() => openView(inv)}>
@@ -362,10 +372,14 @@ export default function PurchaseInvoiceList() {
         <td className="px-4 py-3">
           <Badge color={PAYMENT_COLOR(inv.payment_method)}>{PAYMENT_LABELS[inv.payment_method] ?? inv.payment_method}</Badge>
           {inv.payment_method === 'deferred_cheque' && inv.check_due_date && (
-            <div className={`text-xs mt-0.5 ${isOverdueCheque ? 'text-slate-500' : isSoonCheque ? 'text-red-600 font-bold' : 'text-orange-600'}`}>
-              استحقاق: {formatDate(inv.check_due_date)}
-              {isSoonCheque && ` (${daysUntil(inv.check_due_date)} يوم)`}
-            </div>
+            uncashed ? (
+              <div className={`text-xs mt-0.5 ${isOverdueCheque ? 'text-slate-500' : isSoonCheque ? 'text-red-600 font-bold' : 'text-orange-600'}`}>
+                استحقاق: {formatDate(inv.check_due_date)}
+                {isSoonCheque && ` (${daysUntil(inv.check_due_date)} يوم)`}
+              </div>
+            ) : (
+              <div className="text-xs mt-0.5 text-emerald-600 font-medium">تم صرف الشيك ✓</div>
+            )
           )}
         </td>
         <td className="px-4 py-3">
