@@ -214,19 +214,27 @@ export default function LPOForm() {
       const toDelete = ((currentRows ?? []) as { id: string }[]).map(r => r.id).filter(cid => !keepIds.includes(cid))
       if (toDelete.length) await supabase.from('lpo_items').delete().in('id', toDelete)
 
-      // حدّث الموجود بمعرّفه (يحافظ على ارتباط سجلات التسليم) وأدرج الجديد فقط
+      // حدّث الموجود بمعرّفه (يحافظ على ارتباط سجلات التسليم) وأدرج الجديد — مع فحص خطأ كل بند لمنع حفظ ناقص صامت
       for (const [idx, item] of validItems.entries()) {
         const it = item as LPOItem
         const fields = { description: it.description, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, total: it.total, sort_order: idx }
-        if (it.id) await supabase.from('lpo_items').update(fields).eq('id', it.id)
-        else await supabase.from('lpo_items').insert({ ...fields, lpo_id: id })
+        const { error: itemErr } = it.id
+          ? await supabase.from('lpo_items').update(fields).eq('id', it.id)
+          : await supabase.from('lpo_items').insert({ ...fields, lpo_id: id })
+        if (itemErr) { toast.error('تعذّر حفظ بنود أمر الشراء: ' + itemErr.message); setLoading(false); return }
       }
     } else {
       const { data: newLpo, error } = await supabase.from('lpos').insert(payload).select().single()
       if (error || !newLpo) { toast.error('حدث خطأ'); setLoading(false); return }
-      await supabase.from('lpo_items').insert(
-        items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, lpo_id: (newLpo as LPO).id, sort_order: idx }))
-      )
+      const newItems = items.filter(i => i.description.trim()).map((item, idx) => ({ ...item, lpo_id: (newLpo as LPO).id, sort_order: idx }))
+      if (newItems.length) {
+        const { error: itemsErr } = await supabase.from('lpo_items').insert(newItems)
+        if (itemsErr) {
+          // تراجع: احذف رأس الأمر كي لا يبقى أمرًا بلا بنوده (حفظ ذرّي فعليًا)
+          await supabase.from('lpos').delete().eq('id', (newLpo as LPO).id)
+          toast.error('تعذّر حفظ بنود أمر الشراء: ' + itemsErr.message); setLoading(false); return
+        }
+      }
       // تعليم التقرير اليومي المصدر بأنه تم تحويله لأمر شراء
       if (fromLogId) {
         await supabase.from('daily_logs').update({ converted_to_lpo: true }).eq('id', fromLogId)
