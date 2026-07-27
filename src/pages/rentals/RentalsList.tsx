@@ -174,6 +174,15 @@ export default function RentalsList() {
   const paymentsOf = (rentalId: string) => payments.filter(p => p.rental_id === rentalId)
   const paidTotal = (rentalId: string) => paymentsOf(rentalId).reduce((s, p) => s + num(p.amount), 0)
 
+  // رسالة تأكيد الحذف: تُظهر عدد الدفعات التي ستُحذف تعاقبيًّا (CASCADE) كي يعرف المستخدم حجم ما سيفقده
+  const deleteConfirmMessage = (): string => {
+    if (!deleteId) return ''
+    const n = paymentsOf(deleteId).length
+    if (n === 0) return 'هل أنت متأكد من حذف هذا الإيجار؟ لا يمكن التراجع.'
+    const label = n === 1 ? 'دفعة مسجّلة واحدة' : n === 2 ? 'دفعتان مسجّلتان' : `${n} دفعات مسجّلة`
+    return `تنبيه: سيُحذف مع هذا الإيجار ${label} نهائيًّا ولا يمكن التراجع. هل أنت متأكد؟`
+  }
+
   // ── حسابات النظرة العامة (تُحسب عند تغيّر الإيجارات/الدفعات فقط) ──
   const { activeRentals, recurringActive, monthlyCommitment, totalPaid, dueThisMonth, dueThisMonthTotal, endingSoon } = useMemo(() => {
     const paymentsOfLocal = (rentalId: string) => payments.filter(p => p.rental_id === rentalId)
@@ -441,7 +450,7 @@ export default function RentalsList() {
         </>
       )}
 
-      <ConfirmDialog open={!!deleteId} title="حذف الإيجار" message="هل أنت متأكد من حذف هذا الإيجار؟ ستُحذف جميع دفعاته أيضاً. لا يمكن التراجع." confirmLabel="حذف" onConfirm={handleDelete} onCancel={() => setDeleteId(null)} danger />
+      <ConfirmDialog open={!!deleteId} title="حذف الإيجار" message={deleteConfirmMessage()} confirmLabel="حذف" onConfirm={handleDelete} onCancel={() => setDeleteId(null)} danger />
 
       {/* نافذة تسجيل دفعة */}
       {payFor && (
