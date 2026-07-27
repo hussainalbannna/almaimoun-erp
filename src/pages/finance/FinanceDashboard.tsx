@@ -33,7 +33,7 @@ interface ReceiptRow { amount: number | null; receipt_date: string | null }
 interface CashbookRow { amount: number | null; entry_date: string | null; category: string | null }
 interface PurchaseRow { id: string; amount: number | null; entry_date: string | null; created_at: string | null }
 interface SubPayRow { id: string; amount: number | null; payment_date: string | null }
-interface AttendRow { worker_id: string | null; attendance_date: string | null }
+interface AttendRow { worker_id: string | null; attendance_date: string | null; status: string | null }
 interface WorkerRow { id: string; pay_type: string | null; daily_rate: number | null; actual_salary: number | null; basic_salary: number | null; social_allowance: number | null }
 interface OtRow { amount: number | null; created_at: string | null }
 interface RentalPayRow { amount: number | null; payment_date: string | null; payment_method: string | null }
@@ -48,7 +48,7 @@ async function fetchFinanceData(): Promise<FinanceData> {
     safeSelect<CashbookRow>('accounts_payable', 'amount,entry_date,category'),
     safeSelect<PurchaseRow>('purchase_invoices', 'id,amount,entry_date,created_at'),
     safeSelect<SubPayRow>('subcontractor_payments', 'id,amount,payment_date'),
-    safeSelect<AttendRow>('worker_attendance', 'worker_id,attendance_date'),
+    safeSelect<AttendRow>('worker_attendance', 'worker_id,attendance_date,status'),
     safeSelect<WorkerRow>('workers', 'id,pay_type,daily_rate,actual_salary,basic_salary,social_allowance'),
     safeSelect<OtRow>('daily_log_overtime', 'amount,created_at'),
     safeSelect<RentalPayRow>('rental_payments', 'amount,payment_date,payment_method'),
@@ -73,8 +73,10 @@ async function fetchFinanceData(): Promise<FinanceData> {
     ...subPay
       .filter(s => !(s.id && pending.subPaymentIds.has(s.id)))
       .map(s => ({ amount: Number(s.amount) || 0, date: s.payment_date || '', category: 'subcontractor' })),
-    // رواتب العمالة: كل يوم حضور × تكلفة يوم العامل (يشمل عمال الشركة والهيئة، ولكل الأشهر)
-    ...attendance.map(a => ({ amount: (a.worker_id ? dayCostById.get(a.worker_id) : 0) || 0, date: a.attendance_date || '', category: 'salaries' })),
+    // رواتب العمالة: كل يوم حضور فعلي × تكلفة يوم العامل — نتخطّى غير الحاضر (غياب/إجازة) كما في finance.ts
+    ...attendance
+      .filter(a => !(a.status && a.status !== 'present'))
+      .map(a => ({ amount: (a.worker_id ? dayCostById.get(a.worker_id) : 0) || 0, date: a.attendance_date || '', category: 'salaries' })),
     // العمل الإضافي (الأوفرتايم) المسجّل في التقارير اليومية
     ...overtime.map(o => ({ amount: Number(o.amount) || 0, date: (o.created_at || '').slice(0, 10), category: 'salaries' })),
     // الإيجارات: دفعات الإيجار الفعلية، مع استبعاد ما دُفع بشيك آجل لم يُصرف بعد (نفس قاعدة اللوحة النقدية)
