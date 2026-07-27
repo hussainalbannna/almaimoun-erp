@@ -96,15 +96,20 @@ export default function LPODeliveries() {
       }).select().single()
       if (error) throw error
 
-      for (const [itemId, qty] of Object.entries(quantities)) {
-        if (qty > 0) {
-          const item = items.find(i => i.id === itemId)
-          await supabase.from('lpo_delivery_items').insert({
-            delivery_id: (del as LPODelivery).id,
-            lpo_item_id: itemId,
-            description: item?.description ?? '',
-            quantity_delivered: qty,
-          })
+      // بنود التسليم دفعة واحدة مع فحص الخطأ؛ وعند الفشل نحذف رأس التسليم (تراجع) كي لا يبقى تسليمًا بلا بنوده
+      const delItems = Object.entries(quantities)
+        .filter(([, qty]) => qty > 0)
+        .map(([itemId, qty]) => ({
+          delivery_id: (del as LPODelivery).id,
+          lpo_item_id: itemId,
+          description: items.find(i => i.id === itemId)?.description ?? '',
+          quantity_delivered: qty,
+        }))
+      if (delItems.length) {
+        const { error: itemsErr } = await supabase.from('lpo_delivery_items').insert(delItems)
+        if (itemsErr) {
+          await supabase.from('lpo_deliveries').delete().eq('id', (del as LPODelivery).id)
+          throw itemsErr
         }
       }
       // فحص الاكتمال بحساب النسبة الجديدة (شاملةً كميات هذا التسليم) — لا من الحالة القديمة
