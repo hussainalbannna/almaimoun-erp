@@ -96,7 +96,8 @@ export function computePendingChequeSets(cheques: ChequeRow[]): PendingChequeSet
       guaranteeTotal += Number(c.amount || 0)
       continue
     }
-    if (c.status !== 'pending' || c.cheque_type !== 'deferred') continue
+    // المرتدّ (bounced) = دفعة فشلت والالتزام قائم ⇒ يُعامَل كالمعلّق لا كمصروف مدفوع
+    if ((c.status !== 'pending' && c.status !== 'bounced') || c.cheque_type !== 'deferred') continue
     pendingTotal += Number(c.amount || 0)
     if (c.related_type === 'purchase_invoice' && c.related_id) purchaseIds.add(c.related_id)
     if (c.related_type === 'subcontractor_payment' && c.related_id) subPaymentIds.add(c.related_id)
