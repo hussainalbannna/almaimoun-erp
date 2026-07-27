@@ -121,6 +121,7 @@ export default function PayrollDashboard() {
   const queryClient = useQueryClient()
   const [branch, setBranch] = useState('all')
   const [payingAll, setPayingAll] = useState(false)
+  const [savingAll, setSavingAll] = useState(false)
   const [savingId, setSavingId] = useState<string | null>(null)
   // حالة "تم الصرف" تُقرأ من القاعدة (payroll_adjustments.paid) فتصمد بعد تحديث الصفحة
   const [paidIds, setPaidIds] = useState<Set<string>>(new Set())
@@ -333,6 +334,21 @@ export default function PayrollDashboard() {
     }
   }
 
+  // حفظ الكل: يحفظ الأرقام المُدخلة لكل عمال التبويب الحالي دفعة واحدة (بلا صرف) — نفس زرّ الحفظ الفردي للجميع
+  const handleSaveAll = async () => {
+    if (activeWorkers.length === 0) { toast.error('لا يوجد موظفون للحفظ'); return }
+    setSavingAll(true)
+    try {
+      for (const w of activeWorkers) await persistWorkerRow(w, false)
+      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
+      toast.success(`تم حفظ كشف ${activeWorkers.length} عامل`)
+    } catch (err) {
+      toast.error('تعذّر حفظ الكشف: ' + ((err as Error)?.message ?? ''))
+    } finally {
+      setSavingAll(false)
+    }
+  }
+
   // تصدير 1: ملف حماية الأجور (WPS) — عمال الشركة فقط (لا يظهر في تبويب الهيئة)
   const exportWPS = () => {
     if (branchWorkers.length === 0) { toast.error('لا يوجد موظفون للتصدير'); return }
@@ -462,6 +478,7 @@ export default function PayrollDashboard() {
               <Button variant="secondary" icon={<Wallet size={16} />} onClick={exportActual}>تصدير الرواتب الفعلية</Button>
             </>
           )}
+          <Button variant="secondary" icon={<Save size={16} />} loading={savingAll} onClick={handleSaveAll}>حفظ الكل</Button>
           <Button icon={<CheckCircle size={16} />} loading={payingAll} onClick={handlePayAll}>صرف الكل</Button>
         </div>
       </div>
