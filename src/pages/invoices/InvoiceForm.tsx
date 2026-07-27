@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2, Upload } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, todayLocal } from '../../lib/utils'
@@ -40,6 +41,7 @@ export default function InvoiceForm() {
   const { id } = useParams()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -290,6 +292,14 @@ export default function InvoiceForm() {
       if (selectedMilestoneId) {
         await supabase.from('project_milestones').update({ status: 'invoiced', invoice_id: invoiceId }).eq('id', selectedMilestoneId)
       }
+
+      // إبطال الكاش كي تظهر التغييرات فورًا (staleTime عام = 5 دقائق): القائمة والعرض والمالية وكشف العميل
+      queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
+      if (isEdit && id) queryClient.invalidateQueries({ queryKey: ['invoice-view', id] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['client-statement'] })
+      queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
 
       toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم إنشاء الفاتورة')
       navigate('/invoices')
