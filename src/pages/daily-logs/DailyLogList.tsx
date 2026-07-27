@@ -695,6 +695,10 @@ export default function DailyLogList() {
       if (paths.length) await deleteAttachment(paths)
     } catch { /* تجاهل فشل تنظيف Storage — لا يمنع حذف السجل */ }
 
+    // حذف الحضور الذي أنشأه هذا التقرير (log_id يشير إليه) قبل حذفه — وإلا يبقى «يتيمًا» (log_id=NULL)
+    // ويظل يحمّل المشروع تكلفة يومه. الحضور اليدوي (log_id=NULL أصلًا) لا يتأثّر لأنه لا يطابق المعرّف.
+    await supabase.from('worker_attendance').delete().eq('log_id', target)
+
     const { error } = await supabase.from('daily_logs').delete().eq('id', target)
     if (error) {
       toast.error('حدث خطأ أثناء الحذف')
