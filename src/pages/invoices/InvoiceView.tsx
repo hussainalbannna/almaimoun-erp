@@ -53,6 +53,8 @@ export default function InvoiceView() {
   }
 
   const markAsSent = async () => {
+    // لا نُرجِع فاتورة مدفوعة/ملغاة إلى «مرسلة» عند إعادة الإرسال (بريد/واتساب) — منع انحدار الحالة
+    if (invoice?.status === 'paid' || invoice?.status === 'cancelled') { invalidateInvoice(); return }
     await supabase.from('invoices').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('id', id)
     invalidateInvoice()
   }
