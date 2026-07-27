@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Trash2, FileArchive, Upload, ExternalLink, Loader2 } from 'lucide-react'
+import { Trash2, FileArchive, Upload, ExternalLink, Loader2, Building2, Folder } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { parseDocument } from '../../lib/document-parser'
 import { uploadAttachment, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
@@ -10,28 +10,34 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { formatDate } from '../../lib/utils'
 
-// ════════════════════════════════════════════════════════════════════
-//  مركز المستندات — حفظ سحابي + استخراج بيانات تلقائي
-//
-//  الأداء والتخزين:
-//  - الملف الأصلي يُرفع إلى Supabase Storage (bucket: attachments/documents)
-//    ويُحفظ مساره القصير فقط في file_url — لا base64 في القاعدة.
-//  - القائمة تجلب أعمدة خفيفة فقط؛ عمود has_file المولَّد يكشف وجود
-//    الملف، ويُفتح برابط موقّع عند الطلب فقط.
-//  - يُحفظ الملف سحابياً حتى لو تعذّر استخراج بياناته تلقائياً.
-// ════════════════════════════════════════════════════════════════════
+type Category = 'office' | 'project'
 
-// صف خفيف للقائمة — بلا file_url ولا extracted_text الطويل
-type DocumentRow = Pick<Document, 'id' | 'name' | 'file_type' | 'extracted_data' | 'created_at'> & { has_file?: boolean }
+type DocumentRow = Pick<Document, 'id' | 'name' | 'file_type' | 'extracted_data' | 'created_at'> & {
+  has_file?: boolean
+  related_type?: string | null
+  related_id?: string | null
+  doc_type?: string | null
+}
 
-// استعلام خفيف: فقط الأعمدة التي تعرضها القائمة، دون الحقول الثقيلة
+interface ProjectRow { id: string; project_name: string }
+
+const OFFICE_DOC_TYPES = [
+  'سجل تجاري', 'شهادة ضريبة (VAT)', 'رخصة بلدية', 'عقد إيجار المكتب',
+  'شهادة غرفة التجارة', 'مستند بنكي', 'وثيقة تأمين', 'هوية / جواز', 'أخرى',
+]
+
 async function fetchDocuments(): Promise<DocumentRow[]> {
   const { data, error } = await supabase
     .from('documents')
-    .select('id, name, file_type, extracted_data, has_file, created_at')
+    .select('id, name, file_type, extracted_data, has_file, created_at, related_type, related_id, doc_type')
     .order('created_at', { ascending: false })
   if (error) throw error
   return (data ?? []) as DocumentRow[]
+}
+
+async function fetchProjectsLite(): Promise<ProjectRow[]> {
+  const { data } = await supabase.from('projects').select('id, project_name').order('project_name')
+  return (data ?? []) as ProjectRow[]
 }
 
 export default function DocumentsPage() {
@@ -42,17 +48,31 @@ export default function DocumentsPage() {
   const [extracted, setExtracted] = useState<{ data: ExtractedDocumentData; text: string; name: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // مصدر البيانات الموحّد ('documents') — أي تعديل يُبطِل المفتاح فتتحدّث القائمة تلقائياً
+  const [tab, setTab] = useState<Category>('office')
+  const [uploadCat, setUploadCat] = useState<Category>('office')
+  const [uploadProjectId, setUploadProjectId] = useState('')
+  const [uploadDocType, setUploadDocType] = useState('')
+
   const { data: documents = [], isLoading: loading } = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
+  const { data: projects = [] } = useQuery({ queryKey: ['documents-projects'], queryFn: fetchProjectsLite })
   const reload = () => queryClient.invalidateQueries({ queryKey: ['documents'] })
 
-  const handleFile = async (file: File) => {
-    setParsing(true)
-    try {
-      // 1) الحفظ السحابي أولاً — الملف لا يضيع حتى لو تعثّر التحليل
-      const path = await uploadAttachment(file, 'documents')
+  const projectName = useMemo(() => {
+    const m = new Map(projects.map(p => [p.id, p.project_name]))
+    return (id?: string | null): string => (id ? (m.get(id) ?? 'مشروع محذوف') : '')
+  }, [projects])
 
-      // 2) محاولة استخراج البيانات تلقائياً (لا توقف الحفظ عند الفشل)
+  const projectDocs = documents.filter(d => d.related_type === 'project')
+  const officeDocs = documents.filter(d => d.related_type !== 'project')
+  const shown = tab === 'project' ? projectDocs : officeDocs
+
+  const handleFile = async (file: File) => {
+    if (uploadCat === 'project' && !uploadProjectId) { toast.error('اختر المشروع أولاً قبل رفع مستند مشروع'); return }
+    setParsing(true)
+    let uploadedPath = ''
+    try {
+      uploadedPath = await uploadAttachment(file, 'documents')
+
       let data: ExtractedDocumentData = {} as ExtractedDocumentData
       let text = ''
       try {
@@ -64,25 +84,29 @@ export default function DocumentsPage() {
         toast('تم حفظ الملف سحابياً، وتعذّر استخراج البيانات تلقائياً', { icon: 'ℹ️' })
       }
 
-      // 3) حفظ السجل: مسار Storage القصير + البيانات المستخرجة
       const { error } = await supabase.from('documents').insert({
         name: file.name,
         file_type: file.name.split('.').pop() ?? '',
-        file_url: path,
+        file_url: uploadedPath,
         extracted_text: text.slice(0, 5000),
         extracted_data: data,
+        related_type: uploadCat === 'project' ? 'project' : 'office',
+        related_id: uploadCat === 'project' ? uploadProjectId : null,
+        doc_type: uploadCat === 'office' ? (uploadDocType.trim() || null) : null,
       })
       if (error) throw error
       toast.success('تم حفظ المستند سحابياً وقراءة بياناته')
+      setTab(uploadCat)
+      setUploadDocType('')
       reload()
     } catch (e) {
+      if (uploadedPath) await deleteAttachment(uploadedPath).catch(() => {})
       toast.error('حدث خطأ أثناء حفظ الملف: ' + ((e as Error)?.message ?? ''))
     } finally {
       setParsing(false)
     }
   }
 
-  // فتح/تنزيل المستند برابط موقّع — الجلب عند الطلب فقط
   const openDocument = async (id: string) => {
     setOpeningId(id)
     try {
@@ -97,7 +121,6 @@ export default function DocumentsPage() {
 
   const handleDelete = async () => {
     if (!deleteId) return
-    // نقرأ مسار الملف قبل حذف الصف لتنظيفه من Storage بعد الحذف
     const { data: row } = await supabase.from('documents').select('file_url').eq('id', deleteId).maybeSingle()
     const { error } = await supabase.from('documents').delete().eq('id', deleteId)
     if (error) { toast.error('تعذّر حذف المستند'); return }
@@ -117,9 +140,48 @@ export default function DocumentsPage() {
     return '📁'
   }
 
+  const catChip = (c: Category, label: string, count: number, Icon: typeof Building2) => (
+    <button
+      onClick={() => setUploadCat(c)}
+      className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors ${
+        uploadCat === c ? 'border-primary-400 bg-primary-50 text-primary-700 font-medium' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+      }`}
+    >
+      <Icon size={15} /> {label} <span className="text-xs text-slate-400">({count})</span>
+    </button>
+  )
+
   return (
     <div className="space-y-5">
-      {/* Upload area */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+        <p className="text-sm font-medium text-slate-700">إلى أين تريد رفع المستند؟</p>
+        <div className="flex flex-wrap gap-2">
+          {catChip('office', 'مستندات المكتب', officeDocs.length, Building2)}
+          {catChip('project', 'مستندات المشاريع', projectDocs.length, Folder)}
+        </div>
+
+        {uploadCat === 'project' ? (
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">اختر المشروع</label>
+            <select value={uploadProjectId} onChange={e => setUploadProjectId(e.target.value)}
+              className="w-full sm:w-80 h-9 px-3 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none">
+              <option value="">— اختر مشروعًا —</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.project_name}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">نوع المستند (اختياري)</label>
+            <input list="office-doc-types" value={uploadDocType} onChange={e => setUploadDocType(e.target.value)}
+              placeholder="مثل: سجل تجاري، شهادة ضريبة..."
+              className="w-full sm:w-80 h-9 px-3 rounded-lg border border-slate-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-100 outline-none" />
+            <datalist id="office-doc-types">
+              {OFFICE_DOC_TYPES.map(t => <option key={t} value={t} />)}
+            </datalist>
+          </div>
+        )}
+      </div>
+
       <div
         className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-primary-400 transition-colors cursor-pointer bg-white hover:bg-primary-50"
         onClick={() => inputRef.current?.click()}
@@ -140,15 +202,16 @@ export default function DocumentsPage() {
               <Upload size={24} className="text-primary-600" />
             </div>
             <div>
-              <p className="font-medium text-slate-700">رفع مستند للحفظ السحابي واستخراج البيانات تلقائياً</p>
-              <p className="text-sm text-slate-500 mt-1">يدعم: PDF, Excel, CSV, صور — يُحفظ الملف في السحابة وتُستخرج بياناته بدقة عالية</p>
+              <p className="font-medium text-slate-700">
+                رفع مستند إلى {uploadCat === 'project' ? 'مستندات المشاريع' : 'مستندات المكتب'}
+              </p>
+              <p className="text-sm text-slate-500 mt-1">يدعم: PDF, Excel, CSV, صور — يُحفظ في السحابة وتُستخرج بياناته بدقة عالية</p>
             </div>
             <Button variant="outline" size="sm">اختر ملفاً</Button>
           </div>
         )}
       </div>
 
-      {/* Extracted data preview */}
       {extracted && (
         <div className="bg-green-50 border border-green-200 rounded-xl p-5">
           <h3 className="font-semibold text-green-800 mb-3">البيانات المستخرجة من: {extracted.name}</h3>
@@ -183,28 +246,58 @@ export default function DocumentsPage() {
         </div>
       )}
 
-      {/* Documents list */}
+      <div className="flex gap-2">
+        <button onClick={() => setTab('office')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm transition-colors ${
+            tab === 'office' ? 'bg-primary-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}>
+          <Building2 size={15} /> مستندات المكتب ({officeDocs.length})
+        </button>
+        <button onClick={() => setTab('project')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm transition-colors ${
+            tab === 'project' ? 'bg-primary-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}>
+          <Folder size={15} /> مستندات المشاريع ({projectDocs.length})
+        </button>
+      </div>
+
       {loading ? (
         <div className="flex justify-center py-10">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
-      ) : documents.length === 0 ? (
+      ) : shown.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 py-12 text-center">
           <FileArchive size={36} className="mx-auto text-slate-300 mb-3" />
-          <p className="text-slate-500 text-sm">لا توجد مستندات محفوظة</p>
+          <p className="text-slate-500 text-sm">
+            {tab === 'project' ? 'لا توجد مستندات مشاريع بعد' : 'لا توجد مستندات مكتب بعد'}
+          </p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-            <h3 className="font-semibold text-slate-700 text-sm">المستندات المحفوظة ({documents.length})</h3>
+          <div className="px-5 py-3 border-b border-slate-100">
+            <h3 className="font-semibold text-slate-700 text-sm">
+              {tab === 'project' ? 'مستندات المشاريع' : 'مستندات المكتب'} ({shown.length})
+            </h3>
           </div>
           <div className="divide-y divide-slate-100">
-            {documents.map(doc => (
+            {shown.map(doc => (
               <div key={doc.id} className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50">
                 <span className="text-2xl">{fileIcon(doc.file_type)}</span>
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-slate-800 truncate">{doc.name}</p>
-                  <p className="text-xs text-slate-500">{formatDate(doc.created_at)}</p>
+                  <div className="flex items-center flex-wrap gap-2 mt-0.5">
+                    <span className="text-xs text-slate-500">{formatDate(doc.created_at)}</span>
+                    {tab === 'project' && doc.related_id && (
+                      <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5">
+                        {projectName(doc.related_id)}
+                      </span>
+                    )}
+                    {tab === 'office' && doc.doc_type && (
+                      <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-1.5 py-0.5">
+                        {doc.doc_type}
+                      </span>
+                    )}
+                  </div>
                   {doc.extracted_data && Object.keys(doc.extracted_data as object).length > 0 && (
                     <p className="text-xs text-green-600 mt-0.5">
                       تم استخراج {Object.keys(doc.extracted_data as object).filter(k => (doc.extracted_data as Record<string, unknown>)[k]).length} حقل
