@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Calendar as CalIcon, ChevronRight, ChevronLeft, CreditCard, UserCog, FileText, ListTodo, Briefcase, Calculator, Package, RefreshCw } from 'lucide-react'
 import { safeSelect } from '../../lib/supabase'
+import { fetchCheques, type ChequeRow } from '../../lib/finance'
 import { formatCurrency } from '../../lib/utils'
 
 type EventType = 'cheque' | 'worker_doc' | 'invoice' | 'task' | 'project' | 'quote' | 'asset_doc'
@@ -59,8 +60,7 @@ function buildEvents(src: {
   workers: WorkerRow[]
   assets: AssetRow[]
   invoices: InvoiceRow[]
-  purchases: PurchaseRow[]
-  subPay: SubPayRow[]
+  cheques: ChequeRow[]
   tasks: TaskRow[]
   projects: ProjectRow[]
   quotes: QuoteRow[]
@@ -96,20 +96,12 @@ function buildEvents(src: {
     }
   }
 
-  // شيكات المشتريات الآجلة
-  for (const p of src.purchases) {
-    if (p.payment_method === 'deferred_cheque' && p.check_due_date) {
-      const dk = dateKey(p.check_due_date)
-      ev.push({ id: `pc-${p.id}`, type: 'cheque', date: dk, title: `شيك: ${p.supplier_name}`, amount: Number(p.amount) || 0, link: '/purchases', overdue: isOverdue(dk) })
-    }
-  }
-
-  // شيكات مقاولي الباطن
-  for (const s of src.subPay) {
-    if (s.payment_method === 'cheque' && s.check_due_date) {
-      const dk = dateKey(s.check_due_date)
-      ev.push({ id: `sc-${s.id}`, type: 'cheque', date: dk, title: `شيك مقاول: ${s.subcontractor_name || 'باطن'}${s.project_name ? ' — ' + s.project_name : ''}`, amount: Number(s.amount) || 0, link: '/subcontractors', overdue: isOverdue(dk) })
-    }
+  // الشيكات الآجلة من جدول cheques (مصدر الحقيقة): المعلّقة الصادرة فقط — المصروفة تختفي تلقائيًا
+  for (const c of src.cheques) {
+    if (c.direction !== 'outgoing' || c.status !== 'pending' || c.cheque_type !== 'deferred' || !c.due_date) continue
+    const dk = dateKey(c.due_date)
+    const link = c.related_type === 'subcontractor_payment' ? '/subcontractors' : '/purchases'
+    ev.push({ id: `chq-${c.id}`, type: 'cheque', date: dk, title: `شيك: ${c.party_name || 'مورد/باطن'}`, amount: Number(c.amount) || 0, link, overdue: isOverdue(dk) })
   }
 
   // الفواتير غير المدفوعة
@@ -151,17 +143,16 @@ function buildEvents(src: {
 // جلب كل المصادر عبر safeSelect ثم بناء الأحداث
 async function fetchCalendarEvents(): Promise<CalEvent[]> {
   const today = todayStr()
-  const [workers, assets, invoices, purchases, subPay, tasks, projects, quotes] = await Promise.all([
+  const [workers, assets, invoices, cheques, tasks, projects, quotes] = await Promise.all([
     safeSelect<WorkerRow>('workers', 'id,name,visa_expiry,cpr_expiry,passport_expiry,status'),
     safeSelect<AssetRow>('assets', 'id,name,insurance_expiry,registration_expiry'),
     safeSelect<InvoiceRow>('invoices', 'id,invoice_number,customer_name,total,status,due_date'),
-    safeSelect<PurchaseRow>('purchase_invoices', 'id,supplier_name,amount,payment_method,check_due_date'),
-    safeSelect<SubPayRow>('subcontractor_payments', 'id,subcontractor_name,amount,payment_method,check_due_date,project_name'),
+    fetchCheques().catch(() => [] as ChequeRow[]),
     safeSelect<TaskRow>('tasks', 'id,title,due_date,status'),
     safeSelect<ProjectRow>('projects', 'id,project_name,start_date,end_date'),
     safeSelect<QuoteRow>('quotations', 'id,quote_number,customer_name,valid_until,status'),
   ])
-  return buildEvents({ workers, assets, invoices, purchases, subPay, tasks, projects, quotes }, today)
+  return buildEvents({ workers, assets, invoices, cheques, tasks, projects, quotes }, today)
 }
 
 // ════════════════════════════════════════════════════════════════════
