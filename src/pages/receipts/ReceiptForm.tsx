@@ -174,9 +174,14 @@ export default function ReceiptForm() {
     }
 
     toast.success('تم إنشاء الإيصال بنجاح')
-    // الإيصال يغيّر متبقّي/حالة الفاتورة → تحديث القائمتين
+    // الإيصال دفعة من العميل: يغيّر متبقّي/حالة الفاتورة ويؤثّر على كشف حسابه والمالية واللوحة والتنبيهات
     queryClient.invalidateQueries({ queryKey: ['receipts-list'] })
     queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
+    queryClient.invalidateQueries({ queryKey: ['client-statement'] })
+    queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+    queryClient.invalidateQueries({ queryKey: ['app-alerts'] })
+    if (form.invoice_id) queryClient.invalidateQueries({ queryKey: ['invoice-view', form.invoice_id] })
     navigate('/receipts')
   }
 
