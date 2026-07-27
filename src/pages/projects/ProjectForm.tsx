@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useMemo, type DragEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Plus, Trash2, Sparkles, Loader2, FileCheck, FolderOpen,
   FileText, FileImage, Eye, X, Building2, User, Layers, Paperclip,
@@ -93,6 +94,7 @@ const CONTRACT_PROMPT = `أنت مساعد متخصص في قراءة عقود �
 export default function ProjectForm() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const isEdit = !!id
 
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -334,6 +336,13 @@ export default function ProjectForm() {
           }))
         )
       }
+
+      // إبطال الكاش كي تظهر التغييرات فورًا (staleTime عام = 5 دقائق) في القوائم واللوحة والتقارير
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['reports-data'] })
 
       toast.success(isEdit ? 'تم تحديث المشروع' : 'تم إنشاء المشروع')
       navigate(`/projects/${projectId}`)
