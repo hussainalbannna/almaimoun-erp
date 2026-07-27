@@ -228,6 +228,8 @@ export default function QuotationForm() {
       }
 
       queryClient.invalidateQueries({ queryKey: ['quotations-list'] })
+      // إبطال صفحة عرض السعر نفسها كي لا تظهر ببيانات قديمة بعد التعديل (staleTime عام = 5 دقائق)
+      if (isEdit) queryClient.invalidateQueries({ queryKey: ['quotation-view', quoteId] })
       toast.success(isEdit ? 'تم تحديث العرض' : 'تم إنشاء العرض')
       navigate(`/quotations/${quoteId}`)
     } catch (e) {
