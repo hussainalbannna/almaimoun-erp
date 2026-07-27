@@ -75,6 +75,18 @@ export default function LPODeliveries() {
   const handleAddDelivery = async () => {
     const hasQty = Object.values(quantities).some(q => q > 0)
     if (!hasQty) { toast.error('يجب إدخال كمية واحدة على الأقل'); return }
+
+    // منع تجاوز الكمية المتبقّية لكل بند (لا يصحّ تسليم أكثر من المطلوب)
+    for (const [itemId, qty] of Object.entries(quantities)) {
+      if (qty <= 0) continue
+      const item = items.find(i => i.id === itemId)
+      const remaining = Number(item?.quantity ?? 0) - getDeliveredQty(itemId)
+      if (qty > remaining + 1e-9) {
+        toast.error(`الكمية المُدخلة لـ«${item?.description ?? 'بند'}» تتجاوز المتبقّي (${remaining})`)
+        return
+      }
+    }
+
     setSaving(true)
     try {
       const delNum = deliveries.length + 1
@@ -108,7 +120,7 @@ export default function LPODeliveries() {
       setQuantities({})
       reload()
     } catch (e: unknown) {
-      toast.error('حدث خطأ')
+      toast.error('تعذّر تسجيل التسليم: ' + ((e as Error)?.message ?? ''))
     } finally {
       setSaving(false)
     }
@@ -204,17 +216,24 @@ export default function LPODeliveries() {
             <Input label="تاريخ التسليم" type="date" value={form.delivery_date} onChange={e => setForm(p => ({ ...p, delivery_date: e.target.value }))} />
           </div>
           <div className="space-y-3 mb-4">
-            {items.map(item => (
-              <div key={item.id} className="flex items-center gap-4">
-                <span className="flex-1 text-sm text-slate-700">{item.description}</span>
-                <Input
-                  label={`كمية (من ${Number(item.quantity) - getDeliveredQty(item.id!)} متبقية)`}
-                  type="number"
-                  value={String(quantities[item.id!] ?? 0)}
-                  onChange={e => setQuantities(p => ({ ...p, [item.id!]: parseFloat(e.target.value) || 0 }))}
-                />
-              </div>
-            ))}
+            {items.map(item => {
+              const remaining = Number(item.quantity) - getDeliveredQty(item.id!)
+              const entered = quantities[item.id!] ?? 0
+              return (
+                <div key={item.id} className="flex items-center gap-4">
+                  <span className="flex-1 text-sm text-slate-700">{item.description}</span>
+                  <Input
+                    label={`كمية (من ${remaining} متبقية)`}
+                    type="number"
+                    min={0}
+                    max={remaining}
+                    value={String(entered)}
+                    error={entered > remaining ? 'أكبر من المتبقّي' : undefined}
+                    onChange={e => setQuantities(p => ({ ...p, [item.id!]: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
+              )
+            })}
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} />
           <div className="flex gap-3 mt-4">
