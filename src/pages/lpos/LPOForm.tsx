@@ -235,6 +235,8 @@ export default function LPOForm() {
 
     setLoading(false)
     queryClient.invalidateQueries({ queryKey: ['lpos-list'] })
+    // إبطال صفحة عرض أمر الشراء نفسها كي لا تظهر ببيانات قديمة بعد التعديل (staleTime عام = 5 دقائق)
+    if (isEdit && id) queryClient.invalidateQueries({ queryKey: ['lpo-view', id] })
     toast.success(isEdit ? 'تم تحديث أمر الشراء' : 'تم إنشاء أمر الشراء')
     navigate('/lpos')
   }
