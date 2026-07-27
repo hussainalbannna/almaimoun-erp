@@ -160,6 +160,8 @@ export default function CustomerForm() {
     // إبطال كاش قائمة العملاء ودليل جهات الاتصال حتى تظهر التغييرات فورًا
     queryClient.invalidateQueries({ queryKey: ['customers-list'] })
     queryClient.invalidateQueries({ queryKey: ['contacts-directory'] })
+    // وكذلك صفحة تفاصيل العميل نفسه (كي لا تعرض بيانات قديمة بعد التعديل)
+    if (isEdit && id) queryClient.invalidateQueries({ queryKey: ['customer-detail', id] })
     toast.success(isEdit ? 'تم تحديث العميل' : 'تم إضافة العميل')
     navigate('/customers')
   }
