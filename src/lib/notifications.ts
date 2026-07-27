@@ -67,14 +67,21 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     catch (e) { hadError = true; console.error('[alerts] فشل جلب مصدر تنبيهات:', e); return [] }
   }
 
+  // أفق مالي: نجلب من الخادم فقط ما يستحق خلال ≤ 7 أيام أو فات موعده (لا الجدول كاملًا) — يمنع تجاوز
+  // سقف 1000 صف مع نمو الجداول ويخفّف الحمل. (+1 يوم هامش ضد فرق التوقيت؛ العميل يُعيد الفلترة بدقّة)
+  const finHorizon = new Date()
+  finHorizon.setDate(finHorizon.getDate() + MAX_FINANCIAL + 1)
+  const finHorizonStr = `${finHorizon.getFullYear()}-${String(finHorizon.getMonth() + 1).padStart(2, '0')}-${String(finHorizon.getDate()).padStart(2, '0')}`
+
   const [workers, assets, invoices, cheques, tasks, quotes, maintenance, spareParts, fuelLogs] = await Promise.all([
     safe(supabase.from('workers').select('id,name,name_en,visa_expiry,cpr_expiry,passport_expiry,status')),
     safe(supabase.from('assets').select('id,name,insurance_expiry,registration_expiry,inspection_expiry,warranty_expiry,operation_license_expiry,payment_method,bank_name,monthly_installment,total_installments,paid_installments,next_installment_date')),
-    safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date')),
-    // الشيكات من مصدرها الرسمي (جدول cheques) — حالتها تُحدَّث عند الصرف في مركز الشيكات
-    safe(supabase.from('cheques').select('id,party_name,amount,due_date,status,cheque_type,direction')),
-    safe(supabase.from('tasks').select('id,title,due_date,status')),
-    safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status,total')),
+    // المصادر المالية مفلترة خادميًا بحالة السجل وتاريخ الاستحقاق (نتيجة صغيرة دائمًا مهما كبر الجدول)
+    safe(supabase.from('invoices').select('id,invoice_number,customer_name,total,status,due_date').neq('status', 'paid').lte('due_date', finHorizonStr)),
+    // الشيكات من مصدرها الرسمي (جدول cheques) — المعلّقة المستحقة قريبًا فقط
+    safe(supabase.from('cheques').select('id,party_name,amount,due_date,status,cheque_type,direction').eq('status', 'pending').lte('due_date', finHorizonStr)),
+    safe(supabase.from('tasks').select('id,title,due_date,status').neq('status', 'done').lte('due_date', finHorizonStr)),
+    safe(supabase.from('quotations').select('id,quote_number,customer_name,valid_until,status,total').eq('status', 'sent').lte('valid_until', finHorizonStr)),
     safe(supabase.from('asset_maintenance').select('id,asset_id,service_date,next_service_date,next_service_odometer')),
     safe(supabase.from('asset_spare_parts').select('id,asset_id,part_name,next_replace_date')),
     safe(supabase.from('asset_fuel_logs').select('asset_id,odometer')),
