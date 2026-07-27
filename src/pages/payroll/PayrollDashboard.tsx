@@ -305,12 +305,14 @@ export default function PayrollDashboard() {
     if (adjError) throw adjError
 
     if (newAdvance > 0) {
+      // عند الصرف: السلفة الجديدة خُصمت فعليًا من صافي هذا الشهر ⇐ تُسجَّل «مخصومة» فورًا
+      // كي لا تُرحَّل وتُخصم مرّة ثانية الشهر القادم. عند الحفظ فقط: تبقى معلّقة حتى الصرف.
       const { error: advError } = await supabase.from('worker_advances').insert({
         worker_id: w.id,
         amount: newAdvance,
         advance_date: advanceDateForPeriod(month, year),
         notes: `سلفة كشف ${MONTHS[month]} ${year}`,
-        deducted: false,
+        deducted: pay,
       })
       if (advError) throw advError
     }
