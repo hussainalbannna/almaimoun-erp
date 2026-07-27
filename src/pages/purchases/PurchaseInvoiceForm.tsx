@@ -295,10 +295,15 @@ export default function PurchaseInvoiceForm() {
       const scannedTax = Number(parsed.tax_amount) || 0
       const scannedSub = Number(parsed.subtotal) || 0
       const hasVat = scannedTax > 0.001 || (scannedSub > 0 && scannedTotal > scannedSub + 0.001)
-      // الفاتورة بها ضريبة ⇒ النسبة 10% والمُدخل هو القبل؛ بلا ضريبة ⇒ النسبة 0 والمُدخل هو الإجمالي
-      const extractedRate = hasVat ? 10 : 0
+      // النسبة الفعلية من الفاتورة نفسها (ضريبة÷قبل) بدل افتراض 10% دائمًا — يمنع أي تضخيم مع فواتير 5% أو غيرها،
+      // ويرجع 10% القياسي فقط عند تعذّر الحساب. المُدخل هو «قبل الضريبة»، وبلا ضريبة يكون الإجمالي والنسبة 0.
+      const extractedRate = !hasVat ? 0
+        : scannedSub > 0 && scannedTax > 0.001 ? Math.round((scannedTax / scannedSub) * 100)
+        : scannedSub > 0 && scannedTotal > scannedSub ? Math.round(((scannedTotal - scannedSub) / scannedSub) * 100)
+        : 10
+      const safeRate = hasVat && extractedRate <= 0 ? 10 : extractedRate
       const extractedSubtotal = hasVat
-        ? (scannedSub > 0 ? scannedSub : scannedTotal / 1.1)
+        ? (scannedSub > 0 ? scannedSub : scannedTotal / (1 + safeRate / 100))
         : (scannedTotal > 0 ? scannedTotal : scannedSub)
 
       setForm(f => ({
@@ -307,7 +312,7 @@ export default function PurchaseInvoiceForm() {
         supplier_name: matchedSupplierName || f.supplier_name,
         vendor_invoice_number: parsed.vendor_invoice_number || f.vendor_invoice_number,
         amount: extractedSubtotal > 0 ? String(Number(extractedSubtotal.toFixed(3))) : f.amount,
-        tax_rate: extractedSubtotal > 0 ? String(extractedRate) : f.tax_rate,
+        tax_rate: extractedSubtotal > 0 ? String(safeRate) : f.tax_rate,
         entry_date: validDate || f.entry_date,
         invoice_copy: dataUrl,
       }))
