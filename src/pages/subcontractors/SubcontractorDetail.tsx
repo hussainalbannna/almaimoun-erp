@@ -369,7 +369,12 @@ export default function SubcontractorDetail() {
       if (editAssignId) {
         const { error } = await supabase.from('subcontractor_assignments').update(payload).eq('id', editAssignId)
         if (error) throw error
-        toast.success('تم تحديث التكليف')
+        // مزامنة مشروع دفعات هذا التكليف مع مشروعه الجديد كي لا تُنسب مبالغها لمشروع خاطئ في المالية
+        const { error: syncErr } = await supabase.from('subcontractor_payments')
+          .update({ project_id: assignForm.project_id || null })
+          .eq('assignment_id', editAssignId)
+        if (syncErr) toast.error('حُدّث التكليف، لكن تعذّرت مزامنة مشروع دفعاته: ' + syncErr.message)
+        else toast.success('تم تحديث التكليف')
       } else {
         const { error } = await supabase.from('subcontractor_assignments').insert({ ...payload, status: 'active' })
         if (error) throw error
