@@ -1,7 +1,7 @@
 import { supabase } from './supabase'
 
 export type AlertLevel = 'overdue' | 'danger' | 'warning' | 'info'
-export type AlertKind = 'cheque' | 'installment' | 'worker_doc' | 'asset_doc' | 'invoice' | 'task' | 'quote'
+export type AlertKind = 'cheque' | 'installment' | 'worker_doc' | 'asset_doc' | 'invoice' | 'task' | 'quote' | 'system'
 
 export interface AppAlert {
   id: string
@@ -58,10 +58,13 @@ const MAX_DOCUMENT = 30
 // جلب كل التنبيهات من قاعدة البيانات
 export async function fetchAllAlerts(): Promise<AppAlert[]> {
   const alerts: AppAlert[] = []
+  let hadError = false
 
   // دالة معرّفة (لا سهمية) لتفادي أي التباس بين <T> وJSX في أي سياق
+  // تُسجّل الخطأ وترفع علمًا بدل ابتلاعه بصمت (كي لا نعرض «كل شيء بخير» كاذبة)
   async function safe<T>(p: PromiseLike<{ data: T[] | null }>): Promise<T[]> {
-    try { const { data } = await p; return data ?? [] } catch { return [] }
+    try { const { data } = await p; return data ?? [] }
+    catch (e) { hadError = true; console.error('[alerts] فشل جلب مصدر تنبيهات:', e); return [] }
   }
 
   const [workers, assets, invoices, cheques, tasks, quotes, maintenance, spareParts, fuelLogs] = await Promise.all([
@@ -338,6 +341,20 @@ export async function fetchAllAlerts(): Promise<AppAlert[]> {
     if (ra !== rb) return ra - rb
     return (a.daysLeft ?? 999) - (b.daysLeft ?? 999)
   })
+
+  // إن فشل أي مصدر: أظهِر تنبيهًا صريحًا في المقدّمة بدل قائمة ناقصة تبدو مطمئنة كذبًا
+  if (hadError) {
+    alerts.unshift({
+      id: 'system-fetch-error',
+      kind: 'system',
+      level: 'danger',
+      urgent: false,
+      title: 'تعذّر فحص بعض التنبيهات',
+      subtitle: 'حدث خطأ أثناء جلب بعض المصادر — قد تكون القائمة ناقصة. حدّث الصفحة.',
+      date: null,
+      daysLeft: null,
+    })
+  }
 
   return alerts
 }

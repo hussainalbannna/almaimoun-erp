@@ -13,6 +13,7 @@ const KIND_META: Record<AlertKind, { label: string; icon: typeof Bell }> = {
   invoice: { label: 'فواتير', icon: FileText },
   task: { label: 'مهام', icon: ListTodo },
   quote: { label: 'عروض أسعار', icon: Calculator },
+  system: { label: 'تنبيهات النظام', icon: Bell },
 }
 
 // ألوان المستويات — متأخر (رمادي حزين) + عاجل/تحذير/معلومة
