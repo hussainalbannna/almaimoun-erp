@@ -171,6 +171,10 @@ export default function RentalForm() {
     // الإيجار قد يكون مرتبطاً بمشروع (يؤثّر على ربحيته)
     queryClient.invalidateQueries({ queryKey: ['rentals-list'] })
     queryClient.invalidateQueries({ queryKey: ['project-detail'] })
+    // الإيجار مصروف يؤثّر على المالية والتقارير واللوحة
+    queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+    queryClient.invalidateQueries({ queryKey: ['reports-data'] })
     navigate('/rentals')
   }
 
