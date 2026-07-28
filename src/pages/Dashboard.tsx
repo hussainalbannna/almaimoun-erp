@@ -78,7 +78,7 @@ async function fetchDashboardStats(): Promise<Stats> {
     safe(supabase.from('daily_logs').select('project_id, overtime_amount')),
     safe(supabase.from('project_labor_entries').select('project_id, amount')),
     safe(supabase.from('rentals').select('id, project_id')),
-    safe(supabase.from('rental_payments').select('rental_id, amount')),
+    safe(supabase.from('rental_payments').select('rental_id, amount, payment_method')),
     safe(supabase.from('variation_orders').select('project_id, status, billable, amount')),
   ])
   // جلب الشيكات محميّ كبقية الاستعلامات: فشله يُفرّغ الشيكات فقط ولا يُسقط اللوحة كلها
@@ -97,7 +97,7 @@ async function fetchDashboardStats(): Promise<Stats> {
   const overtimeRows = (otRes.data ?? []) as { project_id: string | null; overtime_amount: number | null }[]
   const histRows = (histRes.data ?? []) as { project_id: string | null; amount: number | null }[]
   const rentals = (rentalsRes.data ?? []) as { id: string; project_id: string | null }[]
-  const rentalPays = (rentalPayRes.data ?? []) as { rental_id: string; amount: number | null }[]
+  const rentalPays = (rentalPayRes.data ?? []) as { rental_id: string; amount: number | null; payment_method: string | null }[]
   const vos = (voRes.data ?? []) as { project_id: string | null; status: string | null; billable: boolean | null; amount: number | null }[]
 
   const monthExpenses = (expRes.data ?? []).reduce((s, e: { amount: number }) => s + Number(e.amount), 0)
@@ -109,6 +109,8 @@ async function fetchDashboardStats(): Promise<Stats> {
   const rentalProject = new Map(rentals.map(r => [r.id, r.project_id]))
   const rentalsPaidByProject = new Map<string, number>()
   for (const rp of rentalPays) {
+    // نفس قاعدة اللوحة المالية: دفعة الإيجار بشيك آجل لا تُحتسب مصروفًا حتى يُصرف الشيك (اتّساق الرقم بين اللوحتين)
+    if (rp.payment_method === 'deferred_cheque') continue
     const proj = rentalProject.get(rp.rental_id)
     if (proj) rentalsPaidByProject.set(proj, (rentalsPaidByProject.get(proj) ?? 0) + Number(rp.amount || 0))
   }
