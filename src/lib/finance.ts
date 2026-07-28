@@ -226,7 +226,10 @@ export interface CashPosition {
 
 // دالة نقية — تحسب مركز السيولة من شيكات مجلوبة مسبقاً
 export function computeCashPosition(cheques: ChequeRow[], today: string = todayStr()): CashPosition {
-  const in7 = new Date(new Date(today).getTime() + 7 * 86400000).toISOString().slice(0, 10)
+  // نافذة السبعة أيام بالتقويم المحلّي (لا UTC) — تفادياً لأي انزياح يوم عند حدود المنطقة الزمنية
+  const in7d = new Date(`${today}T00:00:00`)
+  in7d.setDate(in7d.getDate() + 7)
+  const in7 = `${in7d.getFullYear()}-${String(in7d.getMonth() + 1).padStart(2, '0')}-${String(in7d.getDate()).padStart(2, '0')}`
   let pendingChequesTotal = 0, guaranteeChequesTotal = 0, dueWithin7Days = 0, overduePending = 0
   for (const c of cheques) {
     if (c.direction !== 'outgoing' || c.status !== 'pending') continue
