@@ -116,6 +116,18 @@ export default function PurchaseInvoiceList() {
 
   useEffect(() => { load() }, [])
 
+  // إغلاق النوافذ المخصّصة (معاينة الصورة/استعراض الفاتورة) بمفتاح Escape كبقية نوافذ النظام — يُغلق الأعلى ظهورًا أولًا
+  useEffect(() => {
+    if (!viewInv && !previewImg) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (previewImg) setPreviewImg(null)
+      else setViewInv(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [viewInv, previewImg])
+
   const handleDelete = async () => {
     if (!deleteId) return
     // نقرأ مسارات المرفقات وصور التوصيل قبل الحذف؛ صفوف التوصيل تُحذف تلقائياً (CASCADE)
