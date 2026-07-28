@@ -164,6 +164,18 @@ export function nextSerial(existingNumbers: string[], seed: number): string {
 }
 
 // ═══════════════════════════════════════════
+//  تطبيع الأرقام العربية-الهندية (٠-٩) والفارسية (۰-۹) والفاصلة العربية (٫) إلى نظيرها اللاتيني
+//  يُستخدم في حقول المبالغ كي لا تتحوّل «٥٠» إلى صفر عند لوحة المفاتيح العربية
+// ═══════════════════════════════════════════
+export function toLatinDigits(s: string): string {
+  return String(s ?? '')
+    .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/٫/g, '.')   // الفاصلة العشرية العربية
+    .replace(/[،٬]/g, '') // فاصلة الآلاف العربية تُزال
+}
+
+// ═══════════════════════════════════════════
 //  دمج أصناف CSS
 // ═══════════════════════════════════════════
 export function clsx(...classes: (string | undefined | null | false)[]): string {

@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useState } from 'react'
-import { clsx } from '../../lib/utils'
+import { clsx, toLatinDigits } from '../../lib/utils'
 
 interface MoneyInputProps
   extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type'> {
@@ -14,7 +14,8 @@ interface MoneyInputProps
 
 // يسمح بالأرقام ونقطة عشرية واحدة فقط، وبحدٍّ أقصى 3 خانات عشرية (فلوس البحرين)
 function sanitizeMoney(raw: string): string {
-  const cleaned = raw.replace(/[^\d.]/g, '')
+  // نطبّع الأرقام العربية-الهندية أولاً كي لا تُجرَّد (٥٠ → 50) ثم نُبقي الأرقام والنقطة فقط
+  const cleaned = toLatinDigits(raw).replace(/[^\d.]/g, '')
   const dot = cleaned.indexOf('.')
   if (dot === -1) return cleaned
   const intPart = cleaned.slice(0, dot)
