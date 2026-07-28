@@ -364,7 +364,16 @@ export default function ChequesCenter() {
     setViewCheque(c)
     if (!c.has_image) { setViewImage({ loading: false, url: null }); return }
     setViewImage({ loading: true, url: null })
-    const raw = await fetchChequeImage(c.id)
+    let raw = await fetchChequeImage(c.id)
+    // ترحيل كسول: صورة قديمة بصيغة base64 تُرفَع إلى Storage مرّة واحدة عند أول عرض،
+    // ويُستبدَل العمود بالمسار الخفيف — يخفّف القاعدة ويُسرّع العرض لاحقًا (يتجاهل الفشل بصمت)
+    if (isDataUrl(raw)) {
+      try {
+        const path = await uploadDataUrl(raw, 'cheques')
+        const { error } = await supabase.from('cheques').update({ cheque_image_data: path }).eq('id', c.id)
+        if (!error) raw = path
+      } catch { /* يبقى العرض عاملًا بـ base64 إن فشل الترحيل */ }
+    }
     const url = await resolveAttachmentUrl(raw)
     setViewImage({ loading: false, url })
   }
