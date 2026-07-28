@@ -95,7 +95,13 @@ export default function WorkerForm() {
   }
 
   const handleSave = async () => {
-    if (!form.name) { toast.error('يجب إدخال الاسم'); return }
+    if (!form.name?.trim()) { toast.error('يجب إدخال الاسم'); return }
+    // الفرع إلزامي لعامل الشركة — بدونه يسقط من كل كشوف الرواتب صامتًا
+    if (form.worker_type === 'company' && !form.branch) { toast.error('يجب اختيار الفرع لعامل الشركة'); return }
+    // منع القيم المالية السالبة (رواتب/بدل/أجر يومي)
+    if ([form.basic_salary, form.social_allowance, form.actual_salary, form.daily_rate].some(v => (Number(v) || 0) < 0)) {
+      toast.error('لا يمكن أن تكون قيم الرواتب أو الأجر سالبة'); return
+    }
     setSaving(true)
     try {
       // عامل الشركة على حماية الأجور ⇒ يُحفظ «شهري» دائمًا (يغلق الباب حتى لو حُمّل سجل قديم بتركيبة ممنوعة)
