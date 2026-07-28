@@ -1154,10 +1154,12 @@ export default function AssetList() {
     try {
       const nextDate = a.next_installment_date ? new Date(a.next_installment_date) : new Date()
       nextDate.setMonth(nextDate.getMonth() + 1)
+      // القسط الأخير ⇐ لا قسط قادم (null) كي لا يظهر «قسط قادم» وهمي لأصل مسدَّد بالكامل
+      const isLastInstallment = a.total_installments > 0 && a.paid_installments + 1 >= a.total_installments
       const today = todayLocal()
       const { error } = await supabase.from('assets').update({
         paid_installments: a.paid_installments + 1,
-        next_installment_date: nextDate.toISOString().slice(0, 10),
+        next_installment_date: isLastInstallment ? null : nextDate.toISOString().slice(0, 10),
       }).eq('id', a.id)
       if (error) { toast.error('تعذّر تحديث الأصل'); return }
       if (Number(a.monthly_installment) > 0) {
