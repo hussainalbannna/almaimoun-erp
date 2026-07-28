@@ -94,6 +94,8 @@ export async function safeSelect<T = Record<string, unknown>>(
     for (let from = 0; ; ) {
       let query: any = supabase.from(table).select(columns)
       if (modify) query = modify(query)
+      // ترتيب حتمي بالمعرّف (كسر تعادل يُلحَق بعد ترتيب المُستدعي) — بدونه قد يتكرّر أو يُسقَط صف بين دفعات الترقيم
+      query = query.order('id', { ascending: true })
       const { data, error } = await query.range(from, from + PAGE - 1)
       if (error) { console.error(`[${table}] خطأ في القراءة:`, error.message); break }
       const rows = (data ?? []) as T[]
