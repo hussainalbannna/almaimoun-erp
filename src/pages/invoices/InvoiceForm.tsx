@@ -264,34 +264,22 @@ export default function InvoiceForm() {
         updated_at: new Date().toISOString(),
       }
 
-      let invoiceId = id
-      if (isEdit) {
-        const { error } = await supabase.from('invoices').update(payload).eq('id', id)
-        if (error) throw error
-        const { error: delErr } = await supabase.from('invoice_items').delete().eq('invoice_id', id)
-        if (delErr) throw delErr
-      } else {
-        const { data: newInv, error } = await supabase.from('invoices').insert(payload).select('id').single()
-        if (error) throw error
-        invoiceId = (newInv as { id: string }).id
-      }
-
-      // إدراج البنود بعد تجريد مُعرّفات الواجهة وإعادة ترقيمها
+      // حفظ ذرّي: رأس الفاتورة + استبدال بنودها + ربط المرحلة في معاملة قاعدة بيانات واحدة
+      // (تعديل الفاتورة لم يعد يتركها بلا بنود عند أي فشل — كل شيء يُلغى معًا)
       const itemsPayload = validItems.map((it, idx) => ({
-        invoice_id: invoiceId,
         description: it.description.trim(),
         quantity: Number(it.quantity) || 0,
         unit_price: Number(it.unit_price) || 0,
         total: Number(it.total) || 0,
         sort_order: idx,
       }))
-      const { error: itemsErr } = await supabase.from('invoice_items').insert(itemsPayload)
-      if (itemsErr) throw itemsErr
-
-      // ربط المرحلة: تحديث حالتها إلى "مفوترة"
-      if (selectedMilestoneId) {
-        await supabase.from('project_milestones').update({ status: 'invoiced', invoice_id: invoiceId }).eq('id', selectedMilestoneId)
-      }
+      const { error: saveErr } = await supabase.rpc('save_invoice_with_items', {
+        p_invoice_id: isEdit ? id : null,
+        p_payload: payload,
+        p_items: itemsPayload,
+        p_milestone_id: selectedMilestoneId || null,
+      })
+      if (saveErr) throw saveErr
 
       // إبطال الكاش كي تظهر التغييرات فورًا (staleTime عام = 5 دقائق): القائمة والعرض والمالية وكشف العميل
       queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
