@@ -2,6 +2,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "npm:@supabase/supabase-js@2.49.1"
 
+// نطاق المؤسسة الموثَّق في Resend — لا يُسمح بالإرسال بأي مُرسِل خارجه (يمنع التزوير بنطاق آخر)
+const ALLOWED_DOMAIN = "almaimoun-construction.com"
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 // ─── CORS ديناميكي ─────────────────────────────────────────────────────
 // يعكس الترويسات التي يطلبها المتصفّح في الفحص المسبق (preflight) بدل قائمة
 // ثابتة — فلا ينكسر الاتصال إذا أضاف عميل Supabase أو التطبيق ترويسة جديدة.
@@ -60,6 +64,11 @@ Deno.serve(async (req: Request) => {
       return json(req, { error: "Missing required fields: to, subject, html" }, 400)
     }
 
+    // تحقق من صيغة بريد المستلم — يمنع تمرير قيمة تالفة إلى مزوّد الإرسال
+    if (!EMAIL_RE.test(String(to).trim())) {
+      return json(req, { error: "Invalid recipient email" }, 400)
+    }
+
     // مفتاح Resend يُقرأ حصرياً من أسرار الخادم (Supabase Secrets) ولا يُقبل من العميل إطلاقاً.
     // هذا يمنع تسريب المفتاح إلى المتصفّح — بخلاف السلوك السابق الذي كان يستقبله ضمن الحمولة.
     const apiKey = Deno.env.get("RESEND_API_KEY")
@@ -67,7 +76,11 @@ Deno.serve(async (req: Request) => {
       return json(req, { error: "Email service is not configured on the server" }, 500)
     }
 
-    const fromAddress = from || Deno.env.get("SMTP_FROM") || "noreply@almaimoun-construction.com"
+    // المُرسِل: نقبل ما يطلبه العميل فقط إن كان ضمن نطاق المؤسسة الموثَّق؛
+    // وإلا نعود إلى مُرسِل الخادم — فلا يمكن انتحال نطاق آخر حتى من مستخدم مسجّل.
+    const serverFrom = Deno.env.get("SMTP_FROM") || `noreply@${ALLOWED_DOMAIN}`
+    const requestedFrom = (from || serverFrom).trim()
+    const fromAddress = requestedFrom.toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`) ? requestedFrom : serverFrom
 
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
