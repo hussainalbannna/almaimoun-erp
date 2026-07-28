@@ -637,7 +637,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
   }
 
   const totalPendingAdvances = advances.filter(a => !a.deducted).reduce((s, a) => s + Number(a.amount), 0)
-  const totalActiveLoans = loans.filter(l => l.status === 'active').reduce((s, l) => s + l.remaining_balance, 0)
+  const totalActiveLoans = loans.filter(l => l.status === 'active').reduce((s, l) => s + Number(l.remaining_balance), 0)
 
   return (
     <div className="space-y-6">
@@ -696,8 +696,8 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
               <div key={loan.id} className={`p-4 rounded-lg border ${loan.status === 'completed' ? 'bg-green-50 border-green-200' : 'bg-white border-slate-200'}`}>
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <span className="font-bold text-sm">{loan.loan_amount.toFixed(3)} د.ب</span>
-                    <span className="text-xs text-slate-500 mr-2">— قسط: {loan.monthly_installment.toFixed(3)} د.ب/شهر</span>
+                    <span className="font-bold text-sm">{Number(loan.loan_amount).toFixed(3)} د.ب</span>
+                    <span className="text-xs text-slate-500 mr-2">— قسط: {Number(loan.monthly_installment).toFixed(3)} د.ب/شهر</span>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${loan.status === 'active' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
                     {loan.status === 'active' ? 'نشط' : 'مكتمل'}
@@ -705,7 +705,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="text-xs text-slate-500">
-                    المتبقي: <span className="font-bold text-slate-700">{loan.remaining_balance.toFixed(3)} د.ب</span>
+                    المتبقي: <span className="font-bold text-slate-700">{Number(loan.remaining_balance).toFixed(3)} د.ب</span>
                     <span className="mr-2">— تاريخ: {formatDate(loan.loan_date)}</span>
                   </div>
                   {loan.status === 'active' && (
@@ -715,7 +715,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
                 {/* Progress bar */}
                 <div className="h-1.5 bg-slate-100 rounded-full mt-2 overflow-hidden">
                   <div className="h-full bg-green-500 rounded-full transition-all"
-                    style={{ width: `${Math.max(0, ((loan.loan_amount - loan.remaining_balance) / loan.loan_amount) * 100)}%` }} />
+                    style={{ width: `${Math.max(0, ((Number(loan.loan_amount) - Number(loan.remaining_balance)) / Number(loan.loan_amount)) * 100)}%` }} />
                 </div>
               </div>
             ))}
