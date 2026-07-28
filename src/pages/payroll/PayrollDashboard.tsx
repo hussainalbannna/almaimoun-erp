@@ -30,9 +30,13 @@ interface PayrollAdjustment {
   net_paid: number | null      // الصافي المدفوع فعليًا وقت الصرف
 }
 
+// قرض مقسّط نشط للعامل — قسطه الشهري يُخصم تلقائيًا من راتب الشهر عند الصرف
+interface LoanLite { id: string; monthly_installment: number; remaining_balance: number }
+
 // عامل مع تعديلات الشهر المحدّد وسلفه المعلّقة ضمن ذلك الشهر
 type PayrollWorker = Worker & {
   advances: WorkerAdvance[] // سلف معلّقة (غير مخصومة) تقع ضمن الشهر المحدّد
+  loans: LoanLite[]         // قروض نشطة — يُخصم قسطها الشهري من الصافي ويُنقَص رصيدها عند الصرف
   overtime: number
   deduction: number
   presentDays: number[]      // أيام الحضور المحفوظة لهذا الشهر
@@ -92,21 +96,25 @@ function downloadCsv(rows: (string | number)[][], filename: string) {
 // جلب كل العمال النشطين (شركة + هيئة) + سلفهم المعلّقة ضمن الشهر + تعديلات الشهر (مصدر React Query)
 async function fetchPayrollData(monthIndex: number, year: number): Promise<PayrollWorker[]> {
   const month = monthIndex + 1 // تخزين قاعدة البيانات 1..12
-  const [wRes, aRes, adjRes] = await Promise.all([
+  const [wRes, aRes, adjRes, loanRes] = await Promise.all([
     supabase.from('workers').select('*').eq('status', 'active').order('name'),
     supabase.from('worker_advances').select('*').eq('deducted', false),
     // '*' يشمل daily_rate و present_days الجديدين
     supabase.from('payroll_adjustments').select('*').eq('month', month).eq('year', year),
+    // القروض النشطة ذات الرصيد المتبقّي — قسطها يُخصم تلقائيًا من راتب الشهر
+    supabase.from('worker_loans').select('id,worker_id,monthly_installment,remaining_balance').eq('status', 'active').gt('remaining_balance', 0),
   ])
 
   const advances = (aRes.data ?? []) as WorkerAdvance[]
   const adjustments = (adjRes.data ?? []) as PayrollAdjustment[]
+  const loans = (loanRes.data ?? []) as (LoanLite & { worker_id: string })[]
 
   return ((wRes.data ?? []) as Worker[]).map(w => {
     const adj = adjustments.find(a => a.worker_id === w.id)
     return {
       ...w,
       advances: advances.filter(a => a.worker_id === w.id && isOutstandingByPeriod(a.advance_date, month, year)),
+      loans: loans.filter(l => l.worker_id === w.id).map(l => ({ id: l.id, monthly_installment: Number(l.monthly_installment) || 0, remaining_balance: Number(l.remaining_balance) || 0 })),
       overtime: adj ? Number(adj.overtime) : 0,
       deduction: adj ? Number(adj.deduction) : 0,
       presentDays: adj && Array.isArray(adj.present_days) ? adj.present_days.map(Number) : [],
@@ -248,15 +256,17 @@ export default function PayrollDashboard() {
     // عامل الشركة: الراتب الفعلي إن سُجّل، وإلا الأساسي + البدل الاجتماعي (نفس احتياطي finance.ts، يمنع صافيًا صفرًا/سالبًا)
     const companySalary = Number(w.actual_salary) || (Number(w.basic_salary) + Number(w.social_allowance))
     const base = isLmra ? (parseFloat(e.dailyRate) || Number(w.daily_rate) || 0) * e.presentDays.length : companySalary
-    const net = base + overtime - deduction - pendingAdv - newAdvance
-    return { e, isLmra, overtime, deduction, newAdvance, pendingAdv, base, net }
+    // قسط القروض المستحقّ هذا الشهر = مجموع أقساط القروض النشطة (كل قسط مسقوف بالمتبقّي كي لا يتجاوزه)
+    const loanDue = w.loans.reduce((s, l) => s + Math.min(l.monthly_installment, l.remaining_balance), 0)
+    const net = base + overtime - deduction - pendingAdv - newAdvance - loanDue
+    return { e, isLmra, overtime, deduction, newAdvance, pendingAdv, loanDue, base, net }
   }
 
   // الإجماليات الحيّة للمجموعة النشطة (تعتمد على قيم التحرير الحالية)
   const totals = useMemo(() => {
-    const t = { basic: 0, social: 0, wps: 0, base: 0, overtime: 0, deduction: 0, advances: 0, net: 0 }
+    const t = { basic: 0, social: 0, wps: 0, base: 0, overtime: 0, deduction: 0, advances: 0, loans: 0, net: 0 }
     for (const w of activeWorkers) {
-      const { overtime, deduction, pendingAdv, newAdvance, base, net } = liveRow(w)
+      const { overtime, deduction, pendingAdv, newAdvance, loanDue, base, net } = liveRow(w)
       t.basic += Number(w.basic_salary)
       t.social += Number(w.social_allowance)
       t.wps += Number(w.basic_salary) + Number(w.social_allowance)
@@ -264,6 +274,7 @@ export default function PayrollDashboard() {
       t.overtime += overtime
       t.deduction += deduction
       t.advances += pendingAdv + newAdvance
+      t.loans += loanDue
       t.net += net
     }
     return t
@@ -321,6 +332,15 @@ export default function PayrollDashboard() {
       for (const adv of w.advances) {
         const { error: dedErr } = await supabase.from('worker_advances').update({ deducted: true }).eq('id', adv.id)
         if (dedErr) throw dedErr
+      }
+      // خصم قسط كل قرض نشط + إنقاص رصيده المتبقّي (يُغلق تلقائيًا عند بلوغ الصفر) — نفس القسط المحتسب في الصافي
+      for (const l of w.loans) {
+        const inst = Math.min(l.monthly_installment, l.remaining_balance)
+        if (inst <= 0) continue
+        const newBal = Number(Math.max(0, l.remaining_balance - inst).toFixed(3))
+        const { error: loanErr } = await supabase.from('worker_loans')
+          .update({ remaining_balance: newBal, status: newBal <= 0 ? 'completed' : 'active' }).eq('id', l.id)
+        if (loanErr) throw loanErr
       }
     }
   }
@@ -524,7 +544,7 @@ export default function PayrollDashboard() {
             ? { label: 'إجمالي رواتب الهيئة', value: formatCurrency(totals.base), color: '#7b4a2d', sub: `${activeWorkers.length} عامل` }
             : { label: 'إجمالي حماية الأجور (WPS)', value: formatCurrency(totals.wps), color: '#7b4a2d', sub: `${activeWorkers.length} موظف` },
           { label: 'إجمالي الصافي المستحق', value: formatCurrency(totals.net), color: '#2563eb', sub: `تم الصرف: ${paidCount} / ${activeWorkers.length}` },
-          { label: 'السلف المعلقة', value: formatCurrency(totals.advances), color: '#dc2626', sub: `زيادة: ${totals.overtime.toFixed(3)} — خصم: ${totals.deduction.toFixed(3)}` },
+          { label: 'السلف المعلقة', value: formatCurrency(totals.advances), color: '#dc2626', sub: `أقساط قروض: ${totals.loans.toFixed(3)} — زيادة: ${totals.overtime.toFixed(3)} — خصم: ${totals.deduction.toFixed(3)}` },
         ].map(kpi => (
           <div key={kpi.label} className="bg-white rounded-xl border border-slate-200 p-4">
             <div className="text-xs text-slate-500 mb-1">{kpi.label}</div>
