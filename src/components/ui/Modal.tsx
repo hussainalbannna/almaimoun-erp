@@ -38,6 +38,32 @@ export function useModalBehavior(
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [open, closeOnEscape, onClose])
 
+  // حبس التركيز داخل النافذة: Tab/Shift+Tab يدور بين عناصرها ولا يهرب لعناصر الخلفية
+  useEffect(() => {
+    if (!open) return
+    const container = focusRef?.current
+    if (!container) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return
+      const focusable = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter(el => el.offsetParent !== null) // المرئية فقط
+      if (focusable.length === 0) { e.preventDefault(); container.focus(); return }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      if (e.shiftKey) {
+        if (active === first || active === container || !container.contains(active)) { e.preventDefault(); last.focus() }
+      } else if (active === last || !container.contains(active)) {
+        e.preventDefault(); first.focus()
+      }
+    }
+    container.addEventListener('keydown', onKeyDown)
+    return () => container.removeEventListener('keydown', onKeyDown)
+  }, [open, focusRef])
+
   useEffect(() => {
     if (!open) return
     const previous = document.body.style.overflow
