@@ -38,24 +38,16 @@ export default function ProjectList() {
 
   const handleDelete = async () => {
     if (!deleteId) return
-    // حماية: امنع حذف مشروع له فواتير/إيصالات/أوامر تغيير مرتبطة —
-    // الحذف يُيتّم الفواتير والإيصالات (SET NULL) ويمحو أوامر التغيير والمراحل والتقارير اليومية بالـ CASCADE
-    const [inv, rec, vo, pi, sp, rn] = await Promise.all([
-      supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
-      supabase.from('receipts').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
-      supabase.from('variation_orders').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
-      supabase.from('purchase_invoices').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
-      supabase.from('subcontractor_payments').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
-      supabase.from('rentals').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
-    ])
-    const linked = (inv.count ?? 0) + (rec.count ?? 0) + (vo.count ?? 0) + (pi.count ?? 0) + (sp.count ?? 0) + (rn.count ?? 0)
-    if (linked > 0) {
-      toast.error('لا يمكن حذف مشروع له سجلات مالية مرتبطة (فواتير/إيصالات/أوامر تغيير/مشتريات/دفعات باطن/إيجارات). غيّر حالته إلى «ملغى» بدل الحذف.')
+    // الحماية مُنفَّذة على مستوى القاعدة (ON DELETE RESTRICT): مشروع له فاتورة/إيصال/أمر تغيير/مشترى/دفعة باطن/إيجار/حساب دائن/أمر شراء/شيك لا يُحذف.
+    // نكتفي هنا بترجمة خطأ القاعدة (23503) إلى رسالة واضحة — أنظف وأسرع من فحص كل الجداول مسبقًا.
+    const { error } = await supabase.from('projects').delete().eq('id', deleteId)
+    if (error) {
+      toast.error(error.code === '23503'
+        ? 'لا يمكن حذف مشروع له سجلات مالية مرتبطة (فواتير/إيصالات/أوامر تغيير/مشتريات/دفعات باطن/إيجارات/شيكات). غيّر حالته إلى «ملغى» بدل الحذف.'
+        : 'تعذّر حذف المشروع: ' + error.message)
       setDeleteId(null)
       return
     }
-    const { error } = await supabase.from('projects').delete().eq('id', deleteId)
-    if (error) { toast.error('تعذّر حذف المشروع: ' + error.message); return }
     toast.success('تم حذف المشروع')
     setDeleteId(null)
     reload()
