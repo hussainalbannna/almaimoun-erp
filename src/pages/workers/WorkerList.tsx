@@ -34,12 +34,15 @@ export default function WorkerList() {
     if (!deleteId) return
     setDeleting(true)
     try {
-      const [att, adj, adv] = await Promise.all([
+      const [att, adj, adv, loan, doc] = await Promise.all([
         supabase.from('worker_attendance').select('id', { count: 'exact', head: true }).eq('worker_id', deleteId),
         supabase.from('payroll_adjustments').select('id', { count: 'exact', head: true }).eq('worker_id', deleteId),
         supabase.from('worker_advances').select('id', { count: 'exact', head: true }).eq('worker_id', deleteId),
+        // قرض غير مسدَّد = دَين لك، ووثائق = سجلّ قانوني — كلاهما سبب للأرشفة لا الحذف
+        supabase.from('worker_loans').select('worker_id', { count: 'exact', head: true }).eq('worker_id', deleteId),
+        supabase.from('worker_documents').select('worker_id', { count: 'exact', head: true }).eq('worker_id', deleteId),
       ])
-      const hasHistory = (att.count ?? 0) > 0 || (adj.count ?? 0) > 0 || (adv.count ?? 0) > 0
+      const hasHistory = (att.count ?? 0) > 0 || (adj.count ?? 0) > 0 || (adv.count ?? 0) > 0 || (loan.count ?? 0) > 0 || (doc.count ?? 0) > 0
       if (hasHistory) {
         const { error } = await supabase.from('workers').update({ status: 'former' }).eq('id', deleteId)
         if (error) throw error
@@ -185,7 +188,7 @@ export default function WorkerList() {
       </div>
 
       <ConfirmDialog open={!!deleteId} title="حذف العامل"
-        message="إن كان لهذا العامل سجلّ حضور أو رواتب أو سلف، ستتم أرشفته (نقله إلى «سابقون») حفاظًا على تاريخه بدل حذفه نهائيًا. متابعة؟"
+        message="إن كان لهذا العامل سجلّ حضور أو رواتب أو سلف أو قروض أو وثائق، ستتم أرشفته (نقله إلى «سابقون») حفاظًا على تاريخه بدل حذفه نهائيًا. متابعة؟"
         confirmLabel={deleting ? 'جارٍ التنفيذ...' : 'متابعة'} danger loading={deleting}
         onConfirm={handleDelete} onCancel={() => { setDeleting(false); setDeleteId(null) }} />
     </div>
