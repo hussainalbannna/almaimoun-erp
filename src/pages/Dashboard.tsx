@@ -70,9 +70,10 @@ async function fetchDashboardStats(): Promise<Stats> {
     safe(supabase.from('project_milestones').select('id, project_id, name, amount, status').in('status', ['pending', 'in_progress', 'completed']).order('sort_order')),
     safe(supabase.from('daily_logs').select('id, project_id, log_date, description').order('log_date', { ascending: false }).limit(5)),
     safe(supabase.from('project_milestones').select('project_id, amount, status')),
-    safe(supabase.from('accounts_payable').select('project_id, amount')),
-    safe(supabase.from('purchase_invoices').select('id, project_id, amount, payment_method, check_due_date')),
-    safe(supabase.from('subcontractor_payments').select('id, project_id, amount, payment_method, check_due_date')),
+    // ترقيم تلقائي للجداول المالية النامية (تمنع الاقتطاع عند 1000 صف مع الوقت → أرقام دقيقة دائمًا)
+    safeSelect<{ project_id: string | null; amount: number }>('accounts_payable', 'project_id, amount').then(data => ({ data })),
+    safeSelect<{ id?: string; project_id: string | null; amount: number | null; payment_method: string | null; check_due_date: string | null }>('purchase_invoices', 'id, project_id, amount, payment_method, check_due_date').then(data => ({ data })),
+    safeSelect<{ id?: string; project_id: string | null; amount: number | null; payment_method: string | null; check_due_date: string | null }>('subcontractor_payments', 'id, project_id, amount, payment_method, check_due_date').then(data => ({ data })),
     safe(supabase.from('subcontractor_assignments').select('agreed_amount, paid_amount')),
     // safeSelect يُرقّم تلقائيًا فلا يُقتطع الحضور عند 1000 صف (ينمو ~1000/شهر) → تكلفة العمالة دقيقة دائمًا
     safeSelect<{ project_id: string | null; worker_id: string; status: string | null }>('worker_attendance', 'project_id, worker_id, status').then(data => ({ data })),
