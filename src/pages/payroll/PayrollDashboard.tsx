@@ -367,11 +367,12 @@ export default function PayrollDashboard() {
     setSavingAll(true)
     try {
       for (const w of activeWorkers) await persistWorkerRow(w, false)
-      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
       toast.success(`تم حفظ كشف ${activeWorkers.length} عامل`)
     } catch (err) {
       toast.error('تعذّر حفظ الكشف: ' + ((err as Error)?.message ?? ''))
     } finally {
+      // إبطال الكاش دائمًا (حتى عند الفشل الجزئي) كي تتطابق الشاشة مع حالة القاعدة الفعلية
+      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
       setSavingAll(false)
     }
   }
@@ -465,11 +466,12 @@ export default function PayrollDashboard() {
     setPayingAll(true)
     try {
       for (const w of toPay) await persistWorkerRow(w, true)
-      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
       toast.success(`تم تسجيل صرف الرواتب لـ ${toPay.length} عامل`)
     } catch (err) {
       toast.error('تعذّر صرف الرواتب: ' + ((err as Error)?.message ?? ''))
     } finally {
+      // إبطال الكاش دائمًا (حتى عند الفشل الجزئي) كي تُقرأ حالة "مدفوع" الحقيقية قبل أي إعادة محاولة — يمنع الخصم المزدوج
+      await queryClient.invalidateQueries({ queryKey: ['payroll-data', month, year] })
       setPayingAll(false)
     }
   }
