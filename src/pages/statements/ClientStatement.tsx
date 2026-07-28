@@ -104,8 +104,9 @@ export default function ClientStatement() {
   const periodDebit = statement.reduce((s, l) => s + l.debit, 0)
   const periodCredit = statement.reduce((s, l) => s + l.credit, 0)
   const closingBalance = openingBalance + periodDebit - periodCredit
-  const totalDebit = useMemo(() => invoices.reduce((s, i) => s + Number(i.total), 0), [invoices])
-  const totalCredit = useMemo(() => receipts.reduce((s, r) => s + Number(r.amount), 0), [receipts])
+  // البطاقات والرسائل تحترم تاريخ «إلى» (تراكمي حتى تاريخ الكشف) كي يتطابق رصيدها مع رصيد التذييل
+  const totalDebit = useMemo(() => invoices.filter(i => !dateTo || i.issue_date <= dateTo).reduce((s, i) => s + Number(i.total), 0), [invoices, dateTo])
+  const totalCredit = useMemo(() => receipts.filter(r => !dateTo || r.receipt_date <= dateTo).reduce((s, r) => s + Number(r.amount), 0), [receipts, dateTo])
   const balance = totalDebit - totalCredit
 
   const overdueInvoices = useMemo(() => invoices.filter(inv =>
