@@ -66,7 +66,8 @@ async function fetchDashboardStats(): Promise<Stats> {
     safe(supabase.from('workers').select('id').eq('status', 'active')),
     safe(supabase.from('accounts_payable').select('amount').gte('entry_date', monthStart).lte('entry_date', monthEnd)),
     safe(supabase.from('lpos').select('total').eq('status', 'approved')),
-    safe(supabase.from('project_milestones').select('id, project_id, name, amount, status').in('status', ['pending', 'in_progress', 'completed']).order('sort_order').limit(6)),
+    // بلا حدّ على الخادم: فلترة المشاريع النشطة تجري بعد الجلب، فحدّ الستّة قبلها قد يستبعدها كلها ويُظهر «لا مراحل» خطأً — الحدّ في العرض (slice) بعد الفلترة
+    safe(supabase.from('project_milestones').select('id, project_id, name, amount, status').in('status', ['pending', 'in_progress', 'completed']).order('sort_order')),
     safe(supabase.from('daily_logs').select('id, project_id, log_date, description').order('log_date', { ascending: false }).limit(5)),
     safe(supabase.from('project_milestones').select('project_id, amount, status')),
     safe(supabase.from('accounts_payable').select('project_id, amount')),
