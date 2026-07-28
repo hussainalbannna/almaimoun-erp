@@ -13,7 +13,7 @@ import type {
 } from '../../types'
 import { formatDate, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
-import { resolveAttachmentUrl, isDataUrl } from '../../lib/storage'
+import { resolveAttachmentUrl, resolveAttachmentUrls, isDataUrl } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import Select from '../../components/ui/Select'
@@ -294,9 +294,9 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
       .then(async ({ data }) => {
         const docs = (data ?? []) as CustomDoc[]
         setCustomDocs(docs)
-        // توافق خلفي: base64 قديم يُعرض مباشرة، والمسار الجديد يُحوّل إلى رابط موقّع
-        const entries = await Promise.all(docs.map(async d => [d.id, (await resolveAttachmentUrl(d.file_url)) ?? ''] as const))
-        setCustomUrls(Object.fromEntries(entries))
+        // توافق خلفي: base64 قديم يُعرض مباشرة، والمسارات الجديدة تُوقَّع دفعة واحدة (بدل نداء لكل مستند)
+        const urlByVal = await resolveAttachmentUrls(docs.map(d => d.file_url))
+        setCustomUrls(Object.fromEntries(docs.map(d => [d.id, urlByVal.get(d.file_url) ?? ''])))
       })
   }, [workerId])
 
