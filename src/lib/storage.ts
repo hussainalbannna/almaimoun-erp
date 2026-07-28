@@ -105,6 +105,30 @@ export async function resolveAttachmentUrl(value?: string | null): Promise<strin
 }
 
 /**
+ * نسخة دفعية: توقّع كل مسارات Storage في نداء واحد (createSignedUrls) بدل نداء لكل ملف.
+ * تُعيد خريطة (القيمة الأصلية → رابط عرض). سجلّات base64 القديمة تُعاد كما هي.
+ * تُستخدم في الصفحات ذات الشبكات الصورية (الأصول/الوثائق) لتقليل الذهاب والإياب.
+ */
+export async function resolveAttachmentUrls(
+  values: (string | null | undefined)[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const paths: string[] = []
+  for (const v of values) {
+    if (!v) continue
+    if (isDataUrl(v)) out.set(v, v) // base64 قديم — يُعرض مباشرة بلا توقيع
+    else if (!paths.includes(v)) paths.push(v) // مسار Storage — نجمعه لتوقيع دفعة واحدة
+  }
+  if (paths.length > 0) {
+    const { data } = await supabase.storage.from(BUCKET).createSignedUrls(paths, SIGNED_URL_TTL)
+    for (const item of data ?? []) {
+      if (item.path && item.signedUrl) out.set(item.path, item.signedUrl)
+    }
+  }
+  return out
+}
+
+/**
  * حذف ملف واحد أو عدة ملفات من Storage عبر مساراتها.
  * يتجاهل القيم الفارغة وسجلّات base64 القديمة (لا مسار لها).
  */

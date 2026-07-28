@@ -9,7 +9,7 @@ import {
 import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntilOrNull, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile, hasApiKey, readDocumentText, extractJSON } from '../../lib/ai'
-import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
+import { uploadDataUrl, resolveAttachmentUrl, resolveAttachmentUrls, deleteAttachment } from '../../lib/storage'
 import Button from '../../components/ui/Button'
 import Badge, { type BadgeColor } from '../../components/ui/Badge'
 import Input from '../../components/ui/Input'
@@ -401,10 +401,12 @@ export default function AssetList() {
     let cancelled = false
     ;(async () => {
       const withCover = assets.filter(a => a.cover_image_path)
-      const entries = await Promise.all(
-        withCover.map(async a => [a.id, await resolveAttachmentUrl(a.cover_image_path)] as const)
-      )
-      if (!cancelled) setCoverUrls(Object.fromEntries(entries.filter(([, u]) => !!u) as [string, string][]))
+      // توقيع كل روابط الأغلفة في نداء واحد (بدل نداء لكل أصل) ثم ربطها بمعرّف الأصل
+      const urlByPath = await resolveAttachmentUrls(withCover.map(a => a.cover_image_path))
+      const entries = withCover
+        .map(a => [a.id, urlByPath.get(a.cover_image_path!) ?? ''] as const)
+        .filter(([, u]) => !!u)
+      if (!cancelled) setCoverUrls(Object.fromEntries(entries as [string, string][]))
     })()
     return () => { cancelled = true }
   }, [assets])
