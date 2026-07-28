@@ -259,51 +259,17 @@ export default function ProjectDetail() {
     }
     setGeneratingId(milestone.id);
     try {
-      const { data: gen, error: genErr } = await supabase.rpc('next_invoice_number', { p_prefix: 'INV' });
-      if (genErr || !gen) throw new Error('تعذّر توليد رقم الفاتورة');
-      const nextNum = String(gen);
-
-      const amount = Number(milestone.amount);
-
-      const { data: inv, error } = await supabase
-        .from('invoices')
-        .insert({
-          invoice_number: nextNum,
-          customer_id: project.client_id,
-          customer_name: project.client_name,
-          project_id: project.id,
-          milestone_id: milestone.id,
-          issue_date: today(),
-          status: 'draft',
-          subtotal: amount,
-          tax_rate: 0,        // البناء الجديد معفى من الضريبة (صفر)
-          tax_amount: 0,      // لا ضريبة
-          discount: 0,
-          total: amount,      // الإجمالي = المبلغ بدون ضريبة
-          notes: `فاتورة مرحلة: ${milestone.name}`
-        })
-        .select()
-        .single();
-
+      // دالة قاعدة بيانات ذرّية: رقم + رأس الفاتورة + بندها + تحديث حالة المرحلة في معاملة واحدة
+      // (أي فشل يُلغي كل شيء — لا فاتورة بلا بنود ولا مرحلة معلّقة ولا فاتورة مكرّرة). تقرأ المرحلة/المشروع من القاعدة.
+      const { error } = await supabase.rpc('generate_milestone_invoice', { p_milestone_id: milestone.id, p_prefix: 'INV' });
       if (error) throw error;
-
-      await supabase.from('invoice_items').insert({
-        invoice_id: inv.id,
-        description: milestone.name,
-        quantity: 1,
-        unit_price: amount,
-        total: amount
-      });
-
-      await supabase
-        .from('project_milestones')
-        .update({ status: 'invoiced', invoice_id: inv.id })
-        .eq('id', milestone.id);
-
       toast.success('تم إنشاء الفاتورة بنجاح كمسودة (معفاة من الضريبة)');
       load();
     } catch (e) {
-      toast.error('حدث خطأ أثناء إصدار الفاتورة');
+      const msg = (e as { message?: string })?.message ?? '';
+      toast.error(msg.includes('MILESTONE_ALREADY_INVOICED')
+        ? 'هذه المرحلة لها فاتورة بالفعل'
+        : 'حدث خطأ أثناء إصدار الفاتورة');
     } finally {
       setGeneratingId(null);
     }
