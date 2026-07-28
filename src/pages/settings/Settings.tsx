@@ -55,13 +55,16 @@ export default function Settings() {
 
   const handleSave = async () => {
     setLoading(true)
-    const payload = { ...form, updated_at: new Date().toISOString() }
+    // نُرسل الحقول القابلة للتحرير فقط ونستبعد id/created_at (يديرهما الجدول) لتفادي إعادة الكتابة عليهما
+    const payload: Record<string, unknown> = { ...form, updated_at: new Date().toISOString() }
+    delete payload.id
+    delete payload.created_at
     const { error } = settingsId
       ? await supabase.from('company_settings').update(payload).eq('id', settingsId)
       : await supabase.from('company_settings').insert(payload)
     setLoading(false)
     if (error) { toast.error('حدث خطأ أثناء الحفظ'); return }
-    queryClient.invalidateQueries({ queryKey: ['company-settings'] })
+    await queryClient.invalidateQueries({ queryKey: ['company-settings'] })
     toast.success('تم حفظ الإعدادات')
   }
 
