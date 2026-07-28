@@ -109,7 +109,10 @@ export default function WorkerForm() {
       }
       // العامل يؤثّر على قائمة العمال وكشف الرواتب وتكلفة عمالة المشاريع
       queryClient.invalidateQueries({ queryKey: ['workers-list'] })
-      queryClient.invalidateQueries({ queryKey: ['payroll-workers'] })
+      queryClient.invalidateQueries({ queryKey: ['payroll-data'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['reports-data'] })
       if (isEdit) queryClient.invalidateQueries({ queryKey: ['worker', id] })
       toast.success(isEdit ? 'تم تحديث بيانات العامل' : 'تم إضافة العامل')
       navigate('/workers')

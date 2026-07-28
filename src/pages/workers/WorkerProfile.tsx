@@ -106,9 +106,11 @@ export default function WorkerProfile() {
     else {
       toast.success('تم حفظ البيانات')
       setWorker({ ...worker!, ...form } as Worker)
-      // تحديث قائمة العمال وكشف الرواتب في باقي الصفحات
+      // تحديث قائمة العمال وكشف الرواتب واللوحة والمالية في باقي الصفحات
       queryClient.invalidateQueries({ queryKey: ['workers-list'] })
-      queryClient.invalidateQueries({ queryKey: ['payroll-workers'] })
+      queryClient.invalidateQueries({ queryKey: ['payroll-data'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] })
     }
     setSaving(false)
   }
@@ -582,13 +584,19 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
   const [loanForm, setLoanForm] = useState({ loan_amount: 0, monthly_installment: 0, loan_date: todayLocal(), notes: '' })
   const [addingAdv, setAddingAdv] = useState(false)
   const [addingLoan, setAddingLoan] = useState(false)
+  // إبطال كشف الرواتب فور أي تغيير مالي كي تُخصم السلف/الأقساط في الكشف مباشرة (لا انتظار 5 دقائق)
+  const queryClient = useQueryClient()
 
   const handleAddAdvance = async () => {
     if (!advForm.amount || advForm.amount <= 0) { toast.error('يجب إدخال المبلغ'); return }
     setAddingAdv(true)
     const { data, error } = await supabase.from('worker_advances').insert({ ...advForm, worker_id: workerId }).select().single()
     if (error) toast.error('حدث خطأ')
-    else { setAdvances(prev => [data as WorkerAdvance, ...prev]); toast.success('تم تسجيل السلفة') }
+    else {
+      setAdvances(prev => [data as WorkerAdvance, ...prev])
+      queryClient.invalidateQueries({ queryKey: ['payroll-data'] })
+      toast.success('تم تسجيل السلفة')
+    }
     setAdvForm({ amount: 0, advance_date: todayLocal(), notes: '' })
     setAddingAdv(false)
   }
@@ -600,14 +608,20 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
     const payload = { ...loanForm, worker_id: workerId, remaining_balance: loanForm.loan_amount, status: 'active' }
     const { data, error } = await supabase.from('worker_loans').insert(payload).select().single()
     if (error) toast.error('حدث خطأ')
-    else { setLoans(prev => [data as WorkerLoan, ...prev]); toast.success('تم تسجيل القرض') }
+    else {
+      setLoans(prev => [data as WorkerLoan, ...prev])
+      queryClient.invalidateQueries({ queryKey: ['payroll-data'] })
+      toast.success('تم تسجيل القرض')
+    }
     setLoanForm({ loan_amount: 0, monthly_installment: 0, loan_date: todayLocal(), notes: '' })
     setAddingLoan(false)
   }
 
   const toggleAdvDeducted = async (adv: WorkerAdvance) => {
-    await supabase.from('worker_advances').update({ deducted: !adv.deducted }).eq('id', adv.id)
+    const { error } = await supabase.from('worker_advances').update({ deducted: !adv.deducted }).eq('id', adv.id)
+    if (error) { toast.error('تعذّر التحديث'); return }
     setAdvances(prev => prev.map(a => a.id === adv.id ? { ...a, deducted: !a.deducted } : a))
+    queryClient.invalidateQueries({ queryKey: ['payroll-data'] })
   }
 
   const totalPendingAdvances = advances.filter(a => !a.deducted).reduce((s, a) => s + Number(a.amount), 0)
