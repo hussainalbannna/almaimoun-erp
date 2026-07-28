@@ -5,6 +5,7 @@ import { ArrowLeft, Printer, CheckCircle, ShieldCheck, Wallet, Save, Users } fro
 import { supabase } from '../../lib/supabase'
 import type { Worker, WorkerAdvance } from '../../types'
 import { formatCurrency } from '../../lib/utils'
+import { workerFullSalary } from '../../lib/finance'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
 
@@ -253,8 +254,8 @@ export default function PayrollDashboard() {
     const newAdvance = parseFloat(e.newAdvance) || 0
     const pendingAdv = w.advances.reduce((s, a) => s + Number(a.amount), 0)
     // الأجر اليومي مصدره سجل العامل — نفس القيمة التي يستخدمها workerDayCost لتكلفة المشروع
-    // عامل الشركة: الراتب الفعلي إن سُجّل، وإلا الأساسي + البدل الاجتماعي (نفس احتياطي finance.ts، يمنع صافيًا صفرًا/سالبًا)
-    const companySalary = Number(w.actual_salary) || (Number(w.basic_salary) + Number(w.social_allowance))
+    // عامل الشركة: الراتب الفعلي إن سُجّل، وإلا الأساسي + البدل الاجتماعي — المصدر الموحّد workerFullSalary (لا تكرار)
+    const companySalary = workerFullSalary(w)
     const base = isLmra ? (parseFloat(e.dailyRate) || Number(w.daily_rate) || 0) * e.presentDays.length : companySalary
     // قسط القروض المستحقّ هذا الشهر = مجموع أقساط القروض النشطة (كل قسط مسقوف بالمتبقّي كي لا يتجاوزه)
     const loanDue = w.loans.reduce((s, l) => s + Math.min(l.monthly_installment, l.remaining_balance), 0)
