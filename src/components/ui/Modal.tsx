@@ -41,7 +41,8 @@ export function useModalBehavior(
   // حبس التركيز داخل النافذة: Tab/Shift+Tab يدور بين عناصرها ولا يهرب لعناصر الخلفية
   useEffect(() => {
     if (!open) return
-    const container = focusRef?.current
+    // الحاوية = أقرب سلف role="dialog" (في ConfirmDialog يشير focusRef لزرّ لا للنافذة، فنشتقّها بدل استخدامه مباشرة)
+    const container = focusRef?.current?.closest<HTMLElement>('[role="dialog"]')
     if (!container) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return
