@@ -47,7 +47,8 @@ export default function InvoiceView() {
   }
 
   const markAsPaid = async () => {
-    await supabase.from('invoices').update({ status: 'paid', updated_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await supabase.from('invoices').update({ status: 'paid', updated_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast.error('تعذّر تحديث الحالة إلى مدفوعة'); return }
     invalidateInvoice()
     toast.success('تم تحديث الحالة إلى مدفوعة')
   }
@@ -55,7 +56,8 @@ export default function InvoiceView() {
   const markAsSent = async () => {
     // لا نُرجِع فاتورة مدفوعة/ملغاة إلى «مرسلة» عند إعادة الإرسال (بريد/واتساب) — منع انحدار الحالة
     if (invoice?.status === 'paid' || invoice?.status === 'cancelled') { invalidateInvoice(); return }
-    await supabase.from('invoices').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await supabase.from('invoices').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast.error('تعذّر تحديث حالة الفاتورة إلى «مرسلة»'); return }
     invalidateInvoice()
   }
 
