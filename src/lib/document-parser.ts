@@ -603,7 +603,11 @@ export function extractFieldsFromText(text: string): ExtractedDocumentData {
     if (durMatch) {
       const months = parseInt(durMatch[1])
       const start = new Date(data.start_date)
+      const day = start.getDate()
+      start.setDate(1)                                 // تجنّب تجاوز الشهر أثناء الإضافة
       start.setMonth(start.getMonth() + months)
+      const lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate()
+      start.setDate(Math.min(day, lastDay))            // ثبّت آخر يوم الشهر إن تجاوزه اليوم الأصلي
       data.end_date = start.toISOString().slice(0, 10)
     }
   }

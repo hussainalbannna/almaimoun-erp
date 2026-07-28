@@ -133,7 +133,11 @@ interface AssetInstallment {
 
 const addMonths = (dateStr: string, delta: number): string => {
   const d = dateStr ? new Date(dateStr) : new Date()
+  const targetDay = d.getDate()
+  d.setDate(1)                             // تجنّب التجاوز أثناء تغيير الشهر (31 → الشهر التالي)
   d.setMonth(d.getMonth() + delta)
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  d.setDate(Math.min(targetDay, lastDay))  // ثبّت آخر يوم الشهر إن تجاوزه اليوم الأصلي (31 يناير + شهر = آخر فبراير)
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
 }
@@ -1152,14 +1156,14 @@ export default function AssetList() {
     if (a.paid_installments >= a.total_installments) { toast.error('تم سداد جميع الأقساط'); return }
     setPayingId(a.id)
     try {
-      const nextDate = a.next_installment_date ? new Date(a.next_installment_date) : new Date()
-      nextDate.setMonth(nextDate.getMonth() + 1)
+      // القسط القادم = الشهر التالي مع تثبيت آخر يوم الشهر (addMonths يتجنّب تجاوز 31 يناير → مارس)
+      const nextDateStr = addMonths(a.next_installment_date || todayLocal(), 1)
       // القسط الأخير ⇐ لا قسط قادم (null) كي لا يظهر «قسط قادم» وهمي لأصل مسدَّد بالكامل
       const isLastInstallment = a.total_installments > 0 && a.paid_installments + 1 >= a.total_installments
       const today = todayLocal()
       const { error } = await supabase.from('assets').update({
         paid_installments: a.paid_installments + 1,
-        next_installment_date: isLastInstallment ? null : nextDate.toISOString().slice(0, 10),
+        next_installment_date: isLastInstallment ? null : nextDateStr,
       }).eq('id', a.id)
       if (error) { toast.error('تعذّر تحديث الأصل'); return }
       if (Number(a.monthly_installment) > 0) {
