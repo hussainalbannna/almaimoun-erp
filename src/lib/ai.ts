@@ -163,7 +163,7 @@ export function extractJSON<T = Record<string, unknown>>(text: string): T | null
 // ─── فتح/تنزيل ملف من data URL أو رابط ──────────────────────────────────
 export function openStoredFile(fileUrl: string, fileType?: string): void {
   if (!fileUrl) return
-  if (!fileUrl.startsWith('data:')) { window.open(fileUrl, '_blank'); return }
+  if (!fileUrl.startsWith('data:')) { window.open(fileUrl, '_blank', 'noopener'); return }
   try {
     const [head, b64] = fileUrl.split(',')
     const mime = head.match(/:(.*?);/)?.[1] || fileType || 'application/octet-stream'
@@ -173,9 +173,9 @@ export function openStoredFile(fileUrl: string, fileType?: string): void {
     while (n--) u8[n] = bin.charCodeAt(n)
     const blob = new Blob([u8], { type: mime })
     const url = URL.createObjectURL(blob)
-    window.open(url, '_blank')
+    window.open(url, '_blank', 'noopener')
     setTimeout(() => URL.revokeObjectURL(url), 60_000)
   } catch {
-    window.open(fileUrl, '_blank')
+    window.open(fileUrl, '_blank', 'noopener')
   }
 }
