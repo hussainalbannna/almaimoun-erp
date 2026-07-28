@@ -202,17 +202,31 @@ export default function LPOForm() {
     }
 
     if (isEdit) {
-      const { error } = await supabase.from('lpos').update(payload).eq('id', id)
-      if (error) { toast.error('حدث خطأ'); setLoading(false); return }
-
       const validItems = items.filter(i => i.description.trim())
       // معرّفات البنود التي أبقاها المستخدم (كانت موجودة أصلاً)
       const keepIds = validItems.map(i => (i as LPOItem).id).filter(Boolean) as string[]
 
-      // احذف فقط البنود التي أزالها المستخدم فعلاً — لا نحذف الكل كي لا تُمسح سجلات التسليم المرتبطة (CASCADE)
+      // البنود التي أزالها المستخدم — نحسبها ونتحقق منها قبل أي كتابة
       const { data: currentRows } = await supabase.from('lpo_items').select('id').eq('lpo_id', id)
       const toDelete = ((currentRows ?? []) as { id: string }[]).map(r => r.id).filter(cid => !keepIds.includes(cid))
-      if (toDelete.length) await supabase.from('lpo_items').delete().in('id', toDelete)
+
+      // امنع حذف بند له سجلات تسليم (حذفه يُسقطها بالـ CASCADE صامتًا) — قبل تعديل رأس الأمر كي لا يُحفظ شيء عند المنع
+      if (toDelete.length) {
+        const { data: withDeliv } = await supabase.from('lpo_delivery_items').select('lpo_item_id').in('lpo_item_id', toDelete)
+        if (((withDeliv ?? []) as unknown[]).length > 0) {
+          toast.error('لا يمكن حذف بند له تسليمات مسجّلة. احذف تسليماته أولاً أو أبقِ البند كما هو.')
+          setLoading(false); return
+        }
+      }
+
+      const { error } = await supabase.from('lpos').update(payload).eq('id', id)
+      if (error) { toast.error('حدث خطأ'); setLoading(false); return }
+
+      // احذف البنود المُزالة (تأكّدنا أعلاه أنها بلا تسليمات) مع فحص الخطأ
+      if (toDelete.length) {
+        const { error: delItemsErr } = await supabase.from('lpo_items').delete().in('id', toDelete)
+        if (delItemsErr) { toast.error('تعذّر حذف بنود أمر الشراء: ' + delItemsErr.message); setLoading(false); return }
+      }
 
       // حدّث الموجود بمعرّفه (يحافظ على ارتباط سجلات التسليم) وأدرج الجديد — مع فحص خطأ كل بند لمنع حفظ ناقص صامت
       for (const [idx, item] of validItems.entries()) {
