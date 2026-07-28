@@ -641,8 +641,11 @@ export default function DailyLogList() {
       }
       // صف التقرير محفوظ الآن ومعه مسارات الصور → لا نحذف الصور بعد هذه النقطة مهما فشل لاحقاً
       rowSaved = true
-      for (const wid of selectedWorkers) {
-        await supabase.from('daily_log_workers').insert({ log_id: logId, worker_id: wid })
+      // إدراج عمّال التقرير دفعة واحدة (بدل إدراج لكل عامل — تقليل الذهاب والإياب)
+      if (selectedWorkers.length) {
+        const { error: dlwErr } = await supabase.from('daily_log_workers')
+          .insert(selectedWorkers.map(wid => ({ log_id: logId, worker_id: wid })))
+        if (dlwErr) throw dlwErr
       }
       await syncAttendance(logId, form.log_date, form.project_id, selectedWorkers)
 
