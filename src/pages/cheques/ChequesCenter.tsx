@@ -186,7 +186,8 @@ export default function ChequesCenter() {
         || c.status === 'bounced'
       )
     } else if (tab === 'pending') {
-      list = list.filter(c => c.status === 'pending' && c.cheque_type !== 'guarantee')
+      // استبعاد الوارد ليطابق العدّاد تمامًا (الوارد مستحقّ لك، لا التزام معلّق)
+      list = list.filter(c => c.status === 'pending' && c.cheque_type !== 'guarantee' && c.direction !== 'incoming')
     } else if (tab === 'guarantee') {
       list = list.filter(c => c.cheque_type === 'guarantee')
     }
