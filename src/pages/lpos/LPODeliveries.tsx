@@ -26,10 +26,15 @@ async function fetchLPODeliveries(id: string): Promise<LPODeliveriesData> {
     supabase.from('lpo_deliveries').select('*').eq('lpo_id', id).order('delivery_number'),
   ])
   const dels = (delRes.data ?? []) as LPODelivery[]
-  const deliveries = await Promise.all(dels.map(async d => {
-    const { data: diData } = await supabase.from('lpo_delivery_items').select('*').eq('delivery_id', d.id)
-    return { ...d, items: (diData ?? []) as LPODeliveryItem[] }
-  }))
+  // بنود كل التسليمات في استعلام واحد (بدل استعلام لكل تسليم — N+1) ثم نجمّعها في الذاكرة
+  const { data: diData } = await supabase.from('lpo_delivery_items').select('*').in('delivery_id', dels.map(d => d.id))
+  const itemsByDelivery = new Map<string, LPODeliveryItem[]>()
+  for (const di of (diData ?? []) as LPODeliveryItem[]) {
+    const arr = itemsByDelivery.get(di.delivery_id) ?? []
+    arr.push(di)
+    itemsByDelivery.set(di.delivery_id, arr)
+  }
+  const deliveries = dels.map(d => ({ ...d, items: itemsByDelivery.get(d.id) ?? [] }))
   return {
     lpo: (lpoRes.data as LPO) ?? null,
     items: (itemsRes.data ?? []) as LPOItem[],
