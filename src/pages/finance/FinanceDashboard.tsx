@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { TrendingUp, TrendingDown, PieChart, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
+import { TrendingUp, TrendingDown, PieChart, ArrowUpCircle, ArrowDownCircle, Wallet, AlertTriangle, Clock, ShieldCheck } from 'lucide-react'
 import { safeSelect } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
-import { workerDayCost, fetchCheques, computePendingChequeSets } from '../../lib/finance'
+import { workerDayCost, fetchCheques, computePendingChequeSets, computeCashPosition, type CashPosition } from '../../lib/finance'
 
 interface Row { amount: number; date: string; category?: string; label?: string }
 
@@ -39,8 +39,9 @@ interface WorkerRow { id: string; pay_type: string | null; daily_rate: number | 
 interface OtRow { overtime: number | null; month: number | null; year: number | null }
 interface RentalPayRow { amount: number | null; payment_date: string | null; payment_method: string | null }
 
-interface FinanceData { income: Row[]; expenses: Row[] }
-const EMPTY_DATA: FinanceData = { income: [], expenses: [] }
+interface FinanceData { income: Row[]; expenses: Row[]; cash: CashPosition }
+const EMPTY_CASH: CashPosition = { pendingChequesTotal: 0, guaranteeChequesTotal: 0, dueWithin7Days: 0, overduePending: 0 }
+const EMPTY_DATA: FinanceData = { income: [], expenses: [], cash: EMPTY_CASH }
 
 // جلب وبناء الإيرادات (المقبوضات) والمصروفات (الصندوق + المشتريات + الباطن + رواتب العمالة من الحضور + الأوفرتايم) — مصدر React Query
 async function fetchFinanceData(): Promise<FinanceData> {
@@ -87,7 +88,9 @@ async function fetchFinanceData(): Promise<FinanceData> {
       .filter(rp => rp.payment_method !== 'deferred_cheque')
       .map(rp => ({ amount: Number(rp.amount) || 0, date: rp.payment_date || '', category: 'rent' })),
   ]
-  return { income, expenses }
+  // مركز السيولة — لقطة لحظية لالتزامات الشيكات الصادرة المعلّقة (مستقلة عن فلتر الفترة)
+  const cash = computeCashPosition(cheques)
+  return { income, expenses, cash }
 }
 
 export default function FinanceDashboard() {
@@ -180,6 +183,52 @@ export default function FinanceDashboard() {
               </div>
               <div className="text-2xl font-bold" style={{ color: net >= 0 ? '#16a34a' : '#dc2626' }}>{formatCurrency(net)}</div>
               <div className="text-xs mt-1" style={{ color: net >= 0 ? '#15803d' : '#b91c1c' }}>هامش الربح: {margin.toFixed(1)}%</div>
+            </div>
+          </div>
+
+          {/* مركز السيولة — التزامات الشيكات الصادرة المعلّقة (لقطة لحظية، مستقلة عن الفترة) */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6">
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <Wallet size={18} className="text-amber-700" />
+              <h2 className="font-semibold text-slate-700">مركز السيولة — التزامات الشيكات المعلّقة</h2>
+              <span className="text-xs text-slate-400">(لقطة حالية، لا تتأثر بفلتر الفترة)</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-amber-800">إجمالي الشيكات الآجلة المعلّقة</span>
+                  <ArrowDownCircle size={18} className="text-amber-600" />
+                </div>
+                <div className="text-xl font-bold text-amber-700">{formatCurrency(data.cash.pendingChequesTotal)}</div>
+                <div className="text-xs text-amber-700/70 mt-1">التزامات قادمة على الصندوق</div>
+              </div>
+
+              <div className="rounded-xl border p-4" style={{ borderColor: data.cash.overduePending > 0 ? '#fecaca' : '#e2e8f0', background: data.cash.overduePending > 0 ? '#fef2f2' : '#f8fafc' }}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs" style={{ color: data.cash.overduePending > 0 ? '#b91c1c' : '#64748b' }}>استحقّت ولم تُصرف</span>
+                  <AlertTriangle size={18} style={{ color: data.cash.overduePending > 0 ? '#dc2626' : '#94a3b8' }} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: data.cash.overduePending > 0 ? '#dc2626' : '#334155' }}>{formatCurrency(data.cash.overduePending)}</div>
+                <div className="text-xs mt-1" style={{ color: data.cash.overduePending > 0 ? '#b91c1c' : '#94a3b8' }}>{data.cash.overduePending > 0 ? 'تحتاج تسوية فورية' : 'لا متأخرات'}</div>
+              </div>
+
+              <div className="rounded-xl border border-orange-200 bg-orange-50 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-orange-800">تستحق خلال 7 أيام</span>
+                  <Clock size={18} className="text-orange-500" />
+                </div>
+                <div className="text-xl font-bold text-orange-600">{formatCurrency(data.cash.dueWithin7Days)}</div>
+                <div className="text-xs text-orange-600/70 mt-1">جهّز السيولة اللازمة</div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-slate-600">شيكات ضمان قائمة</span>
+                  <ShieldCheck size={18} className="text-slate-400" />
+                </div>
+                <div className="text-xl font-bold text-slate-700">{formatCurrency(data.cash.guaranteeChequesTotal)}</div>
+                <div className="text-xs text-slate-400 mt-1">غير مطالَبة عادةً</div>
+              </div>
             </div>
           </div>
 
