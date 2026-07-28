@@ -106,7 +106,7 @@ function buildPrintHTML(logs: PrintLog[]): string {
     if (!photos?.length) return ''
     const items = photos.map(src => `
       <div style="break-inside:avoid;aspect-ratio:1;overflow:hidden;border-radius:6px;border:1px solid #e5d9c8;">
-        <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
+        <img src="${escHtml(src)}" style="width:100%;height:100%;object-fit:cover;" />
       </div>`).join('')
     return `
       <div class="section">
@@ -136,7 +136,7 @@ function buildPrintHTML(logs: PrintLog[]): string {
         </div>
         <div class="meta-item">
           <span class="meta-label">المشروع / العميل</span>
-          <span class="meta-value">${log.project_name ?? '—'}</span>
+          <span class="meta-value">${escHtml(log.project_name ?? '—')}</span>
         </div>
         ${log.weather ? `
         <div class="meta-item">
