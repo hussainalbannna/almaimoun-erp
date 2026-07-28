@@ -327,8 +327,9 @@ export default function PayrollDashboard() {
       })
       if (advError) throw advError
     }
-    // عند الصرف فقط: خصم السلف المعلّقة التي احتُسبت في صافي هذا الشهر
-    if (pay) {
+    // الخصم (سلف معلّقة + أقساط قروض) يحدث مرّة واحدة فقط عند أول صرف لهذا الشهر.
+    // شرط !w.paid يمنع الخصم المزدوج: أي صرف مكرّر لعامل مصروف سلفًا لا يُنقِص الرصيد ثانيةً.
+    if (pay && !w.paid) {
       for (const adv of w.advances) {
         const { error: dedErr } = await supabase.from('worker_advances').update({ deducted: true }).eq('id', adv.id)
         if (dedErr) throw dedErr
