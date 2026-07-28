@@ -113,11 +113,12 @@ export async function resolveAttachmentUrls(
   values: (string | null | undefined)[],
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>()
+  const seen = new Set<string>()
   const paths: string[] = []
   for (const v of values) {
     if (!v) continue
     if (isDataUrl(v)) out.set(v, v) // base64 قديم — يُعرض مباشرة بلا توقيع
-    else if (!paths.includes(v)) paths.push(v) // مسار Storage — نجمعه لتوقيع دفعة واحدة
+    else if (!seen.has(v)) { seen.add(v); paths.push(v) } // مسار Storage فريد — نجمعه لتوقيع دفعة واحدة (Set = O(n))
   }
   if (paths.length > 0) {
     const { data } = await supabase.storage.from(BUCKET).createSignedUrls(paths, SIGNED_URL_TTL)

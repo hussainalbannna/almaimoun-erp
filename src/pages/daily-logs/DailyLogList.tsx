@@ -343,7 +343,9 @@ async function fetchDailyLogsData(): Promise<DailyLogsData> {
   const projects = (pRes.data ?? []) as Project[]
   const workers = (wRes.data ?? []) as Worker[]
   const logData = (lRes.data ?? []) as LightLog[]
-  const logs = logData.map(l => ({ ...l, project_name: projects.find(p => p.id === l.project_id)?.project_name }))
+  // خريطة اسم المشروع (بناء مرة واحدة) بدل projects.find لكل تقرير — O(n) بدل O(تقارير×مشاريع)
+  const projectNameById = new Map(projects.map(p => [p.id, p.project_name]))
+  const logs = logData.map(l => ({ ...l, project_name: projectNameById.get(l.project_id) }))
   return { logs, projects, workers }
 }
 
@@ -718,8 +720,8 @@ export default function DailyLogList() {
       .select('worker_id')
       .eq('log_id', logId)
     if (!wData?.length) return []
-    const ids = wData.map((r: { worker_id: string }) => r.worker_id)
-    return workers.filter(w => ids.includes(w.id)).map(w => (w as Worker & { name_en?: string }).name_en || w.name)
+    const idSet = new Set(wData.map((r: { worker_id: string }) => r.worker_id))
+    return workers.filter(w => idSet.has(w.id)).map(w => (w as Worker & { name_en?: string }).name_en || w.name)
   }
 
   // معاينة: تفتح التقرير في تبويب جديد للاستعراض (مع زر طباعة عائم)

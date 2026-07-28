@@ -17,6 +17,10 @@ export default defineConfig({
           if (id.includes('tesseract')) return 'vendor-ocr'
           if (id.includes('xlsx')) return 'vendor-xlsx'
           if (id.includes('@supabase')) return 'vendor-supabase'
+          // فصل نواة React وأدواتها في حزم ثابتة كي لا يُبطل تعديلٌ في كود التطبيق كاشها طويل الأمد
+          if (id.includes('react-dom') || id.includes('/react/') || id.includes('/scheduler/') || id.includes('react-router')) return 'vendor-react'
+          if (id.includes('@tanstack')) return 'vendor-query'
+          if (id.includes('lucide-react')) return 'vendor-icons'
         },
       },
     },
