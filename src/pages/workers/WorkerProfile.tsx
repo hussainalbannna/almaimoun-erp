@@ -610,14 +610,6 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
     setAdvances(prev => prev.map(a => a.id === adv.id ? { ...a, deducted: !a.deducted } : a))
   }
 
-  const deductInstallment = async (loan: WorkerLoan) => {
-    const newBalance = Math.max(0, loan.remaining_balance - loan.monthly_installment)
-    const newStatus = newBalance <= 0 ? 'completed' : 'active'
-    await supabase.from('worker_loans').update({ remaining_balance: newBalance, status: newStatus }).eq('id', loan.id)
-    setLoans(prev => prev.map(l => l.id === loan.id ? { ...l, remaining_balance: newBalance, status: newStatus as 'active' | 'completed' } : l))
-    toast.success(`تم خصم ${loan.monthly_installment.toFixed(3)} د.ب`)
-  }
-
   const totalPendingAdvances = advances.filter(a => !a.deducted).reduce((s, a) => s + Number(a.amount), 0)
   const totalActiveLoans = loans.filter(l => l.status === 'active').reduce((s, l) => s + l.remaining_balance, 0)
 
@@ -691,7 +683,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
                     <span className="mr-2">— تاريخ: {formatDate(loan.loan_date)}</span>
                   </div>
                   {loan.status === 'active' && (
-                    <Button size="sm" variant="outline" onClick={() => deductInstallment(loan)}>خصم قسط</Button>
+                    <span className="text-xs text-purple-600 font-medium">يُخصم قسطه تلقائيًا من كشف الرواتب</span>
                   )}
                 </div>
                 {/* Progress bar */}
