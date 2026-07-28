@@ -586,7 +586,7 @@ export default function PayrollDashboard() {
               {/* عمال الهيئة المسجّلون */}
               <tbody className="divide-y divide-slate-50">
                 {lmraWorkers.map(w => {
-                  const { e, pendingAdv, base, net } = liveRow(w)
+                  const { e, pendingAdv, loanDue, base, net } = liveRow(w)
                   const rate = parseFloat(e.dailyRate) || 0
                   const paid = paidIds.has(w.id)
                   return (
@@ -627,6 +627,9 @@ export default function PayrollDashboard() {
                         <div className="flex flex-col items-center gap-1">
                           {pendingAdv > 0 && (
                             <span className="text-xs text-red-600 font-medium">معلّق: {pendingAdv.toFixed(3)}</span>
+                          )}
+                          {loanDue > 0 && (
+                            <span className="text-xs text-purple-600 font-medium">قسط قرض: {loanDue.toFixed(3)}</span>
                           )}
                           <input type="number" step="0.001" dir="ltr" placeholder="سلفة جديدة" value={e.newAdvance}
                             onChange={ev => setEdit(w.id, 'newAdvance', ev.target.value)}
@@ -698,7 +701,7 @@ export default function PayrollDashboard() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {branchWorkers.map(w => {
-                  const { e, pendingAdv, base, net } = liveRow(w)
+                  const { e, pendingAdv, loanDue, base, net } = liveRow(w)
                   const paid = paidIds.has(w.id)
                   return (
                     <tr key={w.id} className={`hover:bg-slate-50/50 ${paid ? 'bg-green-50/30' : ''}`}>
@@ -724,6 +727,9 @@ export default function PayrollDashboard() {
                         <div className="flex flex-col items-center gap-1">
                           {pendingAdv > 0 && (
                             <span className="text-xs text-red-600 font-medium">معلّق: {pendingAdv.toFixed(3)}</span>
+                          )}
+                          {loanDue > 0 && (
+                            <span className="text-xs text-purple-600 font-medium">قسط قرض: {loanDue.toFixed(3)}</span>
                           )}
                           <input type="number" step="0.001" dir="ltr" placeholder="سلفة جديدة" value={e.newAdvance}
                             onChange={ev => setEdit(w.id, 'newAdvance', ev.target.value)}
