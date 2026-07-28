@@ -471,30 +471,26 @@ export default function PurchaseInvoiceForm() {
       invoiceId = (data as { id: string }).id
     }
 
-    // إعادة بناء بيانات التوصيل (نحذف القديمة ثم ندرج الصالحة بمساراتها)
-    // نقرأ مسارات صور التوصيل القديمة قبل الحذف لتنظيف ما لم يعد مستخدماً منها لاحقاً
+    // إعادة بناء بيانات التوصيل ذرًياً (حذف القديمة + إدراج الجديدة في معاملة واحدة عبر RPC — لا فقدان للقديمة عند الفشل)
+    // نقرأ مسارات صور التوصيل القديمة أولاً لتنظيف ما لم يعد مستخدماً منها لاحقاً
     let oldDeliveryPaths: string[] = []
     if (isEdit) {
       const { data: oldDel } = await supabase.from('purchase_invoice_deliveries').select('delivery_image_path').eq('purchase_invoice_id', id)
       oldDeliveryPaths = (oldDel ?? []).map(r => (r as { delivery_image_path?: string }).delivery_image_path ?? '').filter(Boolean)
-      await supabase.from('purchase_invoice_deliveries').delete().eq('purchase_invoice_id', id)
     }
     const deliveryPayload = deliveries
       .map((d, i) => ({ d, path: deliveryPaths[i] ?? '' }))
       .filter(({ d, path }) => d.delivery_note_number.trim() || path || d.notes.trim())
       .map(({ d, path }) => ({
-        purchase_invoice_id: invoiceId,
         delivery_note_number: d.delivery_note_number,
         delivery_image_path: path,
         notes: d.notes,
       }))
-    if (deliveryPayload.length > 0) {
-      const { error: delErr } = await supabase.from('purchase_invoice_deliveries').insert(deliveryPayload)
-      if (delErr) {
-        // الفاتورة حُفظت (ومرفقاتها مرتبطة بها) → ننظّف فقط صور التوصيل المرفوعة حديثاً التي لم تُربط
-        await deleteAttachment(newDeliveryUploads).catch(() => {})
-        toast.error('حُفظت الفاتورة، لكن تعذّر حفظ بيانات التوصيل: ' + delErr.message); setSaving(false); navigate('/purchases'); return
-      }
+    const { error: delErr } = await supabase.rpc('replace_purchase_deliveries', { p_invoice_id: invoiceId, p_deliveries: deliveryPayload })
+    if (delErr) {
+      // الفاتورة حُفظت (ومرفقاتها مرتبطة بها) → ننظّف فقط صور التوصيل المرفوعة حديثاً التي لم تُربط
+      await deleteAttachment(newDeliveryUploads).catch(() => {})
+      toast.error('حُفظت الفاتورة، لكن تعذّر حفظ بيانات التوصيل: ' + delErr.message); setSaving(false); navigate('/purchases'); return
     }
 
     // تنظيف التخزين بعد نجاح الحفظ: حذف المرفقات القديمة التي استُبدلت أو أُزيلت كي لا تبقى يتيمة
