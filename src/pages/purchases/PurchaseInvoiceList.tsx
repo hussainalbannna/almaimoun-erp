@@ -234,9 +234,11 @@ export default function PurchaseInvoiceList() {
   // شيك آجل لم يُصرف بعد — الحقيقة من جدول cheques (لا من التاريخ) كي يختفي المصروف فورًا من القائمة
   const isUncashedCheque = (inv: InvoiceRow) => inv.payment_method === 'deferred_cheque' && pendingChequeIds.has(inv.id)
   const totalAmount = invoices.reduce((s, inv) => s + num(inv.amount), 0)
-  const pendingCheques = invoices.filter(inv => isUncashedCheque(inv) && inv.check_due_date && inv.check_due_date > today)
+  // «المعلّق» = كل شيك آجل لم يُصرف (المصدر: جدول cheques) — بلا شرط تاريخ، فالمتأخّر والمستحق اليوم لا يزالان دَينًا لم يُدفع
+  const pendingCheques = invoices.filter(isUncashedCheque)
   const pendingChequesTotal = pendingCheques.reduce((s, inv) => s + num(inv.amount), 0)
-  const soonCheques = pendingCheques.filter(inv => daysUntil(inv.check_due_date!) <= 7)
+  // «قريب» = يستحق خلال 7 أيام أو تأخّر (لتجهيز الرصيد) — التاريخ للتصنيف فقط لا للاحتساب
+  const soonCheques = pendingCheques.filter(inv => inv.check_due_date && daysUntil(inv.check_due_date) <= 7)
   const soonChequesTotal = soonCheques.reduce((s, inv) => s + num(inv.amount), 0)
   const recoverableVAT = invoices.reduce((s, inv) => s + invTax(inv), 0)
   const totalSubtotal = invoices.reduce((s, inv) => s + invSubtotal(inv), 0)
