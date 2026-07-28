@@ -40,14 +40,17 @@ export default function ProjectList() {
     if (!deleteId) return
     // حماية: امنع حذف مشروع له فواتير/إيصالات/أوامر تغيير مرتبطة —
     // الحذف يُيتّم الفواتير والإيصالات (SET NULL) ويمحو أوامر التغيير والمراحل والتقارير اليومية بالـ CASCADE
-    const [inv, rec, vo] = await Promise.all([
+    const [inv, rec, vo, pi, sp, rn] = await Promise.all([
       supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
       supabase.from('receipts').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
       supabase.from('variation_orders').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
+      supabase.from('purchase_invoices').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
+      supabase.from('subcontractor_payments').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
+      supabase.from('rentals').select('id', { count: 'exact', head: true }).eq('project_id', deleteId),
     ])
-    const linked = (inv.count ?? 0) + (rec.count ?? 0) + (vo.count ?? 0)
+    const linked = (inv.count ?? 0) + (rec.count ?? 0) + (vo.count ?? 0) + (pi.count ?? 0) + (sp.count ?? 0) + (rn.count ?? 0)
     if (linked > 0) {
-      toast.error('لا يمكن حذف مشروع له فواتير أو إيصالات أو أوامر تغيير مرتبطة. احذف تلك السجلات أولاً أو غيّر حالة المشروع إلى «ملغى».')
+      toast.error('لا يمكن حذف مشروع له سجلات مالية مرتبطة (فواتير/إيصالات/أوامر تغيير/مشتريات/دفعات باطن/إيجارات). غيّر حالته إلى «ملغى» بدل الحذف.')
       setDeleteId(null)
       return
     }
