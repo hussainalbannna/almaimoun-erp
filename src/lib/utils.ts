@@ -363,7 +363,7 @@ function normalizeBahrainPhone(phone: string): string {
 export function openWhatsApp(phone: string, message: string) {
   const number = normalizeBahrainPhone(phone || '')
   if (!number) return
-  window.open(`https://wa.me/${number}?text=${encodeURIComponent(message)}`, '_blank')
+  window.open(`https://wa.me/${number}?text=${encodeURIComponent(message)}`, '_blank', 'noopener')
 }
 
 // ═══════════════════════════════════════════
@@ -372,5 +372,5 @@ export function openWhatsApp(phone: string, message: string) {
 // ═══════════════════════════════════════════
 export function openEmail(to: string, subject: string, body: string) {
   const link = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
-  window.open(link, '_blank')
+  window.open(link, '_blank', 'noopener')
 }
