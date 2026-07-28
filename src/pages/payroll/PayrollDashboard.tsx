@@ -256,7 +256,8 @@ export default function PayrollDashboard() {
     // الأجر اليومي مصدره سجل العامل — نفس القيمة التي يستخدمها workerDayCost لتكلفة المشروع
     // عامل الشركة: الراتب الفعلي إن سُجّل، وإلا الأساسي + البدل الاجتماعي — المصدر الموحّد workerFullSalary (لا تكرار)
     const companySalary = workerFullSalary(w)
-    const base = isLmra ? (parseFloat(e.dailyRate) || Number(w.daily_rate) || 0) * e.presentDays.length : companySalary
+    // الأساس يتبع طريقة الدفع لا نوع العامل: يومي = أجر اليوم × أيام الحضور · شهري (شركة أو هيئة) = راتب ثابت
+    const base = w.pay_type === 'daily' ? (parseFloat(e.dailyRate) || Number(w.daily_rate) || 0) * e.presentDays.length : companySalary
     // قسط القروض المستحقّ هذا الشهر = مجموع أقساط القروض النشطة (كل قسط مسقوف بالمتبقّي كي لا يتجاوزه)
     const loanDue = w.loans.reduce((s, l) => s + Math.min(l.monthly_installment, l.remaining_balance), 0)
     const net = base + overtime - deduction - pendingAdv - newAdvance - loanDue
