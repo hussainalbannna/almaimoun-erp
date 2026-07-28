@@ -439,6 +439,16 @@ export default function SubcontractorDetail() {
     setShowPayForm(true)
   }
 
+  // إعادة احتساب paid_amount لتكليف من مجموع دفعاته الفعلية في القاعدة (مصدر الحقيقة) — يمنع سباق القراءة-التعديل-الكتابة والانحراف
+  const syncAssignmentPaid = async (assignmentId: string) => {
+    if (!assignmentId) return
+    const { data, error } = await supabase.from('subcontractor_payments').select('amount').eq('assignment_id', assignmentId)
+    if (error) throw error
+    const total = (data ?? []).reduce((s, p) => s + Number((p as { amount: number | string }).amount || 0), 0)
+    const { error: upErr } = await supabase.from('subcontractor_assignments').update({ paid_amount: Number(total.toFixed(3)) }).eq('id', assignmentId)
+    if (upErr) throw upErr
+  }
+
   const handleSavePayment = async () => {
     if (!payForm.amount || Number(payForm.amount) <= 0) { toast.error('أدخل المبلغ'); return }
     if (!payForm.assignment_id) { toast.error('اختر التكليف'); return }
@@ -480,41 +490,17 @@ export default function SubcontractorDetail() {
       if (editPayId) {
         // عند التعديل: صحّح paid_amount مع مراعاة نقل الدفعة لتكليف آخر
         const oldPay = payments.find(p => p.id === editPayId)
-        const oldAmount = Number(oldPay?.amount ?? 0)
         const oldAssignId = oldPay?.assignment_id
         const { error } = await supabase.from('subcontractor_payments').update(payload).eq('id', editPayId)
         if (error) throw error
-        if (oldAssignId && oldAssignId !== payForm.assignment_id) {
-          // نُقلت الدفعة لتكليف مختلف: اطرح كامل المبلغ القديم من التكليف القديم، وأضف الجديد للجديد
-          const oldAssign = assignments.find(a => a.id === oldAssignId)
-          if (oldAssign) {
-            await supabase.from('subcontractor_assignments').update({
-              paid_amount: Math.max(0, Number(oldAssign.paid_amount) - oldAmount)
-            }).eq('id', oldAssignId)
-          }
-          if (assign) {
-            await supabase.from('subcontractor_assignments').update({
-              paid_amount: Number(assign.paid_amount) + Number(payForm.amount)
-            }).eq('id', payForm.assignment_id)
-          }
-        } else if (assign) {
-          // نفس التكليف: طبّق فرق المبلغ فقط
-          const diff = Number(payForm.amount) - oldAmount
-          if (diff !== 0) {
-            await supabase.from('subcontractor_assignments').update({
-              paid_amount: Number(assign.paid_amount) + diff
-            }).eq('id', payForm.assignment_id)
-          }
-        }
+        // أعِد احتساب المدفوع للتكليف الجديد (ومن التكليف القديم إن نُقلت الدفعة) من مجموع الدفعات الفعلي
+        await syncAssignmentPaid(payForm.assignment_id)
+        if (oldAssignId && oldAssignId !== payForm.assignment_id) await syncAssignmentPaid(oldAssignId)
         toast.success('تم تحديث الدفعة')
       } else {
         const { error } = await supabase.from('subcontractor_payments').insert(payload)
         if (error) throw error
-        if (assign) {
-          await supabase.from('subcontractor_assignments').update({
-            paid_amount: Number(assign.paid_amount) + Number(payForm.amount)
-          }).eq('id', payForm.assignment_id)
-        }
+        await syncAssignmentPaid(payForm.assignment_id)
         toast.success('تم تسجيل الدفعة')
       }
       setShowPayForm(false)
@@ -535,14 +521,10 @@ export default function SubcontractorDetail() {
       const r = (row ?? {}) as { payment_proof_path?: string; invoice_copy_path?: string }
       await deleteAttachment([r.payment_proof_path, r.invoice_copy_path])
 
-      await supabase.from('subcontractor_payments').delete().eq('id', deletePayId.id)
-      // خصم مبلغ الدفعة المحذوفة من paid_amount
-      const assign = assignments.find(a => a.id === deletePayId.assignmentId)
-      if (assign) {
-        await supabase.from('subcontractor_assignments').update({
-          paid_amount: Math.max(0, Number(assign.paid_amount) - Number(deletePayId.amount))
-        }).eq('id', deletePayId.assignmentId)
-      }
+      const { error: delErr } = await supabase.from('subcontractor_payments').delete().eq('id', deletePayId.id)
+      if (delErr) throw delErr
+      // أعِد احتساب المدفوع من مجموع الدفعات المتبقية (مصدر الحقيقة) بدل الطرح اليدوي
+      await syncAssignmentPaid(deletePayId.assignmentId)
       toast.success('تم حذف الدفعة')
       setDeletePayId(null)
       load(); invalidateRelated()
