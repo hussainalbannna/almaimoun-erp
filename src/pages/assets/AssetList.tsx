@@ -2231,7 +2231,7 @@ export default function AssetList() {
               <div key={asset.id} className="bg-white rounded-xl border border-slate-200 hover:shadow-md transition-shadow cursor-pointer overflow-hidden" onClick={() => openEdit(asset)}>
                 {cover && (
                   <div className="h-32 w-full bg-slate-100 relative">
-                    <img src={cover} alt={asset.name} className="w-full h-full object-cover" />
+                    <img src={cover} alt={asset.name} loading="lazy" className="w-full h-full object-cover" />
                     {docCount > 0 && (
                       <span className="absolute top-2 left-2 flex items-center gap-1 text-xs bg-black/55 text-white px-2 py-0.5 rounded-full">
                         <Paperclip size={11} /> {docCount}

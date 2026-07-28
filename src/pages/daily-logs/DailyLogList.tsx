@@ -1035,7 +1035,7 @@ export default function DailyLogList() {
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 mt-3">
                     {form.photos.map((url, idx) => (
                       <div key={idx} className="relative group aspect-square rounded-lg overflow-hidden border border-slate-200">
-                        <img src={url} alt="" className="w-full h-full object-cover" />
+                        <img src={url} alt="" loading="lazy" className="w-full h-full object-cover" />
                         <button onClick={e => { e.stopPropagation(); removePhoto(idx) }}
                           className="absolute top-1 left-1 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                           <X size={10} />
@@ -1172,7 +1172,7 @@ export default function DailyLogList() {
                             {logPhotos.map((url, i) => (
                               <a key={i} href={url} target="_blank" rel="noopener noreferrer"
                                 className="block aspect-square rounded-lg overflow-hidden border border-slate-200 hover:opacity-90 transition-opacity">
-                                <img src={url} alt="" className="w-full h-full object-cover" />
+                                <img src={url} alt="" loading="lazy" className="w-full h-full object-cover" />
                               </a>
                             ))}
                           </div>

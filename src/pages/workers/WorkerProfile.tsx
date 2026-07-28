@@ -466,7 +466,7 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
                 <div key={doc.id} className="bg-white rounded-xl border border-slate-200 overflow-hidden group">
                   <button onClick={() => viewCustom(doc)} className="block w-full aspect-square bg-slate-50 relative">
                     {isImage ? (
-                      <img src={url} alt={doc.name} className="w-full h-full object-cover" />
+                      <img src={url} alt={doc.name} loading="lazy" className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center">
                         <FileText size={36} className="text-red-500" />

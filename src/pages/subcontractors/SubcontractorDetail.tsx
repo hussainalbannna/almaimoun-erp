@@ -160,7 +160,7 @@ function WorkImagesField({ images, savePaths, onChange, onPreview }: {
       <div className="flex flex-wrap gap-2">
         {images.map((img, i) => (
           <div key={i} className="relative group">
-            <img src={img} alt={`عمل ${i + 1}`} className="w-20 h-20 object-cover rounded-lg border border-slate-200 cursor-pointer"
+            <img src={img} alt={`عمل ${i + 1}`} loading="lazy" className="w-20 h-20 object-cover rounded-lg border border-slate-200 cursor-pointer"
               onClick={() => onPreview(img)} />
             <button type="button" onClick={() => removeAt(i)}
               className="absolute -top-1.5 -left-1.5 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
