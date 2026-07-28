@@ -715,7 +715,7 @@ function FinancialTab({ workerId, advances, setAdvances, loans, setLoans }: {
                 {/* Progress bar */}
                 <div className="h-1.5 bg-slate-100 rounded-full mt-2 overflow-hidden">
                   <div className="h-full bg-green-500 rounded-full transition-all"
-                    style={{ width: `${Math.max(0, ((Number(loan.loan_amount) - Number(loan.remaining_balance)) / Number(loan.loan_amount)) * 100)}%` }} />
+                    style={{ width: `${Number(loan.loan_amount) > 0 ? Math.min(100, Math.max(0, ((Number(loan.loan_amount) - Number(loan.remaining_balance)) / Number(loan.loan_amount)) * 100)) : 0}%` }} />
                 </div>
               </div>
             ))}
