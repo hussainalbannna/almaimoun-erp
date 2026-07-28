@@ -39,10 +39,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false)
       })
 
-    // أمان: لا نبقى في حالة تحميل أكثر من 3 ثوانٍ مهما حدث
+    // شبكة الموقع قد تكون بطيئة وتحديث التوكن يستغرق ثوانٍ — نعتمد أحداث المصادقة (INITIAL_SESSION من
+    // onAuthStateChange و getSession أعلاه) لإنهاء التحميل، ونُبقي هذا المؤقّت أمانًا أخيرًا فقط
+    // كي لا يُنهي التحميل قبل اكتمال الجلسة فيطرد مستخدمًا صالحًا إلى صفحة الدخول على شبكة ضعيفة.
     const timeout = setTimeout(() => {
       if (mounted) setLoading(false)
-    }, 3000)
+    }, 10000)
 
     return () => {
       mounted = false
