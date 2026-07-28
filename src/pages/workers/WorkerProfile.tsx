@@ -101,11 +101,13 @@ export default function WorkerProfile() {
   const handleSaveInfo = async () => {
     if (!form.name) { toast.error('يجب إدخال الاسم'); return }
     setSaving(true)
-    const { error } = await supabase.from('workers').update({ ...form, updated_at: new Date().toISOString() }).eq('id', id)
+    // عامل الشركة على حماية الأجور ⇒ يُحفظ «شهري» دائمًا (حارس ثانٍ حتى لو حُمّل سجل قديم بتركيبة ممنوعة)
+    const payload = { ...form, pay_type: form.worker_type === 'company' ? 'monthly' : form.pay_type }
+    const { error } = await supabase.from('workers').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', id)
     if (error) toast.error('حدث خطأ')
     else {
       toast.success('تم حفظ البيانات')
-      setWorker({ ...worker!, ...form } as Worker)
+      setWorker({ ...worker!, ...payload } as Worker)
       // تحديث قائمة العمال وكشف الرواتب واللوحة والمالية في باقي الصفحات
       queryClient.invalidateQueries({ queryKey: ['workers-list'] })
       queryClient.invalidateQueries({ queryKey: ['payroll-data'] })
@@ -204,11 +206,15 @@ function InfoTab({ form, setForm, saving, onSave }: {
         <h2 className="font-semibold text-slate-700 mb-4">التصنيف</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Select label="نوع العمالة" value={form.worker_type ?? 'company'}
-            onChange={e => setForm(p => ({ ...p, worker_type: e.target.value as Worker['worker_type'] }))}
+            onChange={e => setForm(p => ({ ...p, worker_type: e.target.value as Worker['worker_type'], branch: e.target.value === 'lmra' ? '' : p.branch, pay_type: e.target.value === 'company' ? 'monthly' : p.pay_type }))}
             options={[{ value: 'company', label: 'عمالة الشركة' }, { value: 'lmra', label: 'عمالة هيئة LMRA' }]} />
+          {/* عامل الشركة على حماية الأجور ⇒ الدفع «شهري» دائمًا (مقفل)؛ الهيئة يجوز شهري أو يومي */}
           <Select label="طريقة الدفع" value={form.pay_type ?? 'monthly'}
+            disabled={form.worker_type === 'company'}
             onChange={e => setForm(p => ({ ...p, pay_type: e.target.value as Worker['pay_type'] }))}
-            options={[{ value: 'monthly', label: 'شهري' }, { value: 'daily', label: 'يومي' }]} />
+            options={form.worker_type === 'company'
+              ? [{ value: 'monthly', label: 'شهري' }]
+              : [{ value: 'monthly', label: 'شهري' }, { value: 'daily', label: 'يومي' }]} />
           {form.worker_type === 'company' && (
             <Select label="الفرع" value={form.branch ?? ''} onChange={e => setForm(p => ({ ...p, branch: e.target.value }))} options={BRANCH_OPTIONS} />
           )}
