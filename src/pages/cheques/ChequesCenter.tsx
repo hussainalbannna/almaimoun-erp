@@ -161,7 +161,9 @@ export default function ChequesCenter() {
     let guaranteeCount = 0, guaranteeTotal = 0
     let bouncedCount = 0
     let incomingCount = 0, incomingTotal = 0 // شيكات واردة (من العملاء) = مستحقات لك، ليست التزامًا
-    const in7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
+    // نافذة 7 أيام بتاريخ محلي (لا UTC) كي لا تنزلق حدودها يومًا فجرًا في +3
+    const in7d = new Date(); in7d.setHours(0, 0, 0, 0); in7d.setDate(in7d.getDate() + 7)
+    const in7 = `${in7d.getFullYear()}-${String(in7d.getMonth() + 1).padStart(2, '0')}-${String(in7d.getDate()).padStart(2, '0')}`
     for (const c of cheques) {
       if (c.status === 'bounced') bouncedCount++
       if (c.status !== 'pending') continue

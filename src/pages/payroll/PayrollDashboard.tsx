@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Printer, CheckCircle, ShieldCheck, Wallet, Save, Users } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import type { Worker, WorkerAdvance } from '../../types'
-import { formatCurrency } from '../../lib/utils'
+import { formatCurrency, todayLocal } from '../../lib/utils'
 import { workerFullSalary } from '../../lib/finance'
 import Button from '../../components/ui/Button'
 import toast from 'react-hot-toast'
@@ -68,7 +68,7 @@ function isOutstandingByPeriod(dateStr: string | null, month: number, year: numb
 // تاريخ السلفة: اليوم إن كان الشهر المعروض هو الشهر الحالي، وإلا منتصف الشهر المختار
 function advanceDateForPeriod(monthIndex: number, year: number): string {
   const now = new Date()
-  if (now.getFullYear() === year && now.getMonth() === monthIndex) return now.toISOString().slice(0, 10)
+  if (now.getFullYear() === year && now.getMonth() === monthIndex) return todayLocal() // تاريخ محلي (لا UTC) كي لا يُسجَّل يوم الأمس فجرًا في +3
   return `${year}-${String(monthIndex + 1).padStart(2, '0')}-15`
 }
 
