@@ -5,7 +5,7 @@ import {
   ClipboardList, GitMerge, Layers, CalendarDays,
   ChevronLeft, TrendingUp, TrendingDown, ChevronRight
 } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { supabase, safeSelect } from '../lib/supabase'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { fetchAllAlerts, type AlertLevel } from '../lib/notifications'
 import { fetchCheques, computePendingChequeSets, computeProjectProfit, type WorkerPayLike } from '../lib/finance'
@@ -74,7 +74,8 @@ async function fetchDashboardStats(): Promise<Stats> {
     safe(supabase.from('purchase_invoices').select('id, project_id, amount, payment_method, check_due_date')),
     safe(supabase.from('subcontractor_payments').select('id, project_id, amount, payment_method, check_due_date')),
     safe(supabase.from('subcontractor_assignments').select('agreed_amount, paid_amount')),
-    safe(supabase.from('worker_attendance').select('project_id, worker_id, status')),
+    // safeSelect يُرقّم تلقائيًا فلا يُقتطع الحضور عند 1000 صف (ينمو ~1000/شهر) → تكلفة العمالة دقيقة دائمًا
+    safeSelect<{ project_id: string | null; worker_id: string; status: string | null }>('worker_attendance', 'project_id, worker_id, status').then(data => ({ data })),
     safe(supabase.from('workers').select('id, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')),
     safe(supabase.from('daily_logs').select('project_id, overtime_amount')),
     safe(supabase.from('project_labor_entries').select('project_id, amount')),
