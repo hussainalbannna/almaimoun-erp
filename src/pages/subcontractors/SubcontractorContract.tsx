@@ -330,8 +330,8 @@ export default function SubcontractorContract() {
         .update({ status: 'pending', payment_id: null, paid_date: null, updated_at: new Date().toISOString() })
         .eq('id', unpayStage.id)
       if (e2) throw e2
-      const newPaid = stages.filter(s => s.status === 'paid' && s.id !== unpayStage.id).reduce((sum, s) => sum + s.amount, 0)
-      await supabase.from('subcontractor_assignments').update({ paid_amount: newPaid }).eq('id', assignmentId)
+      // إعادة حساب إجمالي المدفوع من مجموع الدفعات الفعلي بعد حذف دفعة المرحلة
+      await syncAssignmentPaid(assignmentId)
 
       setStages(prev => prev.map(s => s.id === unpayStage.id ? { ...s, status: 'pending', payment_id: null, paid_date: null } : s))
       qc.invalidateQueries()
