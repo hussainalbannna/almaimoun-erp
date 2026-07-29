@@ -613,7 +613,10 @@ export default function SubcontractorDetail() {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="font-semibold text-slate-700">التكاليف والعقود</h3>
-            <Button size="sm" icon={<Plus size={14} />} onClick={() => openAssignForm()}>إضافة تكليف</Button>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" icon={<FileSignature size={14} />} onClick={() => navigate(`/subcontractors/${id}/contract`)}>توليد عقد احترافي</Button>
+              <Button size="sm" icon={<Plus size={14} />} onClick={() => openAssignForm()}>إضافة تكليف</Button>
+            </div>
           </div>
 
           {showAssignForm && (
