@@ -186,6 +186,8 @@ export default function App() {
                 {/* مقاولو الباطن */}
                 <Route path="subcontractors" element={<SubcontractorList />} />
                 <Route path="subcontractors/new" element={<SubcontractorDetail />} />
+                <Route path="subcontractors/:id/contract" element={<SubcontractorContract />} />
+                <Route path="subcontractors/:id/contract/:assignmentId" element={<SubcontractorContract />} />
                 <Route path="subcontractors/:id" element={<SubcontractorDetail />} />
 
                 {/* الموردون والعملاء وجهات الاتصال */}
