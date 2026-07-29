@@ -63,6 +63,7 @@ const DailyLogList = lazy(() => import('./pages/daily-logs/DailyLogList'))
 
 const SubcontractorList = lazy(() => import('./pages/subcontractors/SubcontractorList'))
 const SubcontractorDetail = lazy(() => import('./pages/subcontractors/SubcontractorDetail'))
+const SubcontractorContract = lazy(() => import('./pages/subcontractors/SubcontractorContract'))
 
 const SupplierList = lazy(() => import('./pages/suppliers/SupplierList'))
 const SupplierForm = lazy(() => import('./pages/suppliers/SupplierForm'))
