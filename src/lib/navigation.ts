@@ -123,6 +123,7 @@ const DYNAMIC_TITLES: ReadonlyArray<readonly [string, string]> = [
   ['/profile', 'ملف العامل'],
   ['/deliveries', 'الاستلامات'],
   ['/vos/new', 'أمر تغيير جديد'],
+  ['/contract', 'عقد مقاول باطن'],
 ]
 
 // خريطة العناوين المبنية تلقائياً من القائمة الجانبية + صفحات الإنشاء —
