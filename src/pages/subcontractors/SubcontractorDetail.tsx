@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Plus, DollarSign, MessageCircle, Paperclip, Eye, X, FileText, Image as ImageIcon, Upload, Loader2, Edit, Trash2 } from 'lucide-react'
+import { ChevronRight, Plus, DollarSign, MessageCircle, Paperclip, Eye, X, FileText, Image as ImageIcon, Upload, Loader2, Edit, Trash2, FileSignature } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, subcontractorSpecialtyLabel, openWhatsApp, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
