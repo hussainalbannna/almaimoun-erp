@@ -303,9 +303,8 @@ export default function SubcontractorContract() {
         .update({ status: 'paid', payment_id: paymentId, paid_date: payForm.payment_date || todayLocal(), updated_at: new Date().toISOString() })
         .eq('id', payStage.id)
       if (e2) throw e2
-      // تحديث إجمالي المدفوع على الإسناد
-      const newPaid = stages.filter(s => s.status === 'paid').reduce((sum, s) => sum + s.amount, 0) + payStage.amount
-      await supabase.from('subcontractor_assignments').update({ paid_amount: newPaid }).eq('id', assignmentId)
+      // إعادة حساب إجمالي المدفوع من مجموع الدفعات الفعلي (متّسق مع بقية النظام)
+      await syncAssignmentPaid(assignmentId)
 
       setStages(prev => prev.map(s => s.id === payStage.id ? { ...s, status: 'paid', payment_id: paymentId, paid_date: payForm.payment_date || todayLocal() } : s))
       qc.invalidateQueries()
