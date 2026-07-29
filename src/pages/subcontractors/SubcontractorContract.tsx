@@ -56,6 +56,14 @@ function openPreviewWindow(html: string) {
   win.document.close()
 }
 
+// إعادة حساب إجمالي المدفوع على الإسناد من مجموع الدفعات الفعلي — مصدر الحقيقة
+// الموحّد (يطابق SubcontractorDetail) فلا يتأثر بخلط دفعات المراحل مع الدفعات اليدوية
+async function syncAssignmentPaid(assignmentId: string) {
+  const { data } = await supabase.from('subcontractor_payments').select('amount').eq('assignment_id', assignmentId)
+  const total = (data ?? []).reduce((s, p) => s + Number((p as { amount: number | string }).amount || 0), 0)
+  await supabase.from('subcontractor_assignments').update({ paid_amount: Number(total.toFixed(3)) }).eq('id', assignmentId)
+}
+
 function openPrintWindow(html: string) {
   const iframe = document.createElement('iframe')
   iframe.setAttribute('aria-hidden', 'true')
