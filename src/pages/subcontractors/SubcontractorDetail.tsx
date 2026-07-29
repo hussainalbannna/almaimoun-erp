@@ -681,6 +681,10 @@ export default function SubcontractorDetail() {
                         )}
                         {/* المرفقات تُحمّل عند النقر (غير مجلوبة مع القائمة الخفيفة) */}
                         <div className="flex flex-wrap items-center gap-2 mt-2">
+                          <button onClick={() => navigate(`/subcontractors/${id}/contract/${a.id}`)}
+                            className="flex items-center gap-1.5 text-xs bg-amber-600 text-white rounded-lg px-2.5 py-1 hover:bg-amber-700 transition-colors">
+                            <FileSignature size={12} /> العقد الاحترافي والمراحل
+                          </button>
                           {a.has_contract && (
                             <button onClick={() => openStoredAttachment('subcontractor_assignments', a.id, 'contract_path', 'contract_data')}
                               className="flex items-center gap-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg px-2.5 py-1 hover:bg-amber-100 transition-colors">
