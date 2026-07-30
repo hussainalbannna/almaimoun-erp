@@ -138,6 +138,13 @@ export default function SubcontractorContract() {
   const anyPaid = stages.some(s => s.status === 'paid')
   const liveTotal = useMemo(() => stagesTotal(spec.stages), [spec.stages])
 
+  // إبطال مستهدف: نُحدّث الشاشات المتأثرة بدفعات الباطن فقط بدل إبطال كل الكاش
+  const invalidateFinance = () => {
+    for (const k of ['finance-dashboard', 'project-detail', 'cheques', 'dashboard-stats', 'reports-data', 'ai-business-data', 'subcontractors-list']) {
+      qc.invalidateQueries({ queryKey: [k] })
+    }
+  }
+
   // ─── التحميل ───────────────────────────────────────────────────────
   useEffect(() => {
     let alive = true
