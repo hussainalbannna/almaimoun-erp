@@ -292,11 +292,11 @@ export default function SubcontractorContract() {
         const rows = s.stages.map(st => ({ assignment_id: newId, seq: st.seq, description: st.description, amount: st.amount, status: 'pending' }))
         if (rows.length) { const { error: e2 } = await supabase.from('subcontractor_stages').insert(rows); if (e2) throw e2 }
         toast.success('تم إنشاء العقد')
-        qc.invalidateQueries()
+        invalidateFinance()
         navigate(`/subcontractors/${id}/contract/${newId}`, { replace: true })
         return
       }
-      qc.invalidateQueries()
+      invalidateFinance()
       // نعيد تحميل المراحل بعد الحفظ
       const { data: st } = await supabase.from('subcontractor_stages').select('id, seq, description, amount, status, payment_id, paid_date').eq('assignment_id', assignmentId!).order('seq')
       setStages(((st ?? []) as StageRow[]).map(x => ({ ...x, amount: Number(x.amount) || 0, seq: Number(x.seq) || 0 })))
@@ -366,7 +366,7 @@ export default function SubcontractorContract() {
       await syncAssignmentPaid(assignmentId)
 
       setStages(prev => prev.map(s => s.id === payStage.id ? { ...s, status: 'paid', payment_id: paymentId, paid_date: payForm.payment_date || todayLocal() } : s))
-      qc.invalidateQueries()
+      invalidateFinance()
       toast.success('سُجّلت الدفعة كمصروف على المشروع')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'تعذّر تسجيل الدفعة')
@@ -394,7 +394,7 @@ export default function SubcontractorContract() {
       await syncAssignmentPaid(assignmentId)
 
       setStages(prev => prev.map(s => s.id === unpayStage.id ? { ...s, status: 'pending', payment_id: null, paid_date: null } : s))
-      qc.invalidateQueries()
+      invalidateFinance()
       toast.success('تم التراجع عن الدفعة وحذف المصروف')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'تعذّر التراجع')
