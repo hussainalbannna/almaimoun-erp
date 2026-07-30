@@ -211,42 +211,77 @@ export function buildContractHTML(spec: ContractSpec): string {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Subcontract Agreement — ${esc(trade.subject)}</title>
 <style>
-  @page { size: A4; margin: 0; }
+  @page { size: A4; margin: 14mm 15mm; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: 'Times New Roman', Georgia, serif; color: #111; background: #fff; }
-  .page {
-    width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff;
-    /* هامش علوي واسع لتجاوز رأس الورقة الحكومية المطبوع مسبقاً */
-    padding: 62mm 18mm 16mm 18mm;
-    font-size: 10.5px; line-height: 1.5;
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    color: #1a1a1a; background: #fff; font-size: 12.5px; line-height: 1.6;
   }
-  .page + .page { page-break-before: always; }
-  h1 { font-size: 15px; text-align: center; margin: 0 0 2px; letter-spacing: .3px; }
-  .sub-title { text-align: center; font-size: 11px; margin: 0 0 12px; color: #333; }
-  .intro { margin: 8px 0; text-align: justify; }
-  .parties { width: 100%; border-collapse: collapse; margin: 8px 0 12px; }
-  .parties td { width: 50%; vertical-align: top; padding: 8px 10px; border: 1px solid #999; }
-  .parties .ttl { font-weight: bold; font-size: 9.5px; letter-spacing: .4px; color: #444; margin-bottom: 3px; }
-  .parties .nm { font-weight: bold; font-size: 11px; }
-  h2 { font-size: 11.5px; margin: 14px 0 4px; border-bottom: 1.5px solid #333; padding-bottom: 2px; }
-  ul { margin: 4px 0; padding-inline-start: 16px; }
-  li { margin: 3px 0; text-align: justify; }
-  table.pay { width: 100%; border-collapse: collapse; margin: 6px 0; }
-  table.pay th, table.pay td { border: 1px solid #666; padding: 4px 6px; }
-  table.pay th { background: #eee; font-size: 9.5px; text-align: left; }
-  table.pay td.c { text-align: center; width: 26px; }
-  table.pay td.r, table.pay th.r { text-align: right; width: 90px; }
-  table.pay tfoot td { font-weight: bold; background: #f4f4f4; }
-  .clause { margin: 6px 0; text-align: justify; }
-  .clause b { display: block; margin-bottom: 1px; }
-  .sign { width: 100%; margin-top: 26px; border-collapse: collapse; }
-  .sign td { width: 50%; vertical-align: top; padding: 6px 10px; }
-  .sig-line { margin-top: 30px; border-top: 1px solid #333; padding-top: 3px; font-size: 9.5px; }
-  .foot { margin-top: 10px; text-align: center; font-size: 9px; color: #777; }
+  .doc { max-width: 180mm; margin: 0 auto; }
+
+  /* ── ترويسة الميمون الرسمية ── */
+  .letterhead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    border-bottom: 3px solid #7b4a2d; padding-bottom: 12px; margin-bottom: 6px;
+  }
+  .lh-left { max-width: 60%; }
+  .lh-name { font-size: 23px; font-weight: 800; color: #7b4a2d; letter-spacing: .5px; line-height: 1.1; }
+  .lh-ar { font-size: 15px; font-weight: 700; color: #c4925a; margin-top: 2px; direction: rtl; }
+  .lh-tag { font-size: 10.5px; color: #888; margin-top: 3px; letter-spacing: .3px; text-transform: uppercase; }
+  .lh-right { text-align: right; font-size: 11px; color: #555; line-height: 1.7; padding-top: 2px; }
+  .lh-right b { color: #333; }
+
+  h1 { font-size: 18px; text-align: center; margin: 16px 0 3px; color: #222; letter-spacing: .3px; }
+  .sub-title { text-align: center; font-size: 12.5px; margin: 0 0 14px; color: #7b4a2d; font-weight: 600; }
+  .intro { margin: 9px 0; text-align: justify; }
+
+  .parties { width: 100%; border-collapse: collapse; margin: 10px 0 14px; page-break-inside: avoid; }
+  .parties td { width: 50%; vertical-align: top; padding: 10px 12px; border: 1px solid #c9c9c9; }
+  .parties td:first-child { background: #faf6f1; }
+  .parties .ttl { font-weight: 700; font-size: 10px; letter-spacing: .5px; color: #7b4a2d; margin-bottom: 4px; text-transform: uppercase; }
+  .parties .nm { font-weight: 800; font-size: 13px; color: #222; margin-bottom: 3px; }
+
+  h2 {
+    font-size: 14px; margin: 16px 0 6px; color: #7b4a2d; padding-bottom: 3px;
+    border-bottom: 2px solid #e5d9c8; page-break-after: avoid;
+  }
+  ul { margin: 6px 0; padding-inline-start: 20px; }
+  li { margin: 5px 0; text-align: justify; page-break-inside: avoid; }
+
+  table.pay { width: 100%; border-collapse: collapse; margin: 8px 0; page-break-inside: avoid; }
+  table.pay th, table.pay td { border: 1px solid #b8b8b8; padding: 6px 8px; }
+  table.pay th { background: #7b4a2d; color: #fff; font-size: 11.5px; text-align: left; }
+  table.pay td.c { text-align: center; width: 30px; }
+  table.pay td.r, table.pay th.r { text-align: right; width: 100px; }
+  table.pay tbody tr:nth-child(even) td { background: #faf6f1; }
+  table.pay tfoot td { font-weight: 800; background: #efe6d9; font-size: 13px; }
+
+  .clause { margin: 8px 0; text-align: justify; page-break-inside: avoid; }
+  .clause b { display: block; margin-bottom: 2px; color: #7b4a2d; }
+
+  .sign { width: 100%; margin-top: 30px; border-collapse: collapse; page-break-inside: avoid; }
+  .sign td { width: 50%; vertical-align: top; padding: 8px 12px; }
+  .sig-line { margin-top: 34px; border-top: 1px solid #333; padding-top: 4px; font-size: 10.5px; color: #555; }
+  .foot { margin-top: 16px; padding-top: 8px; border-top: 1px solid #e5d9c8; text-align: center; font-size: 9.5px; color: #999; }
 </style>
 </head>
 <body>
-  <div class="page">
+  <div class="doc">
+    <div class="letterhead">
+      <div class="lh-left">
+        <div class="lh-name">${esc(spec.main.name)}</div>
+        <div class="lh-ar">مؤسسة الميمون للمقاولات</div>
+        <div class="lh-tag">Construction &amp; Contracting</div>
+      </div>
+      <div class="lh-right">
+        <b>C.R.</b> ${esc(spec.main.cr)}<br/>
+        ${esc(spec.main.address)}<br/>
+        <b>Tel:</b> ${esc(spec.main.tel)}<br/>
+        <b>Email:</b> ${esc(spec.main.email)}
+      </div>
+    </div>
+
     <h1>SUBCONTRACT AGREEMENT FOR ${esc(trade.subject)}</h1>
     <div class="sub-title">Labor &amp; Materials Contract — ${esc(building)} Project at ${esc(site)}</div>
 
@@ -255,14 +290,14 @@ export function buildContractHTML(spec: ContractSpec): string {
     <table class="parties">
       <tr>
         <td>
-          <div class="ttl">FIRST PARTY (MAIN CONTRACTOR)</div>
+          <div class="ttl">First Party (Main Contractor)</div>
           <div class="nm">${esc(spec.main.name)}</div>
           C.R. No.: ${esc(spec.main.cr)}<br/>
           ${esc(spec.main.address)}<br/>
-          Tel: ${esc(spec.main.tel)} | Email: ${esc(spec.main.email)}
+          Tel: ${esc(spec.main.tel)} &nbsp;|&nbsp; ${esc(spec.main.email)}
         </td>
         <td>
-          <div class="ttl">SECOND PARTY (SUBCONTRACTOR)</div>
+          <div class="ttl">Second Party (Subcontractor)</div>
           <div class="nm">${esc(spec.sub.name)}</div>
           ${spec.sub.cr ? `C.R. No.: ${esc(spec.sub.cr)}<br/>` : ''}
           ${spec.sub.cpr ? `C.P.R. No.: ${esc(spec.sub.cpr)}<br/>` : ''}
@@ -274,26 +309,24 @@ export function buildContractHTML(spec: ContractSpec): string {
 
     <p class="intro">WHEREAS, the Main Contractor desires to subcontract the complete ${esc(trade.en.toLowerCase())}, material supply, and finishing works for a ${esc(building)} Project at ${esc(site)} ("the Works"), and the Subcontractor agrees to execute the Works in strict compliance with the applicable authority regulations, project drawings, and specifications. NOW, THEREFORE, IT IS MUTUALLY AGREED AS FOLLOWS:</p>
 
-    <h2>1. SCOPE OF WORKS &amp; MATERIAL OBLIGATIONS</h2>
+    <h2>1. Scope of Works &amp; Material Obligations</h2>
     <ul>
       ${scopeRows}
       <li>Inclusion of Free Additional Points (${spec.additionalPointsMin} to ${spec.additionalPointsMax} Points): If the Client/Owner requests additional points during execution, the Subcontractor shall supply and install up to a maximum of ${spec.additionalPointsMax} additional points completely free of charge, without demanding extra payment or variation orders.</li>
     </ul>
 
-    <h2>2. WORKMANSHIP &amp; STRUCTURAL PROTECTION STANDARDS</h2>
+    <h2>2. Workmanship &amp; Structural Protection Standards</h2>
     <ul>
       <li>Precast Slab Protection: All conduits/pipes must be installed under the precast slab surface. Drilling, breaking, cutting, or chasing into precast slabs is strictly prohibited.</li>
       <li>Structural Integrity: Absolute prohibition of breaking, drilling, or altering any structural concrete element (foundations, columns, beams). The Subcontractor bears full financial and legal liability for any structural damage caused.</li>
       <li>Wall Chasing Method: Use of electric jackhammers or rotary hammers for wall chasing is strictly forbidden. Chasing must be done exclusively using a mechanical grinder (cutting machine) for precise, vibration-free cuts.</li>
     </ul>
-  </div>
 
-  <div class="page">
-    <h2>3. PAYMENT SCHEDULE</h2>
-    <p class="clause">The total agreed lump-sum price is <b>BHD ${fmt3(total)}</b>, payable in installments upon stage completion as follows:</p>
+    <h2>3. Payment Schedule</h2>
+    <p class="clause">The total agreed lump-sum price is <b style="display:inline;color:#222;">BHD ${fmt3(total)}</b>, payable in installments upon stage completion as follows:</p>
     <table class="pay">
       <thead>
-        <tr><th class="c" style="width:26px;text-align:center;">No.</th><th>Stage / Milestone Description</th><th class="r">Amount (BHD)</th></tr>
+        <tr><th class="c" style="width:30px;text-align:center;">No.</th><th>Stage / Milestone Description</th><th class="r">Amount (BHD)</th></tr>
       </thead>
       <tbody>
         ${stageRows}
@@ -303,14 +336,14 @@ export function buildContractHTML(spec: ContractSpec): string {
       </tfoot>
     </table>
 
-    <h2>4. SPECIAL PROTECTION &amp; COMPENSATION CLAUSES</h2>
+    <h2>4. Special Protection &amp; Compensation Clauses</h2>
     <div class="clause"><b>4.1 Work Abandonment &amp; Full Contract Value Compensation:</b> If the Subcontractor abandons, ceases, stops, or leaves the Subcontract Works prior to complete handover for any reason whatsoever, the Main Contractor reserves the explicit legal right to claim and recover full compensation equal to the entire Contract Value (BHD ${compensation}) from the Subcontractor.</div>
     <div class="clause"><b>4.2 Client Work Suspension or Non-Payment Relief:</b> If the Client/Owner halts or suspends project work, or ceases/fails to disburse payments to the Main Contractor for any reason, the Main Contractor shall bear no financial obligations towards the Subcontractor for unpaid amounts or delays. Payments to the Subcontractor for corresponding stages remain strictly contingent upon receipt of funds from the Client.</div>
     <div class="clause"><b>4.3 Liquidated Delay Penalty:</b> If the Subcontractor delays completion or breaches the project schedule for reasons attributable to the Subcontractor, a liquidated delay penalty of BHD ${fmt3(spec.delayPenaltyPerDay)} per day of delay shall be levied and deducted directly from any pending or future payments.</div>
     <div class="clause"><b>4.4 Maintenance Warranty &amp; Defect Rectification (No Retention Withheld):</b> The Subcontractor provides a ${spec.warrantyMonths}-month maintenance warranty for all works starting from final project completion. While no retention money is withheld, the Subcontractor shall be solely responsible for resolving and repairing any fault at his own cost within 24–48 hours of notification.</div>
     <div class="clause"><b>4.5 Fixed Price Guarantee:</b> The agreed lump-sum amount of BHD ${fmt3(total)} is final and includes all labor, tools, equipment, transport, and specified materials. No additional claims shall be made unless agreed in writing by the Main Contractor.</div>
 
-    <h2>5. SAFETY, LEGAL COMPLIANCE &amp; GOVERNING LAW</h2>
+    <h2>5. Safety, Legal Compliance &amp; Governing Law</h2>
     <ul>
       <li>LMRA &amp; Labor Compliance: Subcontractor must employ only legal workers registered under LMRA in compliance with Bahrain Labor Law, and solely assumes all penalties or legal liabilities for LMRA violations.</li>
       <li>Site Safety &amp; Cleanliness: Subcontractor shall adhere to site health &amp; safety rules and remove all daily work waste/debris from the site.</li>
@@ -335,7 +368,7 @@ export function buildContractHTML(spec: ContractSpec): string {
       </tr>
     </table>
 
-    <div class="foot">${esc(spec.main.name)} &nbsp;|&nbsp; Subcontract Agreement &nbsp;|&nbsp; C.R. ${esc(spec.main.cr)}</div>
+    <div class="foot">${esc(spec.main.name)} &nbsp;|&nbsp; Subcontract Agreement &nbsp;|&nbsp; C.R. ${esc(spec.main.cr)} &nbsp;|&nbsp; ${esc(spec.main.tel)}</div>
   </div>
 </body>
 </html>`

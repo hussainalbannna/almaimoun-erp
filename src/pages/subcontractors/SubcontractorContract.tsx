@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Printer, Eye, Save, Plus, Trash2, CheckCircle2, RotateCcw, Loader2, FileSignature } from 'lucide-react'
+import { ChevronRight, Printer, Eye, Save, Plus, Trash2, CheckCircle2, RotateCcw, Loader2, FileSignature, Upload, FileText, Paperclip } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
+import { uploadDataUrl, resolveAttachmentUrl } from '../../lib/storage'
+import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import {
   type ContractSpec, type ContractStage, type TradeKey, type BuildingKey,
   defaultSpec, buildContractHTML, branchCompanyName, stagesTotal,
@@ -37,6 +39,29 @@ const PAY_METHODS = [
   { value: 'bank_transfer', label: 'تحويل بنكي' },
   { value: 'cheque', label: 'شيك آجل' },
 ]
+const SUB_FOLDER = 'subcontractors'
+
+// صورة تُضغط، وغيرها (PDF) يُحوَّل Data URL كما هو
+const fileToData = async (file: File): Promise<string> =>
+  file.type.startsWith('image/') ? await compressImage(file) : await fileToDataUrl(file)
+
+// زر إرفاق مضغوط داخل حوار الدفع (فاتورة/إثبات) — يضغط الصور تلقائياً
+function AttachInput({ label, data, onPick }: { label: string; data: string; onPick: (d: string) => void }) {
+  const ref = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+  const handle = async (f: File) => { setBusy(true); try { onPick(await fileToData(f)) } finally { setBusy(false) } }
+  return (
+    <div>
+      <input ref={ref} type="file" accept="image/*,application/pdf" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = '' }} />
+      <button type="button" onClick={() => ref.current?.click()} disabled={busy}
+        className={`w-full flex items-center justify-center gap-1.5 text-xs rounded-lg py-2 border transition-colors ${data ? 'bg-green-50 border-green-300 text-green-700' : 'border-dashed border-slate-300 text-slate-500 hover:border-amber-400 hover:text-amber-600'}`}>
+        {busy ? <Loader2 size={14} className="animate-spin" /> : data ? <CheckCircle2 size={14} /> : <Upload size={14} />}
+        {data ? `${label} ✓` : `إرفاق ${label}`}
+      </button>
+    </div>
+  )
+}
 
 // ─── طباعة: معاينة في نافذة + طباعة صامتة عبر iframe (نفس نمط النظام) ──
 function openPreviewWindow(html: string) {
@@ -105,6 +130,8 @@ export default function SubcontractorContract() {
   // حوار تسجيل دفع مرحلة
   const [payStage, setPayStage] = useState<StageRow | null>(null)
   const [payForm, setPayForm] = useState({ payment_date: todayLocal(), payment_method: 'cash', check_due_date: '', check_number: '' })
+  const [payAttach, setPayAttach] = useState<{ invoice: string; proof: string }>({ invoice: '', proof: '' })
+  const [payMeta, setPayMeta] = useState<Record<string, { invoice: boolean; proof: boolean }>>({})
   const [unpayStage, setUnpayStage] = useState<StageRow | null>(null)
   const [busyStage, setBusyStage] = useState<string | null>(null)
 
@@ -145,6 +172,7 @@ export default function SubcontractorContract() {
         }
         setProjectId(a?.project_id ?? '')
         setStages(((stRes.data ?? []) as StageRow[]).map(s => ({ ...s, amount: Number(s.amount) || 0, seq: Number(s.seq) || 0 })))
+        await loadPayMeta(assignmentId)
       } else {
         // عقد جديد — نهيّئ المواصفات ونملأ طرف المقاول من سجلّه
         const trade: TradeKey = sub?.specialty === 'plumbing' ? 'plumbing' : 'electrical'
@@ -242,17 +270,12 @@ export default function SubcontractorContract() {
       if (isEdit && assignmentId) {
         const { error } = await supabase.from('subcontractor_assignments').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', assignmentId)
         if (error) throw error
-        // نعيد بناء المراحل فقط إذا لم تُدفع أي مرحلة (حماية الربط المالي)
+        // نعيد بناء المراحل فقط إذا لم تُدفع أي مرحلة (الجدول مقفل بالكامل عند وجود دفعات،
+        // لذا لا حاجة لأي تحديث للمراحل في تلك الحالة — تبقى مطابقة للمصروفات الفعلية)
         if (!anyPaid) {
           await supabase.from('subcontractor_stages').delete().eq('assignment_id', assignmentId)
           const rows = s.stages.map(st => ({ assignment_id: assignmentId, seq: st.seq, description: st.description, amount: st.amount, status: 'pending' }))
           if (rows.length) { const { error: e2 } = await supabase.from('subcontractor_stages').insert(rows); if (e2) throw e2 }
-        } else {
-          // مراحل مدفوعة موجودة — نحدّث النصوص/المبالغ للمراحل المعلّقة فقط
-          await Promise.all(stages.filter(st => st.status === 'pending').map((st, i) => {
-            const src = s.stages[i]
-            return src ? supabase.from('subcontractor_stages').update({ description: src.description, amount: src.amount }).eq('id', st.id) : Promise.resolve()
-          }))
         }
         toast.success('تم حفظ العقد')
       } else {
@@ -277,6 +300,27 @@ export default function SubcontractorContract() {
     }
   }
 
+  // تحميل أعلام المرفقات لكل دفعة (فاتورة/إثبات) لعرض أزرار الاطّلاع
+  const loadPayMeta = async (aid: string) => {
+    const { data } = await supabase.from('subcontractor_payments').select('id, has_invoice_copy, has_payment_proof').eq('assignment_id', aid)
+    const m: Record<string, { invoice: boolean; proof: boolean }> = {}
+    for (const p of (data ?? []) as { id: string; has_invoice_copy?: boolean; has_payment_proof?: boolean }[]) {
+      m[p.id] = { invoice: !!p.has_invoice_copy, proof: !!p.has_payment_proof }
+    }
+    setPayMeta(m)
+  }
+
+  // فتح مرفق دفعة (فاتورة المقاول أو إثبات الدفع) للعرض/التحميل في تبويب جديد
+  const openPaymentAttachment = async (paymentId: string, which: 'invoice' | 'proof') => {
+    const cols = which === 'invoice' ? 'invoice_copy_path, invoice_copy_data' : 'payment_proof_path, payment_proof_data'
+    const { data } = await supabase.from('subcontractor_payments').select(cols).eq('id', paymentId).maybeSingle()
+    const row = (data ?? {}) as Record<string, string | undefined>
+    const val = which === 'invoice' ? (row.invoice_copy_path || row.invoice_copy_data) : (row.payment_proof_path || row.payment_proof_data)
+    const url = await resolveAttachmentUrl(val || '')
+    if (url) openStoredFile(url)
+    else toast.error('تعذّر فتح المرفق')
+  }
+
   // ─── الربط المالي: تسجيل دفع مرحلة → إنشاء مصروف فعلي ────────────────
   const confirmPayStage = async () => {
     if (!payStage || !assignmentId || !id) return
@@ -286,6 +330,9 @@ export default function SubcontractorContract() {
     }
     setBusyStage(payStage.id)
     try {
+      // رفع المرفقات إلى Storage (إن وُجدت) قبل إنشاء الدفعة
+      const invoicePath = payAttach.invoice ? await uploadDataUrl(payAttach.invoice, SUB_FOLDER) : ''
+      const proofPath = payAttach.proof ? await uploadDataUrl(payAttach.proof, SUB_FOLDER) : ''
       const { data, error } = await supabase.from('subcontractor_payments').insert({
         assignment_id: assignmentId,
         subcontractor_id: id,
@@ -295,10 +342,15 @@ export default function SubcontractorContract() {
         payment_method: payForm.payment_method,
         check_due_date: payForm.payment_method === 'cheque' ? (payForm.check_due_date || null) : null,
         check_number: payForm.payment_method === 'cheque' ? payForm.check_number : '',
+        invoice_copy_path: invoicePath,
+        payment_proof_path: proofPath,
+        has_invoice_copy: !!invoicePath,
+        has_payment_proof: !!proofPath,
         notes: `دفعة مرحلة ${payStage.seq}: ${payStage.description}`,
       }).select('id').single()
       if (error) throw error
       const paymentId = (data as { id: string }).id
+      setPayMeta(prev => ({ ...prev, [paymentId]: { invoice: !!invoicePath, proof: !!proofPath } }))
       const { error: e2 } = await supabase.from('subcontractor_stages')
         .update({ status: 'paid', payment_id: paymentId, paid_date: payForm.payment_date || todayLocal(), updated_at: new Date().toISOString() })
         .eq('id', payStage.id)
@@ -315,6 +367,7 @@ export default function SubcontractorContract() {
       setBusyStage(null)
       setPayStage(null)
       setPayForm({ payment_date: todayLocal(), payment_method: 'cash', check_due_date: '', check_number: '' })
+      setPayAttach({ invoice: '', proof: '' })
     }
   }
 
@@ -446,7 +499,7 @@ export default function SubcontractorContract() {
         </div>
         {anyPaid && (
           <div className="mb-3 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
-            توجد مراحل مدفوعة — جدول المبالغ مقفل جزئياً لحماية الربط المالي. يمكنك تعديل نصوص/مبالغ المراحل غير المدفوعة فقط.
+            توجد مراحل مدفوعة — الجدول مقفل بالكامل لحماية الربط المالي. للتعديل، تراجع عن الدفعات أولاً.
           </div>
         )}
         <div className="space-y-2">
@@ -454,12 +507,13 @@ export default function SubcontractorContract() {
             <div key={idx} className="flex items-center gap-2">
               <span className="w-6 text-center text-sm text-slate-400">{idx + 1}</span>
               <input
-                className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                disabled={anyPaid}
+                className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:bg-slate-50 disabled:text-slate-500"
                 value={st.description} onChange={e => setStageField(idx, 'description', e.target.value)} dir="ltr" placeholder="Stage description"
               />
               <input
-                type="number" step="0.001"
-                className="w-28 border border-slate-200 rounded-lg px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-amber-200"
+                type="number" step="0.001" disabled={anyPaid}
+                className="w-28 border border-slate-200 rounded-lg px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:bg-slate-50 disabled:text-slate-500"
                 value={String(st.amount)} onChange={e => setStageField(idx, 'amount', e.target.value)} dir="ltr"
               />
               {!anyPaid && (
@@ -508,12 +562,26 @@ export default function SubcontractorContract() {
                   </div>
                   <span className="text-sm font-medium text-slate-700">{formatCurrency(st.amount)}</span>
                   {st.status === 'paid' ? (
-                    <button onClick={() => setUnpayStage(st)} disabled={busyStage === st.id}
-                      className="text-xs flex items-center gap-1 text-slate-500 hover:text-red-600 disabled:opacity-50">
-                      {busyStage === st.id ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />} تراجع
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {st.payment_id && payMeta[st.payment_id]?.invoice && (
+                        <button onClick={() => openPaymentAttachment(st.payment_id!, 'invoice')} title="فاتورة المقاول"
+                          className="text-xs flex items-center gap-1 text-blue-600 hover:text-blue-700">
+                          <FileText size={14} /> الفاتورة
+                        </button>
+                      )}
+                      {st.payment_id && payMeta[st.payment_id]?.proof && (
+                        <button onClick={() => openPaymentAttachment(st.payment_id!, 'proof')} title="إثبات الدفع"
+                          className="text-xs flex items-center gap-1 text-blue-600 hover:text-blue-700">
+                          <Paperclip size={14} /> الإثبات
+                        </button>
+                      )}
+                      <button onClick={() => setUnpayStage(st)} disabled={busyStage === st.id}
+                        className="text-xs flex items-center gap-1 text-slate-500 hover:text-red-600 disabled:opacity-50">
+                        {busyStage === st.id ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />} تراجع
+                      </button>
+                    </div>
                   ) : (
-                    <button onClick={() => { setPayStage(st); setPayForm({ payment_date: todayLocal(), payment_method: 'cash', check_due_date: '', check_number: '' }) }} disabled={busyStage === st.id}
+                    <button onClick={() => { setPayStage(st); setPayForm({ payment_date: todayLocal(), payment_method: 'cash', check_due_date: '', check_number: '' }); setPayAttach({ invoice: '', proof: '' }) }} disabled={busyStage === st.id}
                       className="text-xs flex items-center gap-1 text-green-600 hover:text-green-700 disabled:opacity-50 font-medium">
                       <CheckCircle2 size={15} /> تم الدفع
                     </button>
@@ -545,6 +613,14 @@ export default function SubcontractorContract() {
                   الشيك الآجل لا يُحتسب مصروفاً إلا بعد حلول تاريخ استحقاقه (نفس منطق النظام).
                 </p>
               )}
+              {/* مرفقات الدفعة: فاتورة المقاول + إثبات الدفع (صورة أو PDF) */}
+              <div>
+                <div className="text-xs text-slate-500 mb-1.5">المرفقات (اختياري)</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <AttachInput label="فاتورة المقاول" data={payAttach.invoice} onPick={d => setPayAttach(a => ({ ...a, invoice: d }))} />
+                  <AttachInput label="إثبات الدفع" data={payAttach.proof} onPick={d => setPayAttach(a => ({ ...a, proof: d }))} />
+                </div>
+              </div>
             </div>
             <div className="flex gap-2 justify-end mt-5">
               <Button variant="secondary" onClick={() => setPayStage(null)}>إلغاء</Button>
