@@ -5,7 +5,7 @@ import {
   Image as ImageIcon, Receipt, CreditCard, Building2, ChevronDown, ChevronLeft,
   Calendar, Truck, Wallet, LayoutGrid, List as ListIcon, FileSpreadsheet
 } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import type { PurchaseInvoice, PurchaseInvoiceDelivery } from '../../types'
 import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import { openStoredFile } from '../../lib/ai'
@@ -80,12 +80,12 @@ export default function PurchaseInvoiceList() {
     try {
       // استعلام خفيف: بدون أعمدة الصور/الملفات (base64) الضخمة —
       // جلبها عبر select('*') كان يضخّم حجم الرد ويتسبب في خطأ 500 من الخادم
-      const { data, error } = await supabase
-        .from('purchase_invoices')
-        .select('id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, vendor_invoice_number, amount, subtotal, tax_rate, payment_method, check_due_date, notes, entry_date, created_at, updated_at')
-      if (error) throw error
+      const data = await safeSelect<InvoiceRow>(
+        'purchase_invoices',
+        'id, supplier_id, supplier_name, project_id, project_name, lpo_id, lpo_number, vendor_invoice_number, amount, subtotal, tax_rate, payment_method, check_due_date, notes, entry_date, created_at, updated_at',
+      )
       // ترتيب آمن حسب تاريخ الفاتورة الفعلي (يتحمّل القيم الفارغة دون أن ينهار)
-      const rows = ((data ?? []) as InvoiceRow[]).slice().sort((a, b) =>
+      const rows = data.slice().sort((a, b) =>
         (invoiceDate(b) || '').localeCompare(invoiceDate(a) || '')
       )
       setInvoices(rows)
@@ -95,12 +95,13 @@ export default function PurchaseInvoiceList() {
       setPendingChequeIds(pending.purchaseIds)
 
       // مؤشّر وجود المرفقات (خفيف) من أعمدة محسوبة اختيارية — يُتجاهل بأمان إن لم تكن موجودة بعد
-      const { data: flags } = await supabase
-        .from('purchase_invoices')
-        .select('id, has_invoice_copy, has_payment_proof, has_check_image')
+      const flags = await safeSelect<{ id: string; has_invoice_copy?: boolean; has_payment_proof?: boolean; has_check_image?: boolean }>(
+        'purchase_invoices',
+        'id, has_invoice_copy, has_payment_proof, has_check_image',
+      )
       if (flags) {
         const counts: Record<string, number> = {}
-        for (const f of flags as Array<{ id: string; has_invoice_copy?: boolean; has_payment_proof?: boolean; has_check_image?: boolean }>) {
+        for (const f of flags) {
           counts[f.id] = (f.has_invoice_copy ? 1 : 0) + (f.has_payment_proof ? 1 : 0) + (f.has_check_image ? 1 : 0)
         }
         setDocCounts(counts)

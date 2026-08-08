@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Search, Phone, Wrench, ChevronLeft, CheckCircle } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, subcontractorSpecialtyLabel, subcontractorSpecialtyColor } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 
@@ -38,8 +38,8 @@ const SPECIALTY_OPTIONS = [
 async function fetchSubcontractorsWithStats(): Promise<SubWithStats[]> {
   const [subRes, assignRes, payRes] = await Promise.all([
     supabase.from('subcontractors').select('*').order('name'),
-    supabase.from('subcontractor_assignments').select('subcontractor_id, agreed_amount, status'),
-    supabase.from('subcontractor_payments').select('subcontractor_id, amount'),
+    safeSelect<{ subcontractor_id: string; agreed_amount: number; status: string }>('subcontractor_assignments', 'subcontractor_id, agreed_amount, status').then(data => ({ data })),
+    safeSelect<{ subcontractor_id: string; amount: number }>('subcontractor_payments', 'subcontractor_id, amount').then(data => ({ data })),
   ])
   const subList = (subRes.data ?? []) as Subcontractor[]
   const assigns = (assignRes.data ?? []) as { subcontractor_id: string; agreed_amount: number; status: string }[]

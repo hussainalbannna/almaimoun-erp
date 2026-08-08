@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Plus, Search, Eye, Pencil, Trash2, ShoppingCart } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, formatDate, lpoStatusLabel, lpoStatusColor } from '../../lib/utils'
 import type { LPO, LPOStatus } from '../../types'
 import Button from '../../components/ui/Button'
@@ -20,8 +20,8 @@ const STATUS_FILTERS = [
 
 // جلب أوامر الشراء (مصدر React Query — نفس مفتاح إبطال LPOForm)
 async function fetchLpos(): Promise<LPO[]> {
-  const { data } = await supabase.from('lpos').select('*').order('created_at', { ascending: false })
-  return (data ?? []) as LPO[]
+  const data = await safeSelect<LPO>('lpos', '*', q => q.order('created_at', { ascending: false }))
+  return data
 }
 
 export default function LPOList() {

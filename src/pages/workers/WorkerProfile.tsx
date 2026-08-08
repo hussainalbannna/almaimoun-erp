@@ -5,7 +5,7 @@ import {
   ArrowLeft, User, FileText, CalendarCheck, Stethoscope,
   Plane, ShieldAlert, Wallet, Plus, Trash2, Upload, X, Eye, Loader2, Image as ImageIcon
 } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import type {
   Worker, WorkerAdvance, WorkerAttendance, WorkerLoan,
   WorkerMedicalRecord, WorkerTravelRecord, WorkerDocument,
@@ -78,7 +78,7 @@ export default function WorkerProfile() {
       if (w) { setWorker(w as Worker); setForm(w as Worker) }
 
       const [attRes, advRes, loanRes, medRes, travRes, docRes, discRes] = await Promise.all([
-        supabase.from('worker_attendance').select('*').eq('worker_id', id).order('attendance_date', { ascending: false }).limit(100),
+        safeSelect<WorkerAttendance>('worker_attendance', '*', q => q.eq('worker_id', id).order('attendance_date', { ascending: false })).then(data => ({ data })),
         supabase.from('worker_advances').select('*').eq('worker_id', id).order('advance_date', { ascending: false }),
         supabase.from('worker_loans').select('*').eq('worker_id', id).order('loan_date', { ascending: false }),
         supabase.from('worker_medical_records').select('*').eq('worker_id', id).order('visit_date', { ascending: false }),
@@ -289,9 +289,9 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
 
   // تحميل المستندات المخصصة (من جدول documents العام) + حلّ روابط عرضها
   useEffect(() => {
-    supabase.from('documents').select('id,name,file_url,file_type,created_at')
-      .eq('related_id', workerId).eq('related_type', 'worker').order('created_at', { ascending: false })
-      .then(async ({ data }) => {
+    safeSelect<CustomDoc>('documents', 'id,name,file_url,file_type,created_at',
+      q => q.eq('related_id', workerId).eq('related_type', 'worker').order('created_at', { ascending: false }))
+      .then(async data => {
         const docs = (data ?? []) as CustomDoc[]
         setCustomDocs(docs)
         // توافق خلفي: base64 قديم يُعرض مباشرة، والمسارات الجديدة تُوقَّع دفعة واحدة (بدل نداء لكل مستند)

@@ -6,7 +6,7 @@ import {
   DollarSign, Briefcase, Users, ShoppingCart, KeyRound, ChevronDown,
   Upload, Image as ImageIcon, X, Trash2, Plus, History
 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { supabase, safeSelect } from '../../lib/supabase';
 import type {
   Project, ProjectMilestone, VariationOrder, DailyLog, ProjectLaborEntry
 } from '../../types';
@@ -133,7 +133,7 @@ export default function ProjectDetail() {
         supabase.from('purchase_invoices').select('id, amount, payment_method, check_due_date').eq('project_id', id),
         supabase.from('subcontractor_payments').select('id, amount, payment_method, check_due_date').eq('project_id', id),
         supabase.from('rentals').select('id').eq('project_id', id),
-        supabase.from('worker_attendance').select('worker_id, status').eq('project_id', id),
+        safeSelect<{ worker_id: string; status?: string }>('worker_attendance', 'worker_id, status', q => q.eq('project_id', id)).then(data => ({ data })),
         supabase.from('project_labor_entries').select('*').eq('project_id', id).order('cost_date', { ascending: false }),
         supabase.from('workers').select('id, name, name_en, worker_type').eq('status', 'former').order('name'),
       ]);

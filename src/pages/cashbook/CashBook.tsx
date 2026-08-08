@@ -4,7 +4,7 @@ import {
   Plus, Trash2, Search, Upload, ExternalLink, Sparkles, Loader2, X,
   BarChart3, Receipt as ReceiptIcon, Download, Pencil, CalendarDays,
 } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import type { Project } from '../../types'
 import { formatCurrency, formatDate, extractVAT, todayLocal } from '../../lib/utils'
 import { readDocumentText, extractJSON, hasApiKey, compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
@@ -145,8 +145,8 @@ const EXPORT_COLS = [
 
 // جلب القيود والمشاريع (مصادر React Query)
 async function fetchEntries(): Promise<CashEntry[]> {
-  const { data } = await supabase.from('accounts_payable').select(LIGHT_COLUMNS).order('entry_date', { ascending: false })
-  return (data ?? []) as unknown as CashEntry[]
+  const data = await safeSelect('accounts_payable', LIGHT_COLUMNS, q => q.order('entry_date', { ascending: false }))
+  return data as unknown as CashEntry[]
 }
 async function fetchProjectsList(): Promise<Project[]> {
   const { data } = await supabase.from('projects').select('id, project_name').order('project_name')

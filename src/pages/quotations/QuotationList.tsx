@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, FileText, Eye, Pencil, Trash2, Calculator } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, formatDate } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -34,8 +34,8 @@ const STATUS: Record<string, { label: string; color: 'gray' | 'blue' | 'green' |
 
 // جلب عروض الأسعار (مصدر React Query — نفس مفتاح إبطال QuotationForm)
 async function fetchQuotations(): Promise<Quotation[]> {
-  const { data } = await supabase.from('quotations').select('*').order('created_at', { ascending: false })
-  return (data ?? []) as Quotation[]
+  const data = await safeSelect<Quotation>('quotations', '*', q => q.order('created_at', { ascending: false }))
+  return data
 }
 
 export default function QuotationList() {

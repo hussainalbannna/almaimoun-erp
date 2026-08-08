@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Sparkles, Loader2, Copy, Paperclip, FileText, Trash2, X } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import type { Customer } from '../../types'
 import { readDocumentText, extractJSON, hasApiKey, compressImage, openStoredFile } from '../../lib/ai'
 import { uploadAttachment, uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
@@ -44,9 +44,9 @@ export default function CustomerForm() {
 
   // جلب مستندات العميل (بلا محتوى ثقيل — file_url يحمل مساراً قصيراً)
   const loadDocs = async () => {
-    const { data } = await supabase.from('documents').select('id,name,doc_type,file_url,file_type,created_at')
-      .eq('related_id', id).eq('related_type', 'customer').order('created_at', { ascending: false })
-    setDocs((data ?? []) as CustomerDoc[])
+    const data = await safeSelect<CustomerDoc>('documents', 'id,name,doc_type,file_url,file_type,created_at',
+      q => q.eq('related_id', id).eq('related_type', 'customer').order('created_at', { ascending: false }))
+    setDocs(data)
   }
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, ListTodo, Clock, CheckCircle2, Trash2, Pencil, AlertTriangle, Calendar } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatDate } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -47,8 +47,8 @@ const emptyForm = () => ({
 
 // جلب المهام (مصدر React Query)
 async function fetchTasks(): Promise<Task[]> {
-  const { data } = await supabase.from('tasks').select('*').order('created_at', { ascending: false })
-  return (data ?? []) as Task[]
+  const data = await safeSelect<Task>('tasks', '*', q => q.order('created_at', { ascending: false }))
+  return data
 }
 
 export default function TasksBoard() {

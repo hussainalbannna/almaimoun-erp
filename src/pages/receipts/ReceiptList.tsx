@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Eye, Trash2, Search } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import type { Receipt } from '../../types'
 import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import Button from '../../components/ui/Button'
@@ -11,8 +11,8 @@ import toast from 'react-hot-toast'
 
 // جلب الإيصالات (مصدر React Query)
 async function fetchReceipts(): Promise<Receipt[]> {
-  const { data } = await supabase.from('receipts').select('*').order('created_at', { ascending: false })
-  return (data ?? []) as Receipt[]
+  const data = await safeSelect<Receipt>('receipts', '*', q => q.order('created_at', { ascending: false }))
+  return data
 }
 
 export default function ReceiptList() {

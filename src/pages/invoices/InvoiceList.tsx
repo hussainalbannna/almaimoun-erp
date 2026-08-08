@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Plus, Search, Eye, Pencil, Trash2, FileText, Receipt, Building2, ChevronDown, ChevronLeft, LayoutGrid, List as ListIcon } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, formatDate, invoiceStatusLabel, invoiceStatusColor } from '../../lib/utils'
 import type { Invoice, InvoiceStatus } from '../../types'
 import Button from '../../components/ui/Button'
@@ -35,8 +35,8 @@ interface CustomerGroup {
 // جلب الفواتير مع حساب المتبقي (الإجمالي − مجموع الإيصالات) — مصدر React Query
 async function fetchInvoicesWithBalance(): Promise<InvoiceWithBalance[]> {
   const [invRes, recRes] = await Promise.all([
-    supabase.from('invoices').select('*').order('created_at', { ascending: false }),
-    supabase.from('receipts').select('invoice_id, amount'),
+    safeSelect<Invoice>('invoices', '*', q => q.order('created_at', { ascending: false })).then(data => ({ data })),
+    safeSelect<{ invoice_id: string | null; amount: number }>('receipts', 'invoice_id, amount').then(data => ({ data })),
   ])
   const receiptsByInvoice: Record<string, number> = {}
   for (const r of (recRes.data ?? []) as { invoice_id: string | null; amount: number }[]) {

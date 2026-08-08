@@ -5,7 +5,7 @@ import {
   AlertTriangle, CheckCircle2, Undo2, Ban, Landmark, CalendarClock,
   FileText, Image as ImageIcon, Link2, RotateCcw
 } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, formatDate, daysUntil, todayLocal } from '../../lib/utils'
 import { compressImage, fileToDataUrl, openStoredFile } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
@@ -108,8 +108,8 @@ const LIGHT_COLUMNS =
 
 // جلب الشيكات ('cheques' — مفتاح مشترك) وقائمة المشاريع (مصادر React Query)
 async function fetchAllCheques(): Promise<Cheque[]> {
-  const { data } = await supabase.from('cheques').select(LIGHT_COLUMNS).order('due_date', { ascending: true, nullsFirst: false })
-  return (data ?? []) as unknown as Cheque[]
+  const data = await safeSelect('cheques', LIGHT_COLUMNS, q => q.order('due_date', { ascending: true, nullsFirst: false }))
+  return data as unknown as Cheque[]
 }
 async function fetchProjectsList(): Promise<ProjectOpt[]> {
   const { data } = await supabase.from('projects').select('id, project_name').order('project_name')

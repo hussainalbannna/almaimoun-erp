@@ -6,7 +6,7 @@ import {
   Building2, Truck, Home, Zap, Wrench, Package, Calendar, Wallet, CreditCard,
   LayoutDashboard, ListChecks, Receipt, TrendingUp, Clock, CheckCircle2, DollarSign
 } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, formatDate, todayLocal } from '../../lib/utils'
 import { openStoredFile, compressImage, fileToDataUrl } from '../../lib/ai'
 import { uploadDataUrl, resolveAttachmentUrl, deleteAttachment } from '../../lib/storage'
@@ -92,11 +92,11 @@ const PAYMENT_COLUMNS =
 // جلب الإيجارات ودفعاتها مرتّبة (مصدر React Query) — بالأعمدة الخفيفة فقط
 async function fetchRentalsData(): Promise<{ rentals: Rental[]; payments: RentalPayment[] }> {
   const [rRes, pRes] = await Promise.all([
-    supabase.from('rentals').select(RENTAL_COLUMNS),
-    supabase.from('rental_payments').select(PAYMENT_COLUMNS),
+    safeSelect('rentals', RENTAL_COLUMNS).then(data => ({ data })),
+    safeSelect('rental_payments', PAYMENT_COLUMNS).then(data => ({ data })),
   ])
-  const rentals = ((rRes.data ?? []) as unknown as Rental[]).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
-  const payments = ((pRes.data ?? []) as unknown as RentalPayment[]).sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''))
+  const rentals = (rRes.data as unknown as Rental[]).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+  const payments = (pRes.data as unknown as RentalPayment[]).sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''))
   return { rentals, payments }
 }
 

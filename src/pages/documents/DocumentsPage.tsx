@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2, FileArchive, Upload, ExternalLink, Loader2, Building2, Folder } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { parseDocument } from '../../lib/document-parser'
 import { uploadAttachment, resolveAttachmentUrl, deleteAttachment, isDataUrl } from '../../lib/storage'
 import type { Document, ExtractedDocumentData } from '../../types'
@@ -27,12 +27,11 @@ const OFFICE_DOC_TYPES = [
 ]
 
 async function fetchDocuments(): Promise<DocumentRow[]> {
-  const { data, error } = await supabase
-    .from('documents')
-    .select('id, name, file_type, extracted_data, has_file, created_at, related_type, related_id, doc_type')
-    .order('created_at', { ascending: false })
-  if (error) throw error
-  return (data ?? []) as DocumentRow[]
+  return await safeSelect<DocumentRow>(
+    'documents',
+    'id, name, file_type, extracted_data, has_file, created_at, related_type, related_id, doc_type',
+    q => q.order('created_at', { ascending: false }),
+  )
 }
 
 async function fetchProjectsLite(): Promise<ProjectRow[]> {
