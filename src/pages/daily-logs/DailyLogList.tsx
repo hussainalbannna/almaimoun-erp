@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Printer, Pencil, Trash2, ImagePlus, X, Camera, ChevronDown, ChevronUp, ShoppingCart, Sparkles, Loader2, Cloud, Users, Eye } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import type { DailyLog, Project, Worker } from '../../types'
 import { formatDate, formatCurrency, todayLocal } from '../../lib/utils'
 import { readDocumentText, hasApiKey } from '../../lib/ai'
@@ -338,7 +338,7 @@ async function fetchDailyLogsData(): Promise<DailyLogsData> {
   const [pRes, wRes, lRes] = await Promise.all([
     supabase.from('projects').select('id, project_name').order('project_name'),
     supabase.from('workers').select('id, name, name_en, branch, pay_type, daily_rate, actual_salary, basic_salary, social_allowance').eq('status', 'active').order('name'),
-    supabase.from('daily_logs').select(LOG_LIST_COLUMNS).order('log_date', { ascending: false }).limit(200),
+    safeSelect<LightLog>('daily_logs', LOG_LIST_COLUMNS, q => q.order('log_date', { ascending: false })).then(data => ({ data })),
   ])
   const projects = (pRes.data ?? []) as Project[]
   const workers = (wRes.data ?? []) as Worker[]
