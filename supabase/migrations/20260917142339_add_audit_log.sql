@@ -73,8 +73,11 @@ CREATE POLICY audit_log_select ON public.audit_log FOR SELECT TO authenticated U
 --  فيبقى **كل نصوص الأعمال كاملة** (ملاحظات/وصف/شروط مهما طالت) قابلةً للاسترجاع.
 --  علَم has_* المولَّد يبقى في الصف فيدلّ على أن ملفًا كان موجودًا. محتوى الملف نفسه
 --  لا يُكرَّر في السجل (كملفات Storage — حدّ موثّق). القائمة صريحة (لا اعتماد على الطول)،
---  ونطاقها الحاليّ هو الأعمدة النصّية العليا؛ base64 المتداخل داخل jsonb/مصفوفات (إن ظهر
---  مستقبلًا) خارج هذا النطاق ويُضاف عند الحاجة — لا ندّعي شمولًا لكل الأشكال.
+--  ونطاقها الحاليّ هو الأعمدة النصّية العليا التي تحفظ base64 فعلًا؛ base64 المتداخل داخل
+--  jsonb/مصفوفات (إن ظهر مستقبلًا) خارج هذا النطاق ويُضاف عند الحاجة — لا ندّعي شمولًا لكل الأشكال.
+--  قاعدة صيانة (تُراجَع في كل هجرة/CI): أي عمود جديد يحفظ صورة/ملف base64 ضخم يُضاف هنا صراحةً.
+--  ملاحظة: نستبعد فقط أعمدة المحتوى الثنائي (*_data / work_images)، لا أعمدة المسارات/الروابط
+--  (*_path / *_url) لأنها صغيرة ومفيدة للاسترجاع.
 CREATE OR REPLACE FUNCTION public.audit_redact(j jsonb)
 RETURNS jsonb
 LANGUAGE sql
@@ -89,8 +92,7 @@ AS $$
     'payment_proof_data',  -- subcontractor_payments
     'proof_data',          -- rental_payments
     'receipt_image_data',  -- accounts_payable
-    'work_images',         -- subcontractor_assignments
-    'id_photo_url'         -- workers (قد يحمل data URL)
+    'work_images'          -- subcontractor_assignments
   ]::text[];
 $$;
 -- سحب التشغيل من كل أدوار التطبيق/الخدمة صراحةً (منح Supabase الافتراضي يمنحها مباشرةً)
