@@ -7,6 +7,7 @@ import {
 import { supabase } from '../../lib/supabase'
 import { formatDateTime, timeAgo } from '../../lib/utils'
 import { OWNER_EMAIL } from '../../lib/authz'
+import { useAuth } from '../../contexts/AuthContext'
 import toast from 'react-hot-toast'
 
 // ════════════════════════════════════════════════════════════════════
@@ -102,23 +103,50 @@ async function fetchAudit(filters: Filters): Promise<AuditRow[]> {
   return (data ?? []) as AuditRow[]
 }
 
-// ─── تحويل قيمة حقل إلى نص للعرض ──────────────────────────────────────
-const REDACTED_MARKER = '[[ملف/صورة — غير معروض]]'
+// ─── تنقية العرض: إخفاء محتوى base64 المضمّن فقط، مع الحفاظ التام على المسارات والنصوص ──
+//
+//  نُطابِق دلالة تنقية الخادم بدقة (audit_redact_file): يُنقَّى فقط ما *يبدأ* بـ "data:"،
+//  ولو كان متداخلاً داخل مصفوفة/كائن أو داخل نصّ يحوي JSON. لا نطابق substring عامة على
+//  نصوص الأعمال (كي لا نبتلع ملاحظة تحوي كلمة REDACTED مثلاً). الأعمدة التي نقّاها الخادم
+//  تصل كعلامة عربية جاهزة فتُعرض كما هي؛ هذه الطبقة شبكة أمان للأعمدة غير المشمولة أو البيانات القديمة.
+const FILE_MARKER = '[[ملف/صورة — غير معروض]]'
+
+function sanitize(value: unknown): unknown {
+  if (typeof value === 'string') {
+    if (value.startsWith('data:')) return FILE_MARKER
+    // قد تكون القيمة نصًّا يحوي JSON (مصفوفة/كائن) بداخله Data URLs
+    const head = value.trimStart()[0]
+    if (head === '[' || head === '{') {
+      try {
+        const parsed = JSON.parse(value)
+        const cleaned = sanitize(parsed)
+        // نُعيد التسلسل فقط إن تغيّر شيء فعلاً، حفاظًا على النص الأصلي حرفيًا
+        return JSON.stringify(cleaned) === JSON.stringify(parsed) ? value : JSON.stringify(cleaned)
+      } catch {
+        return value // ليس JSON صالحًا — نص أعمال عادي يُترك كما هو
+      }
+    }
+    return value
+  }
+  if (Array.isArray(value)) return value.map(sanitize)
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = sanitize(v)
+    return out
+  }
+  return value
+}
 
 function displayValue(v: unknown): string {
-  if (v === null || v === undefined) return '—'
-  if (typeof v === 'boolean') return v ? 'نعم' : 'لا'
-  if (typeof v === 'number') return String(v)
-  if (typeof v === 'string') {
-    if (v === '') return '(فارغ)'
-    // بيانات base64 مُنقّاة من الخادم قد تظهر كعلامة — نعرضها بشكل ودّي
-    if (v.startsWith('data:') || v.includes('REDACTED') || v.includes('__redacted__')) return REDACTED_MARKER
-    return v
-  }
+  const s = sanitize(v)
+  if (s === null || s === undefined) return '—'
+  if (typeof s === 'boolean') return s ? 'نعم' : 'لا'
+  if (typeof s === 'number') return String(s)
+  if (typeof s === 'string') return s === '' ? '(فارغ)' : s
   try {
-    return JSON.stringify(v, null, 2)
+    return JSON.stringify(s, null, 2)
   } catch {
-    return String(v)
+    return String(s)
   }
 }
 
@@ -154,12 +182,17 @@ function meaningfulEntries(d: Record<string, unknown> | null): [string, unknown]
 
 export default function ActivityLog() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [filters, setFilters] = useState<Filters>({ actor: '', action: '', table: '', from: '', to: '' })
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
 
+  // نعزل مفتاح الكاش بهوية المستخدم كي لا تبقى بيانات السجل الحسّاسة قابلة لإعادة الاستخدام
+  // لجلسة أخرى على الجهاز نفسه (بالإضافة إلى مسح الكاش عند الخروج في AuthContext).
+  const identity = user?.email ?? 'anon'
+
   const { data: rows = [], isLoading, isError, isFetching } = useQuery({
-    queryKey: ['audit-log', filters],
+    queryKey: ['audit-log', identity, filters],
     queryFn: () => fetchAudit(filters),
   })
 
@@ -194,9 +227,10 @@ export default function ActivityLog() {
   const hasActiveFilter = Boolean(filters.actor || filters.action || filters.table || filters.from || filters.to || search)
   const clearFilters = () => { setFilters({ actor: '', action: '', table: '', from: '', to: '' }); setSearch('') }
 
-  const copyJson = (obj: unknown) => {
+  const copyJson = async (obj: unknown) => {
     try {
-      navigator.clipboard.writeText(JSON.stringify(obj, null, 2))
+      // ننتظر اكتمال النسخ فعلاً قبل رسالة النجاح، ونلتقط رفض الوعد
+      await navigator.clipboard.writeText(JSON.stringify(obj, null, 2))
       toast.success('نُسخت البيانات')
     } catch {
       toast.error('تعذّر النسخ')
@@ -326,9 +360,12 @@ export default function ActivityLog() {
           <p className="text-slate-500 font-medium">
             {hasActiveFilter ? 'لا يوجد نشاط مطابق للفلاتر' : 'لا يوجد نشاط مُسجّل بعد'}
           </p>
-          {!hasActiveFilter && (
+          {!hasActiveFilter ? (
             <p className="text-slate-400 text-xs mt-1">يبدأ التسجيل تلقائياً مع أول حركة يقوم بها أي موظف.</p>
-          )}
+          ) : search && rows.length >= MAX_ROWS ? (
+            // البحث يجري ضمن أحدث MAX_ROWS فقط — ننبّه كي لا يُفهم الفراغ كعدم وجود نشاط أصلاً
+            <p className="text-slate-400 text-xs mt-1">البحث ضمن أحدث {MAX_ROWS} حدثاً فقط — ضيّق فلاتر الخادم (الموظف/القسم/التاريخ) للوصول إلى أحداث أقدم.</p>
+          ) : null}
         </div>
       ) : (
         <>
@@ -398,7 +435,8 @@ export default function ActivityLog() {
                           </div>
                           <FieldTable entries={meaningfulEntries(row.old_data)} />
                           <p className="text-[11px] text-red-600/70 mt-2">
-                            البيانات محفوظة كاملة هنا — لا شيء يضيع. (الاسترجاع بضغطة زر ضمن التحديث القادم.)
+                            هذه نسخة بيانات الصف كما حُفظت في السجل. قد يكون محتوى المرفقات (الصور/الملفات)
+                            مستبعَداً، ولا يُضمن استرجاع ملفات التخزين. استخدم «نسخ البيانات» للاطلاع الكامل.
                           </p>
                         </div>
                       )}
