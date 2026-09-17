@@ -68,16 +68,46 @@ END $$;
 DROP POLICY IF EXISTS audit_log_select ON public.audit_log;
 CREATE POLICY audit_log_select ON public.audit_log FOR SELECT TO authenticated USING (true);
 
--- ─── 3أ) استبعاد أعمدة الملفات الثنائية (base64) بأسمائها — بنيويًّا لا بالطول ─
---  نحذف من نسخة السجل الأعمدةَ المعروفة التي تحفظ صورًا/ملفات base64 ضخمة فقط،
---  فيبقى **كل نصوص الأعمال كاملة** (ملاحظات/وصف/شروط مهما طالت) قابلةً للاسترجاع.
---  علَم has_* المولَّد يبقى في الصف فيدلّ على أن ملفًا كان موجودًا. محتوى الملف نفسه
---  نطاقنا: أعمدة المحتوى الثنائي المعروفة فقط (القائمة أدناه). داخل هذه الأعمدة **نميّز**:
---   • قيمة base64/data-URL (تبدأ بـ 'data:' أو أطول من 500 حرف) → تُستبدل بعلامة (لا تُكرَّر في السجل).
---   • مسار/مرجع Storage قصير (مثل 'cheques/ab.jpg') → **يبقى كاملًا** لأنه مرجع الملف المفيد للاسترجاع.
---  كل الأعمدة الأخرى (نصوص الأعمال: ملاحظات/وصف/شروط) تبقى كاملة مهما طالت — لا تُمَسّ.
---  base64 المتداخل داخل jsonb/مصفوفات خارج النطاق (يُضاف عند الحاجة). قاعدة صيانة (مراجعة/CI):
---  أي عمود محتوى ثنائي جديد يُضاف للقائمة صراحةً؛ لا نستبعد أعمدة المسارات/الروابط (*_path/*_url).
+-- ─── 3أ) تنقية محتوى base64 المضمّن — على مستوى العنصر، بلا اعتماد على الطول ─
+--  الواقع في القاعدة: أعمدة *_data تحفظ الآن **مسارات Storage قصيرة** (مراجع ملفات)، لا base64.
+--  لذا نستبعد فقط المحتوى المضمّن الفعلي (data URL يبدأ بـ 'data:')، و**نُبقي كل مسار/مرجع مهما طال**.
+--  work_images قد يكون مصفوفة JSON نصّية: نُنقّيها **عنصرًا عنصرًا** (نحذف عناصر data:، ونُبقي المسارات).
+--  كل نصوص الأعمال (في بقية الأعمدة) تبقى كاملة. لا نستخدم الطول دليلًا على base64 إطلاقًا.
+--  قاعدة صيانة (مراجعة/CI): أي عمود محتوى ثنائي جديد يُضاف للقائمة صراحةً؛ لا نمسّ أعمدة المسارات.
+
+-- مساعد: يُنقّي قيمة عمود ملف نصّية — يحذف data URL المضمّن ويُبقي المسارات (يدعم المصفوفة النصّية)
+CREATE OR REPLACE FUNCTION public.audit_redact_file(v text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE arr jsonb; elem jsonb; out jsonb;
+BEGIN
+  IF v IS NULL OR v = '' THEN RETURN v; END IF;
+  -- قيمة مفردة: data URL (base64 مضمّن) → علامة؛ أي مسار/نص آخر → يبقى مهما طال
+  IF left(v, 5) = 'data:' THEN
+    RETURN '[[محذوف من السجل: محتوى ملف base64 مضمّن — المرجع/المسار في الجدول الأصلي]]';
+  END IF;
+  -- مصفوفة JSON نصّية (مثل work_images): تنقية على مستوى العناصر
+  IF left(ltrim(v), 1) = '[' THEN
+    BEGIN arr := v::jsonb; EXCEPTION WHEN others THEN RETURN v; END;  -- ليس JSON صالحًا → أبقِه كما هو
+    IF jsonb_typeof(arr) = 'array' THEN
+      out := '[]'::jsonb;
+      FOR elem IN SELECT * FROM jsonb_array_elements(arr) LOOP
+        IF jsonb_typeof(elem) = 'string' AND left(elem #>> '{}', 5) = 'data:'
+          THEN out := out || to_jsonb('[[محذوف base64]]'::text);   -- عنصر صورة مضمّن → علامة
+          ELSE out := out || elem;                                  -- مسار/عنصر عادي → يبقى مهما طال
+        END IF;
+      END LOOP;
+      RETURN out::text;
+    END IF;
+  END IF;
+  RETURN v;  -- مسار عادي/نص → يبقى مهما طال
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION public.audit_redact_file(text) FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.audit_redact(j jsonb)
 RETURNS jsonb
 LANGUAGE sql
@@ -92,9 +122,8 @@ AS $$
                'cheque_image_data','contract_data','file_data','invoice_copy_data',
                'payment_proof_data','proof_data','receipt_image_data','work_images'])
              AND jsonb_typeof(value) = 'string'
-             AND ( left(value #>> '{}', 5) = 'data:' OR length(value #>> '{}') > 500 )
-        THEN to_jsonb('[[محذوف من السجل: محتوى ملف base64 (' || length(value #>> '{}') || ' حرف) — المسار/المرجع محفوظ في الجدول الأصلي]]'::text)
-        ELSE value   -- يشمل المسارات القصيرة داخل أعمدة الملفات، وكل نصوص الأعمال في بقية الأعمدة
+        THEN to_jsonb(public.audit_redact_file(value #>> '{}'))  -- تنقية بالمحتوى (data:)، تُبقي المسارات
+        ELSE value                                                -- كل نصوص الأعمال تبقى كاملة
       END
     ),
     '{}'::jsonb
