@@ -3,6 +3,7 @@ import {
   Settings, FileArchive, HardHat, Receipt, UserCog,
   ClipboardList, BookOpen, Truck, BarChart2, Phone, CreditCard,
   Bot, Calendar, Bell, Calculator, Wrench, ListTodo, PieChart, Package, KeyRound, Banknote,
+  History,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -25,6 +26,8 @@ export interface NavItem {
   icon: LucideIcon
   /** مطابقة تامّة للمسار (للوحة التحكم فقط حتى لا تبقى نشطة في كل الصفحات) */
   end?: boolean
+  /** يظهر للمالك فقط في الشريط الجانبي (الحماية الفعلية للبيانات في RLS بالقاعدة) */
+  ownerOnly?: boolean
 }
 
 export interface NavGroup {
@@ -96,6 +99,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/reports', label: 'التقارير والإحصائيات', icon: BarChart2 },
       { to: '/documents', label: 'المستندات', icon: FileArchive },
+      { to: '/activity', label: 'سجل نشاط الموظفين', pageTitle: 'سجل نشاط الموظفين', icon: History, ownerOnly: true },
       { to: '/settings', label: 'الإعدادات', icon: Settings },
     ],
   },

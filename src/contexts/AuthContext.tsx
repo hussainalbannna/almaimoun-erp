@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
+import { useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
 
 interface AuthContextValue {
@@ -13,6 +14,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -56,7 +58,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     setSession(null)
-  }, [])
+    // نمسح كامل كاش React Query عند الخروج كي لا تبقى بيانات حسّاسة (مثل سجل النشاط)
+    // في ذاكرة المتصفّح متاحةً لمستخدم يسجّل دخوله بعده على الجهاز نفسه
+    queryClient.clear()
+  }, [queryClient])
 
   // قيمة السياق مُخزّنة — لا تُنشأ من جديد إلا عند تغيّر الجلسة أو حالة التحميل،
   // فلا تُعاد رسم جميع المكوّنات المستهلِكة بلا داعٍ
