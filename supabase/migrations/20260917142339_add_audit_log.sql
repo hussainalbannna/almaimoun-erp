@@ -72,28 +72,34 @@ CREATE POLICY audit_log_select ON public.audit_log FOR SELECT TO authenticated U
 --  نحذف من نسخة السجل الأعمدةَ المعروفة التي تحفظ صورًا/ملفات base64 ضخمة فقط،
 --  فيبقى **كل نصوص الأعمال كاملة** (ملاحظات/وصف/شروط مهما طالت) قابلةً للاسترجاع.
 --  علَم has_* المولَّد يبقى في الصف فيدلّ على أن ملفًا كان موجودًا. محتوى الملف نفسه
---  لا يُكرَّر في السجل (كملفات Storage — حدّ موثّق). القائمة صريحة (لا اعتماد على الطول)،
---  ونطاقها الحاليّ هو الأعمدة النصّية العليا التي تحفظ base64 فعلًا؛ base64 المتداخل داخل
---  jsonb/مصفوفات (إن ظهر مستقبلًا) خارج هذا النطاق ويُضاف عند الحاجة — لا ندّعي شمولًا لكل الأشكال.
---  قاعدة صيانة (تُراجَع في كل هجرة/CI): أي عمود جديد يحفظ صورة/ملف base64 ضخم يُضاف هنا صراحةً.
---  ملاحظة: نستبعد فقط أعمدة المحتوى الثنائي (*_data / work_images)، لا أعمدة المسارات/الروابط
---  (*_path / *_url) لأنها صغيرة ومفيدة للاسترجاع.
+--  نطاقنا: أعمدة المحتوى الثنائي المعروفة فقط (القائمة أدناه). داخل هذه الأعمدة **نميّز**:
+--   • قيمة base64/data-URL (تبدأ بـ 'data:' أو أطول من 500 حرف) → تُستبدل بعلامة (لا تُكرَّر في السجل).
+--   • مسار/مرجع Storage قصير (مثل 'cheques/ab.jpg') → **يبقى كاملًا** لأنه مرجع الملف المفيد للاسترجاع.
+--  كل الأعمدة الأخرى (نصوص الأعمال: ملاحظات/وصف/شروط) تبقى كاملة مهما طالت — لا تُمَسّ.
+--  base64 المتداخل داخل jsonb/مصفوفات خارج النطاق (يُضاف عند الحاجة). قاعدة صيانة (مراجعة/CI):
+--  أي عمود محتوى ثنائي جديد يُضاف للقائمة صراحةً؛ لا نستبعد أعمدة المسارات/الروابط (*_path/*_url).
 CREATE OR REPLACE FUNCTION public.audit_redact(j jsonb)
 RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
 SET search_path = pg_catalog, pg_temp
 AS $$
-  SELECT j - ARRAY[
-    'cheque_image_data',   -- cheques
-    'contract_data',       -- rentals, subcontractor_assignments
-    'file_data',           -- worker_documents
-    'invoice_copy_data',   -- subcontractor_payments
-    'payment_proof_data',  -- subcontractor_payments
-    'proof_data',          -- rental_payments
-    'receipt_image_data',  -- accounts_payable
-    'work_images'          -- subcontractor_assignments
-  ]::text[];
+  SELECT coalesce(
+    jsonb_object_agg(
+      key,
+      CASE
+        WHEN key = ANY (ARRAY[
+               'cheque_image_data','contract_data','file_data','invoice_copy_data',
+               'payment_proof_data','proof_data','receipt_image_data','work_images'])
+             AND jsonb_typeof(value) = 'string'
+             AND ( left(value #>> '{}', 5) = 'data:' OR length(value #>> '{}') > 500 )
+        THEN to_jsonb('[[محذوف من السجل: محتوى ملف base64 (' || length(value #>> '{}') || ' حرف) — المسار/المرجع محفوظ في الجدول الأصلي]]'::text)
+        ELSE value   -- يشمل المسارات القصيرة داخل أعمدة الملفات، وكل نصوص الأعمال في بقية الأعمدة
+      END
+    ),
+    '{}'::jsonb
+  )
+  FROM jsonb_each(j);
 $$;
 -- سحب التشغيل من كل أدوار التطبيق/الخدمة صراحةً (منح Supabase الافتراضي يمنحها مباشرةً)
 REVOKE EXECUTE ON FUNCTION public.audit_redact(jsonb) FROM PUBLIC, anon, authenticated, service_role;
