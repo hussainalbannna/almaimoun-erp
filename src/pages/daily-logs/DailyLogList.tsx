@@ -380,7 +380,7 @@ export default function DailyLogList() {
   const [form, setForm] = useState(EMPTY_FORM(prefillProject))
 
   // المشاريع والعمّال والتقارير عبر React Query
-  const { data, isLoading } = useQuery({ queryKey: ['daily-logs-data'], queryFn: fetchDailyLogsData })
+  const { data, isLoading, isError } = useQuery({ queryKey: ['daily-logs-data'], queryFn: fetchDailyLogsData })
   const projects = data?.projects ?? EMPTY_PROJECTS
   const workers = data?.workers ?? EMPTY_WORKERS
   const logs = data?.logs ?? EMPTY_LOGS
@@ -1068,7 +1068,16 @@ export default function DailyLogList() {
           </div>
         </div>
 
-        {isLoading ? (
+        {isError ? (
+          /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد تقارير" المضلِّلة */
+          <div className="p-12 text-center border-2 border-red-300 rounded-xl">
+            <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-3">
+              <Camera size={28} className="text-red-300" />
+            </div>
+            <p className="text-red-700 font-semibold">تعذّر تحميل التقارير اليومية — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+            <button onClick={reload} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+          </div>
+        ) : isLoading ? (
           <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center">

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Phone, Wrench, ChevronLeft, CheckCircle } from 'lucide-react'
 import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency, subcontractorSpecialtyLabel, subcontractorSpecialtyColor } from '../../lib/utils'
@@ -58,7 +58,9 @@ export default function SubcontractorList() {
   const [search, setSearch] = useState('')
   const [specialtyFilter, setSpecialtyFilter] = useState('all')
 
-  const { data: subs = [], isLoading } = useQuery({ queryKey: ['subcontractors-list'], queryFn: fetchSubcontractorsWithStats })
+  const queryClient = useQueryClient()
+  const { data: subs = [], isLoading, isError } = useQuery({ queryKey: ['subcontractors-list'], queryFn: fetchSubcontractorsWithStats })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['subcontractors-list'] })
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -132,7 +134,14 @@ export default function SubcontractorList() {
         </select>
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل "لا يوجد مقاولون" المضلِّلة (مستحقات المقاولين قد لا تظهر) */
+        <div className="text-center py-16 border-2 border-red-300 rounded-xl">
+          <Wrench size={48} className="mx-auto text-red-300 mb-4" />
+          <p className="text-red-700 font-semibold">تعذّر تحميل المقاولين — المستحقات قد تكون ناقصة أو صفرية. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : isLoading ? (
         <div className="text-center py-16 text-slate-400">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">

@@ -21,7 +21,8 @@ export default function ReceiptList() {
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const { data: receipts = [], isLoading } = useQuery({ queryKey: ['receipts-list'], queryFn: fetchReceipts })
+  const { data: receipts = [], isLoading, isError } = useQuery({ queryKey: ['receipts-list'], queryFn: fetchReceipts })
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['receipts-list'] })
 
   const handleDelete = async () => {
     if (!deleteId) return
@@ -84,7 +85,13 @@ export default function ReceiptList() {
             />
           </div>
         </div>
-        {isLoading ? (
+        {isError ? (
+          /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد إيصالات" المضلِّلة (قد تكون هناك إيصالات لم تُجلب) */
+          <div className="p-12 text-center">
+            <p className="text-red-700 text-sm font-semibold">تعذّر تحميل الإيصالات — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+            <button onClick={reload} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+          </div>
+        ) : isLoading ? (
           <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center text-slate-400">لا توجد إيصالات</div>

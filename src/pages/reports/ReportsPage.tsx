@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Printer, TrendingUp, TrendingDown, BarChart2, FileText } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 
@@ -45,9 +45,10 @@ async function fetchReportsData(year: number): Promise<ReportsData> {
   const [projRes, milRes, expRes, wRes, laborRes, adjRes] = await Promise.all([
     supabase.from('projects').select('id, project_name, contract_value, status'),
     supabase.from('project_milestones').select('project_id, amount, status'),
-    supabase.from('accounts_payable').select('amount, entry_date, category').gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`),
+    // ترقيم تلقائي: سنة نشطة قد تتجاوز 1000 صف من المصاريف/العمالة فتُقتطع بصمت ويُقلّل التقرير السنوي المصاريف
+    safeSelect<{ amount: number; entry_date: string; category: string }>('accounts_payable', 'amount, entry_date, category', q => q.gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`)).then(data => ({ data })),
     supabase.from('workers').select('id, worker_type, pay_type, actual_salary, daily_rate, basic_salary, social_allowance'),
-    supabase.from('project_labor_entries').select('amount, cost_date').gte('cost_date', `${year}-01-01`).lte('cost_date', `${year}-12-31`),
+    safeSelect<{ amount: number; cost_date: string }>('project_labor_entries', 'amount, cost_date', q => q.gte('cost_date', `${year}-01-01`).lte('cost_date', `${year}-12-31`)).then(data => ({ data })),
     supabase.from('payroll_adjustments').select('worker_id, month, overtime, present_days, daily_rate').eq('year', year),
   ])
 
@@ -124,7 +125,7 @@ export default function ReportsPage() {
   const navigate = useNavigate()
   const [year, setYear] = useState(new Date().getFullYear())
 
-  const { data = EMPTY_REPORTS, isLoading } = useQuery({ queryKey: ['reports-data', year], queryFn: () => fetchReportsData(year) })
+  const { data = EMPTY_REPORTS, isLoading, isError } = useQuery({ queryKey: ['reports-data', year], queryFn: () => fetchReportsData(year) })
   const {
     totalContractValue, totalInvoiced, totalExpenses, totalPayroll,
     monthlyExpenses, monthlyPayroll, categoryBreakdown, projects,
@@ -134,6 +135,21 @@ export default function ReportsPage() {
 
   const STATUS_LABELS: Record<string, string> = { active: 'نشط', completed: 'منتهي', on_hold: 'متوقف', cancelled: 'ملغى' }
   const STATUS_COLORS: Record<string, string> = { active: 'text-green-700 bg-green-50', completed: 'text-blue-700 bg-blue-50', on_hold: 'text-amber-700 bg-amber-50', cancelled: 'text-red-700 bg-red-50' }
+
+  // فشل التحميل: نُوقف عرض جسم التقرير كليًّا (وليس فقط تعطيل زر الطباعة) — فلو طبع المستخدم عبر
+  // المتصفّح (Ctrl+P) لا تُطبَع أرقام صفرية مضلِّلة، بل يُطبَع التحذير نفسه (بلا print:hidden).
+  if (isError) {
+    return (
+      <div className="p-6 print:p-4">
+        <div className="rounded-xl border-2 border-red-300 bg-red-50 p-5 text-red-800 text-sm font-semibold">
+          تعذّر تحميل بيانات التقرير — لا يمكن عرضه أو طباعته لأن الأرقام قد تكون ناقصة أو صفرية. حدّث الصفحة وأعد المحاولة.
+        </div>
+        <div className="mt-4 print:hidden">
+          <Button icon={<Printer size={16} />} onClick={() => window.location.reload()}>إعادة المحاولة</Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="p-6 print:p-4">
@@ -147,7 +163,7 @@ export default function ReportsPage() {
             className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30">
             {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          <Button icon={<Printer size={16} />} onClick={() => window.print()}>طباعة التقرير</Button>
+          <Button icon={<Printer size={16} />} disabled={isError || isLoading} onClick={() => { if (isError || isLoading) return; window.print() }}>طباعة التقرير</Button>
         </div>
       </div>
 

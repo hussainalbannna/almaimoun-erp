@@ -77,7 +77,7 @@ function delay(ms: number): Promise<void> {
 //  دوال مساعدة ذكية — تبسّط الاستعلامات وتمنع الأخطاء
 // ════════════════════════════════════════════════════════════════
 
-// استعلام آمن: يُرجع مصفوفة دائماً (لا ينهار لو فشل)
+// استعلام مُرقّم: يجلب كل الصفوف على دفعات. عند فشل القراءة يرمي خطأً (لا يُرجع نتيجة جزئية بصمت).
 export async function safeSelect<T = Record<string, unknown>>(
   table: string,
   columns = '*',
@@ -97,7 +97,10 @@ export async function safeSelect<T = Record<string, unknown>>(
       // ترتيب حتمي بالمعرّف (كسر تعادل يُلحَق بعد ترتيب المُستدعي) — بدونه قد يتكرّر أو يُسقَط صف بين دفعات الترقيم
       query = query.order('id', { ascending: true })
       const { data, error } = await query.range(from, from + PAGE - 1)
-      if (error) { console.error(`[${table}] خطأ في القراءة:`, error.message); break }
+      // فشل قراءة: نرمي الخطأ بدل إرجاع بيانات ناقصة بصمت — إرجاع صفوف أقلّ من الحقيقة أخطر
+      // من ظهور خطأ واضح (إجماليات مغلوطة، تقارير مبتورة). React Query يلتقط الرمي كحالة خطأ
+      // وقد يعيد المحاولة (retry) لأن بعض الأخطاء مؤقتة (429/شبكة عابرة) — لا نفترض أنها دائمة.
+      if (error) throw new Error(`[${table}] فشل قراءة صفحة تبدأ من ${from}: ${error.message}`)
       const rows = (data ?? []) as T[]
       all.push(...rows)
       if (rows.length === 0) break
@@ -105,8 +108,9 @@ export async function safeSelect<T = Record<string, unknown>>(
     }
     return all
   } catch (e) {
-    console.error(`[${table}] استثناء:`, e)
-    return all
+    // لا نبتلع الخطأ ولا نُرجع نتيجة جزئية — نُسجّله ونعيد رميه ليتعامل معه المُستدعي بوضوح.
+    console.error(`[${table}] فشل الجلب الآمن:`, e)
+    throw e
   }
 }
 

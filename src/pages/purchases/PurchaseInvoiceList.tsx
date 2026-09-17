@@ -60,6 +60,7 @@ export default function PurchaseInvoiceList() {
   const navigate = useNavigate()
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [previewImg, setPreviewImg] = useState<string | null>(null)
@@ -77,6 +78,7 @@ export default function PurchaseInvoiceList() {
 
   const load = async () => {
     setLoading(true)
+    setLoadError(false)
     try {
       // استعلام خفيف: بدون أعمدة الصور/الملفات (base64) الضخمة —
       // جلبها عبر select('*') كان يضخّم حجم الرد ويتسبب في خطأ 500 من الخادم
@@ -110,6 +112,7 @@ export default function PurchaseInvoiceList() {
       // إظهار الخطأ الحقيقي بدل بقاء الصفحة عالقة على "جاري التحميل"
       toast.error('تعذّر تحميل فواتير الشراء: ' + ((e as Error)?.message ?? 'خطأ غير معروف'))
       setInvoices([])
+      setLoadError(true) // حالة خطأ مستمرة (لا نكتفي بالـتوست العابر) كي لا تُعرض "لا توجد فواتير" مضلِّلة
     } finally {
       setLoading(false) // يضمن اختفاء "جاري التحميل" في كل الحالات
     }
@@ -516,7 +519,14 @@ export default function PurchaseInvoiceList() {
       </div>
 
       {/* المحتوى */}
-      {loading ? (
+      {loadError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد فواتير" المضلِّلة */
+        <div className="bg-white rounded-xl border-2 border-red-300 p-12 text-center">
+          <FileText size={40} className="mx-auto mb-3 text-red-300" />
+          <p className="text-red-700 font-semibold">تعذّر تحميل فواتير الشراء — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={load} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : loading ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">

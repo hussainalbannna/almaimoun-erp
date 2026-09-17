@@ -96,7 +96,7 @@ async function fetchFinanceData(): Promise<FinanceData> {
 export default function FinanceDashboard() {
   const [period, setPeriod] = useState('this_month')
 
-  const { data = EMPTY_DATA, isLoading } = useQuery({ queryKey: ['finance-dashboard'], queryFn: fetchFinanceData })
+  const { data = EMPTY_DATA, isLoading, isError } = useQuery({ queryKey: ['finance-dashboard'], queryFn: fetchFinanceData })
 
   // كل الأرقام المشتقّة تُحسب معاً عند تغيّر البيانات أو الفترة (فلترة + إجماليات + هامش + تحليل الفئات)
   const { fIncome, fExpenses, totalIncome, totalExpense, net, margin, byCategory, maxCat } = useMemo(() => {
@@ -152,7 +152,11 @@ export default function FinanceDashboard() {
         </div>
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4 text-red-800 text-sm font-semibold">
+          تعذّر تحميل البيانات المالية — لا تعتمد الأرقام (قد تظهر أصفارًا). حدّث الصفحة.
+        </div>
+      ) : isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري حساب البيانات المالية...</div>
       ) : (
         <>
