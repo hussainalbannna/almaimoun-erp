@@ -60,7 +60,7 @@ export default function TasksBoard() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const { data: tasks = [], isLoading } = useQuery({ queryKey: ['tasks-board'], queryFn: fetchTasks })
+  const { data: tasks = [], isLoading, isError } = useQuery({ queryKey: ['tasks-board'], queryFn: fetchTasks })
   // إبطال لوحة المهام + شارة التنبيهات (المهام المتأخرة تظهر في التنبيهات)
   const reload = () => {
     queryClient.invalidateQueries({ queryKey: ['tasks-board'] })
@@ -178,7 +178,14 @@ export default function TasksBoard() {
       )}
 
       {/* لوحة الأعمدة */}
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل لوحة مهام فارغة مضلِّلة */
+        <div className="text-center py-12 border-2 border-red-300 rounded-xl">
+          <AlertTriangle size={40} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 font-semibold">تعذّر تحميل المهام — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-primary-600 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

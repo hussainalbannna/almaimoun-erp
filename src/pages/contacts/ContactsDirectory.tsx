@@ -118,7 +118,7 @@ export default function ContactsDirectory() {
   const [form, setForm] = useState(emptyForm())
   const [saving, setSaving] = useState(false)
 
-  const { data: contacts = [], isLoading } = useQuery({ queryKey: ['contacts-directory'], queryFn: fetchContacts })
+  const { data: contacts = [], isLoading, isError } = useQuery({ queryKey: ['contacts-directory'], queryFn: fetchContacts })
   // أي تعديل يدوي أو حذف يُبطِل الكاش فيُعاد الدمج تلقائياً
   const reload = () => queryClient.invalidateQueries({ queryKey: ['contacts-directory'] })
 
@@ -233,7 +233,14 @@ export default function ContactsDirectory() {
           className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" />
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد جهات اتصال" المضلِّلة */
+        <div className="p-12 text-center border-2 border-red-300 rounded-xl">
+          <FileText size={40} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 font-semibold">تعذّر تحميل جهات الاتصال — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : isLoading ? (
         <div className="p-12 text-center text-slate-400">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="p-12 text-center text-slate-400">لا توجد جهات اتصال</div>

@@ -52,7 +52,7 @@ export default function DocumentsPage() {
   const [uploadProjectId, setUploadProjectId] = useState('')
   const [uploadDocType, setUploadDocType] = useState('')
 
-  const { data: documents = [], isLoading: loading } = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
+  const { data: documents = [], isLoading: loading, isError } = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
   const { data: projects = [] } = useQuery({ queryKey: ['documents-projects'], queryFn: fetchProjectsLite })
   const reload = () => queryClient.invalidateQueries({ queryKey: ['documents'] })
 
@@ -260,7 +260,14 @@ export default function DocumentsPage() {
         </button>
       </div>
 
-      {loading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد مستندات" المضلِّلة */
+        <div className="bg-white rounded-xl border-2 border-red-300 py-12 text-center">
+          <FileArchive size={36} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 text-sm font-semibold">تعذّر تحميل المستندات — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-primary-600 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : loading ? (
         <div className="flex justify-center py-10">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>

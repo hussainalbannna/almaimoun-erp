@@ -161,7 +161,7 @@ export default function CalendarView() {
   const [cursor, setCursor] = useState(() => new Date())
   const [selected, setSelected] = useState(() => toKey(new Date()))
 
-  const { data: events = EMPTY_EVENTS, isLoading, isFetching, refetch } = useQuery({
+  const { data: events = EMPTY_EVENTS, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ['calendar-events'],
     queryFn: fetchCalendarEvents,
   })
@@ -242,7 +242,14 @@ export default function CalendarView() {
           </div>
 
           {/* الأيام */}
-          {isLoading ? (
+          {isError ? (
+            /* فشل التحميل: حالة خطأ صريحة بدل تقويم يبدو فارغًا (مواعيد/استحقاقات قد لا تظهر) */
+            <div className="text-center py-12 border-2 border-red-300 rounded-xl">
+              <CalIcon size={40} className="mx-auto text-red-300 mb-3" />
+              <p className="text-red-700 font-semibold">تعذّر تحميل المواعيد — قد تكون بعض الاستحقاقات غير ظاهرة. لا تعتمد على هذه الشاشة.</p>
+              <button type="button" onClick={() => refetch()} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+            </div>
+          ) : isLoading ? (
             <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
           ) : (
             <div className="grid grid-cols-7 gap-1">
