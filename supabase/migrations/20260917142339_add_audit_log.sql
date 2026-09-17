@@ -68,7 +68,32 @@ END $$;
 DROP POLICY IF EXISTS audit_log_select ON public.audit_log;
 CREATE POLICY audit_log_select ON public.audit_log FOR SELECT TO authenticated USING (true);
 
--- ─── 3) دالة التقاط الصف: تفصل هوية المستخدم (JWT) عن اتصال النظام ──────────
+-- ─── 3أ) تنقية القيم الضخمة: نستبدل أي نص أطول من 2000 حرف (صور/ملفات base64) ─
+--  بعلامة تحمل طوله فقط — فيبقى السجل خفيفًا ومحصّنًا مستقبلًا لأي عمود مهما كان اسمه،
+--  دون فقد أي حقل عادي (الأسماء/المبالغ/الملاحظات القصيرة تبقى كاملة). المحتوى الفعلي
+--  للملف يبقى في جدوله الأصلي؛ لا نكرّره داخل السجل.
+CREATE OR REPLACE FUNCTION public.audit_redact(j jsonb)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog, pg_temp
+AS $$
+  SELECT coalesce(
+    jsonb_object_agg(
+      key,
+      CASE
+        WHEN jsonb_typeof(value) = 'string' AND length(value #>> '{}') > 2000
+        THEN to_jsonb('[[محذوف من السجل: نص كبير (' || length(value #>> '{}') || ' حرف) — المحتوى في الجدول الأصلي]]'::text)
+        ELSE value
+      END
+    ),
+    '{}'::jsonb
+  )
+  FROM jsonb_each(j);
+$$;
+REVOKE EXECUTE ON FUNCTION public.audit_redact(jsonb) FROM PUBLIC;
+
+-- ─── 3ب) دالة التقاط الصف: تفصل هوية المستخدم (JWT) عن اتصال النظام ─────────
 CREATE OR REPLACE FUNCTION public.audit_capture()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -86,19 +111,19 @@ BEGIN
   IF TG_OP = 'DELETE' THEN
     v_rec := to_jsonb(OLD) ->> 'id';
     INSERT INTO public.audit_log(actor_id,actor_email,actor_jwt_role,db_session_user,action,table_name,record_id,old_data,new_data)
-    VALUES (v_actor, v_email, v_jwt, v_sess, 'DELETE', TG_TABLE_NAME, v_rec, to_jsonb(OLD), NULL);
+    VALUES (v_actor, v_email, v_jwt, v_sess, 'DELETE', TG_TABLE_NAME, v_rec, public.audit_redact(to_jsonb(OLD)), NULL);
     RETURN OLD;
 
   ELSIF TG_OP = 'UPDATE' THEN
     v_rec := to_jsonb(NEW) ->> 'id';
     INSERT INTO public.audit_log(actor_id,actor_email,actor_jwt_role,db_session_user,action,table_name,record_id,old_data,new_data)
-    VALUES (v_actor, v_email, v_jwt, v_sess, 'UPDATE', TG_TABLE_NAME, v_rec, to_jsonb(OLD), to_jsonb(NEW));
+    VALUES (v_actor, v_email, v_jwt, v_sess, 'UPDATE', TG_TABLE_NAME, v_rec, public.audit_redact(to_jsonb(OLD)), public.audit_redact(to_jsonb(NEW)));
     RETURN NEW;
 
   ELSE -- INSERT
     v_rec := to_jsonb(NEW) ->> 'id';
     INSERT INTO public.audit_log(actor_id,actor_email,actor_jwt_role,db_session_user,action,table_name,record_id,old_data,new_data)
-    VALUES (v_actor, v_email, v_jwt, v_sess, 'INSERT', TG_TABLE_NAME, v_rec, NULL, to_jsonb(NEW));
+    VALUES (v_actor, v_email, v_jwt, v_sess, 'INSERT', TG_TABLE_NAME, v_rec, NULL, public.audit_redact(to_jsonb(NEW)));
     RETURN NEW;
   END IF;
 END;
@@ -172,9 +197,18 @@ BEGIN
 END;
 $$;
 
-DROP EVENT TRIGGER IF EXISTS audit_on_create_table;
-CREATE EVENT TRIGGER audit_on_create_table ON ddl_command_end
-  WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION public.audit_on_ddl();
+-- إنشاء مُشغِّل الأحداث يتطلب صلاحية عالية قد لا تتوفّر على بعض المنصّات (Supabase).
+-- نجعله «أفضل جهد»: يُنشأ إن سُمح، وإلا يُتخطّى مع إشعار — دون إفشال الهجرة. التدقيق
+-- الأساسي (الأقسام 1–6) يبقى كاملًا؛ يُفقد فقط الإلحاق التلقائي للجداول الجديدة مستقبلًا.
+DO $$
+BEGIN
+  DROP EVENT TRIGGER IF EXISTS audit_on_create_table;
+  CREATE EVENT TRIGGER audit_on_create_table ON ddl_command_end
+    WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION public.audit_on_ddl();
+EXCEPTION
+  WHEN insufficient_privilege OR feature_not_supported THEN
+    RAISE NOTICE 'تعذّر إنشاء مُشغِّل الأحداث (صلاحية غير كافية) — التدقيق الأساسي مُطبَّق؛ ألحِق التدقيق يدويًا لأي جدول جديد عبر public.audit_attach(''<table>'').';
+END $$;
 
 -- ملاحظات متابعة (خارج نطاق هذه الهجرة، موثّقة صراحةً):
 --  • أرشفة/احتفاظ (retention) لـ audit_log عند كبر الحجم + شاشة «نشاط الموظفين».
