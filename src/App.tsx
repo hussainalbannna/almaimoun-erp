@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Toaster } from 'react-hot-toast'
+import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
+import { Toaster, toast } from 'react-hot-toast'
 import { AuthProvider } from './contexts/AuthContext'
 import ErrorBoundary from './components/ErrorBoundary'
 
@@ -77,6 +77,11 @@ const DocumentsPage = lazy(() => import('./pages/documents/DocumentsPage'))
 const Settings = lazy(() => import('./pages/settings/Settings'))
 
 const queryClient = new QueryClient({
+  // معالج أخطاء عام: أي فشل جلب استعلام (بعد استنفاد إعادة المحاولة) يُظهر تنبيهًا واضحًا،
+  // فلا تعرض الصفحة أصفارًا/قائمة فارغة وكأنها بيانات مكتملة (مع تغيّر safeSelect ليرمي عند الفشل).
+  queryCache: new QueryCache({
+    onError: () => toast.error('تعذّر تحميل بعض البيانات — الأرقام قد تكون ناقصة. حدّث الصفحة.', { id: 'query-fetch-error' }),
+  }),
   defaultOptions: {
     queries: {
       retry: 1,

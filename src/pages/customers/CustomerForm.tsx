@@ -44,9 +44,13 @@ export default function CustomerForm() {
 
   // جلب مستندات العميل (بلا محتوى ثقيل — file_url يحمل مساراً قصيراً)
   const loadDocs = async () => {
-    const data = await safeSelect<CustomerDoc>('documents', 'id,name,doc_type,file_url,file_type,created_at',
-      q => q.eq('related_id', id).eq('related_type', 'customer').order('created_at', { ascending: false }))
-    setDocs(data)
+    try {
+      const data = await safeSelect<CustomerDoc>('documents', 'id,name,doc_type,file_url,file_type,created_at',
+        q => q.eq('related_id', id).eq('related_type', 'customer').order('created_at', { ascending: false }))
+      setDocs(data)
+    } catch {
+      toast.error('تعذّر تحميل مستندات العميل — حدّث الصفحة')
+    }
   }
 
   useEffect(() => {

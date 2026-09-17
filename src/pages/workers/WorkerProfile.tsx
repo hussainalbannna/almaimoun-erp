@@ -298,6 +298,7 @@ function DocumentsTab({ workerId, documents, setDocuments }: {
         const urlByVal = await resolveAttachmentUrls(docs.map(d => d.file_url))
         setCustomUrls(Object.fromEntries(docs.map(d => [d.id, urlByVal.get(d.file_url) ?? ''])))
       })
+      .catch(() => toast.error('تعذّر تحميل مستندات العامل — حدّث الصفحة'))
   }, [workerId])
 
   // ── المستندات الثابتة (البطاقة، الجواز، الآيبان، العقد) ──

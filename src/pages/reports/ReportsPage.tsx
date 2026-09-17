@@ -125,7 +125,7 @@ export default function ReportsPage() {
   const navigate = useNavigate()
   const [year, setYear] = useState(new Date().getFullYear())
 
-  const { data = EMPTY_REPORTS, isLoading } = useQuery({ queryKey: ['reports-data', year], queryFn: () => fetchReportsData(year) })
+  const { data = EMPTY_REPORTS, isLoading, isError } = useQuery({ queryKey: ['reports-data', year], queryFn: () => fetchReportsData(year) })
   const {
     totalContractValue, totalInvoiced, totalExpenses, totalPayroll,
     monthlyExpenses, monthlyPayroll, categoryBreakdown, projects,
@@ -138,6 +138,11 @@ export default function ReportsPage() {
 
   return (
     <div className="p-6 print:p-4">
+      {isError && (
+        <div className="mb-6 rounded-xl border-2 border-red-300 bg-red-50 p-4 text-red-800 text-sm font-semibold print:hidden">
+          تعذّر تحميل بيانات التقرير — الأرقام قد تكون ناقصة/صفرية والطباعة معطّلة. حدّث الصفحة.
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6 print:hidden">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">التقارير والإحصائيات</h1>
@@ -148,7 +153,7 @@ export default function ReportsPage() {
             className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30">
             {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          <Button icon={<Printer size={16} />} onClick={() => window.print()}>طباعة التقرير</Button>
+          <Button icon={<Printer size={16} />} disabled={isError || isLoading} onClick={() => { if (isError || isLoading) return; window.print() }}>طباعة التقرير</Button>
         </div>
       </div>
 

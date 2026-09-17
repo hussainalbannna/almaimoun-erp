@@ -169,7 +169,7 @@ async function fetchDashboardStats(): Promise<Stats> {
 export default function Dashboard() {
   const navigate = useNavigate()
 
-  const { data: stats = EMPTY_STATS, isLoading } = useQuery({ queryKey: ['dashboard-stats'], queryFn: fetchDashboardStats })
+  const { data: stats = EMPTY_STATS, isLoading, isError } = useQuery({ queryKey: ['dashboard-stats'], queryFn: fetchDashboardStats })
   // التنبيهات = نفس مصدر ومفتاح مركز الإشعارات والهيدر (كاش مشترك)
   const { data: alerts = [] } = useQuery({ queryKey: ['app-alerts'], queryFn: fetchAllAlerts })
 
@@ -194,6 +194,12 @@ export default function Dashboard() {
         <h1 className="text-2xl font-bold text-slate-800">لوحة التحكم التنفيذية</h1>
         <p className="text-slate-500 text-sm mt-0.5">مؤسسة الميمون للمقاولات — مملكة البحرين</p>
       </div>
+
+      {isError && (
+        <div className="mb-6 rounded-xl border-2 border-red-300 bg-red-50 p-4 text-red-800 text-sm font-semibold">
+          تعذّر تحميل بيانات لوحة التحكم — الأرقام المعروضة قد تكون ناقصة أو صفرية. لا تعتمدها، وحدّث الصفحة.
+        </div>
+      )}
 
       {/* ═══ التنبيهات العاجلة (من مركز الإشعارات) — كل بطاقة بلونها ═══ */}
       {urgentAlerts.length > 0 && (
