@@ -577,7 +577,7 @@ export default function AssetList() {
           file_type: f.type || '',
           related_id: editId,
           related_type: 'asset',
-          has_file: true,
+          // has_file عمود محسوب تلقائيًا في القاعدة (GENERATED ALWAYS من file_url) — لا يُكتب يدويًا وإلا رُفض الإدراج
         })
         if (error) throw error
       }
