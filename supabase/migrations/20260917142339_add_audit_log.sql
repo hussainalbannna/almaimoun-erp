@@ -68,30 +68,33 @@ END $$;
 DROP POLICY IF EXISTS audit_log_select ON public.audit_log;
 CREATE POLICY audit_log_select ON public.audit_log FOR SELECT TO authenticated USING (true);
 
--- ─── 3أ) تنقية القيم الضخمة: نستبدل أي نص أطول من 2000 حرف (صور/ملفات base64) ─
---  بعلامة تحمل طوله فقط — فيبقى السجل خفيفًا ومحصّنًا مستقبلًا لأي عمود مهما كان اسمه،
---  دون فقد أي حقل عادي (الأسماء/المبالغ/الملاحظات القصيرة تبقى كاملة). المحتوى الفعلي
---  للملف يبقى في جدوله الأصلي؛ لا نكرّره داخل السجل.
+-- ─── 3أ) استبعاد أعمدة الملفات الثنائية (base64) بأسمائها — بنيويًّا لا بالطول ─
+--  نحذف من نسخة السجل الأعمدةَ المعروفة التي تحفظ صورًا/ملفات base64 ضخمة فقط،
+--  فيبقى **كل نصوص الأعمال كاملة** (ملاحظات/وصف/شروط مهما طالت) قابلةً للاسترجاع.
+--  علَم has_* المولَّد يبقى في الصف فيدلّ على أن ملفًا كان موجودًا. محتوى الملف نفسه
+--  لا يُكرَّر في السجل (كملفات Storage — حدّ موثّق). القائمة صريحة (لا اعتماد على الطول)،
+--  ونطاقها الحاليّ هو الأعمدة النصّية العليا؛ base64 المتداخل داخل jsonb/مصفوفات (إن ظهر
+--  مستقبلًا) خارج هذا النطاق ويُضاف عند الحاجة — لا ندّعي شمولًا لكل الأشكال.
 CREATE OR REPLACE FUNCTION public.audit_redact(j jsonb)
 RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
 SET search_path = pg_catalog, pg_temp
 AS $$
-  SELECT coalesce(
-    jsonb_object_agg(
-      key,
-      CASE
-        WHEN jsonb_typeof(value) = 'string' AND length(value #>> '{}') > 2000
-        THEN to_jsonb('[[محذوف من السجل: نص كبير (' || length(value #>> '{}') || ' حرف) — المحتوى في الجدول الأصلي]]'::text)
-        ELSE value
-      END
-    ),
-    '{}'::jsonb
-  )
-  FROM jsonb_each(j);
+  SELECT j - ARRAY[
+    'cheque_image_data',   -- cheques
+    'contract_data',       -- rentals, subcontractor_assignments
+    'file_data',           -- worker_documents
+    'invoice_copy_data',   -- subcontractor_payments
+    'payment_proof_data',  -- subcontractor_payments
+    'proof_data',          -- rental_payments
+    'receipt_image_data',  -- accounts_payable
+    'work_images',         -- subcontractor_assignments
+    'id_photo_url'         -- workers (قد يحمل data URL)
+  ]::text[];
 $$;
-REVOKE EXECUTE ON FUNCTION public.audit_redact(jsonb) FROM PUBLIC;
+-- سحب التشغيل من كل أدوار التطبيق/الخدمة صراحةً (منح Supabase الافتراضي يمنحها مباشرةً)
+REVOKE EXECUTE ON FUNCTION public.audit_redact(jsonb) FROM PUBLIC, anon, authenticated, service_role;
 
 -- ─── 3ب) دالة التقاط الصف: تفصل هوية المستخدم (JWT) عن اتصال النظام ─────────
 CREATE OR REPLACE FUNCTION public.audit_capture()
@@ -108,6 +111,11 @@ DECLARE
   v_sess   text  := session_user;          -- اتصال القاعدة (authenticator/postgres…) منفصل
   v_rec    text;
 BEGIN
+  -- دفاع عميق: لا نُدقّق جدول السجل نفسه إطلاقًا (يمنع أي تكرار لو رُكّب المُشغِّل عليه خطأً/عبثًا)
+  IF TG_TABLE_NAME = 'audit_log' THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
     v_rec := to_jsonb(OLD) ->> 'id';
     INSERT INTO public.audit_log(actor_id,actor_email,actor_jwt_role,db_session_user,action,table_name,record_id,old_data,new_data)
@@ -128,7 +136,8 @@ BEGIN
   END IF;
 END;
 $$;
-REVOKE EXECUTE ON FUNCTION public.audit_capture() FROM PUBLIC;
+-- سحب التشغيل من كل أدوار التطبيق/الخدمة صراحةً (المُشغِّل يعمل بلا حاجة لهذه المنحة)
+REVOKE EXECUTE ON FUNCTION public.audit_capture() FROM PUBLIC, anon, authenticated, service_role;
 COMMENT ON FUNCTION public.audit_capture() IS 'مُشغِّل صفّي: يكتب في audit_log لكل INSERT/UPDATE/DELETE مع فصل هوية JWT عن اتصال النظام.';
 
 -- ─── 4) منع TRUNCATE على الجداول المُدقَّقة (يحمي قاعدة «لا شيء يختفي») ──────
@@ -142,9 +151,10 @@ BEGIN
   RAISE EXCEPTION 'TRUNCATE ممنوع على الجدول المُدقَّق «%» — استخدم DELETE ليُسجَّل ويبقى قابلاً للاسترجاع.', TG_TABLE_NAME;
 END;
 $$;
-REVOKE EXECUTE ON FUNCTION public.audit_block_truncate() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.audit_block_truncate() FROM PUBLIC, anon, authenticated, service_role;
 
 -- ─── 5) دالة ربط المُشغِّلات بجدول (تُستخدم للحالي والمستقبلي) ─────────────
+--  إدارية بحتة: تُسحب من كل أدوار التطبيق/الخدمة، وفيها حارس يرفض جدول السجل وأي اسم غير صالح.
 CREATE OR REPLACE FUNCTION public.audit_attach(p_table text)
 RETURNS void
 LANGUAGE plpgsql
@@ -152,6 +162,17 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
+  -- حارس: لا نربط المُشغِّل بجدول السجل نفسه، ولا بأي اسم ليس جدولًا عاديًا في public
+  IF p_table = 'audit_log' THEN
+    RAISE EXCEPTION 'لا يجوز تدقيق جدول السجل نفسه (audit_log).';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = p_table AND c.relkind = 'r'
+  ) THEN
+    RAISE EXCEPTION 'جدول غير صالح للتدقيق: %', p_table;
+  END IF;
+
   EXECUTE format('DROP TRIGGER IF EXISTS zz_audit ON public.%I;', p_table);
   EXECUTE format('CREATE TRIGGER zz_audit AFTER INSERT OR UPDATE OR DELETE ON public.%I
                     FOR EACH ROW EXECUTE FUNCTION public.audit_capture();', p_table);
@@ -160,7 +181,7 @@ BEGIN
                     FOR EACH STATEMENT EXECUTE FUNCTION public.audit_block_truncate();', p_table);
 END;
 $$;
-REVOKE EXECUTE ON FUNCTION public.audit_attach(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.audit_attach(text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- ─── 6) ربط كل الجداول الموجودة الآن (ما عدا جدول السجل نفسه) ───────────────
 DO $$
@@ -196,7 +217,12 @@ BEGIN
   END LOOP;
 END;
 $$;
+REVOKE EXECUTE ON FUNCTION public.audit_on_ddl() FROM PUBLIC, anon, authenticated, service_role;
 
+-- نطاق التغطية المستقبلية (موثّق بصراحة، بلا ادّعاء شمول): يغطّي `CREATE TABLE` العادي في
+-- public عند نجاح مُشغِّل الأحداث. لا يضمن `CREATE TABLE AS`/`SELECT INTO` ولا الجداول
+-- المقسّمة (partitioned). القاعدة العملية: أي هجرة تضيف جدولًا تستدعي public.audit_attach('<t>')
+-- صراحةً وتفحص التغطية، ولا يُكتفى بالمُشغِّل التلقائي.
 -- إنشاء مُشغِّل الأحداث يتطلب صلاحية عالية قد لا تتوفّر على بعض المنصّات (Supabase).
 -- نجعله «أفضل جهد»: يُنشأ إن سُمح، وإلا يُتخطّى مع إشعار — دون إفشال الهجرة. التدقيق
 -- الأساسي (الأقسام 1–6) يبقى كاملًا؛ يُفقد فقط الإلحاق التلقائي للجداول الجديدة مستقبلًا.
