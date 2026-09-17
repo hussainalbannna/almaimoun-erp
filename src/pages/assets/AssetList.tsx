@@ -330,6 +330,7 @@ export default function AssetList() {
   const [showArchived, setShowArchived] = useState(false)
   const [showReport, setShowReport] = useState(false)
   const [reportBusy, setReportBusy] = useState(false)
+  const [reportError, setReportError] = useState(false)
   const [reportExpenses, setReportExpenses] = useState<Record<string, number>>({})
   const [showAllQr, setShowAllQr] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -996,7 +997,7 @@ export default function AssetList() {
   }
 
   const openReport = async () => {
-    setReportBusy(true); setShowReport(true)
+    setReportBusy(true); setReportError(false); setShowReport(true)
     try {
       // جلب مُرقَّم (كل الصفوف مهما كثرت) لضمان دقّة إجمالي مصاريف كل أصل
       const rows = await safeSelect<{ asset_id: string | null; amount: number | null }>(
@@ -1007,7 +1008,7 @@ export default function AssetList() {
         if (r.asset_id) map[r.asset_id] = (map[r.asset_id] || 0) + Number(r.amount || 0)
       }
       setReportExpenses(map)
-    } catch { toast.error('تعذّر تحميل بيانات التقرير') }
+    } catch { setReportError(true); toast.error('تعذّر تحميل بيانات التقرير') }
     finally { setReportBusy(false) }
   }
 
@@ -2369,8 +2370,12 @@ export default function AssetList() {
               <div className="flex items-center justify-between p-4 border-b border-slate-100 no-print">
                 <h2 className="text-lg font-bold text-slate-800">التقرير الشامل للأصول</h2>
                 <div className="flex items-center gap-2">
-                  <Button variant="secondary" icon={<Download size={15} />} onClick={exportReportXlsx}>تصدير Excel</Button>
-                  <Button variant="secondary" onClick={() => window.print()}>طباعة / PDF</Button>
+                  {!reportError && !reportBusy && (
+                    <>
+                      <Button variant="secondary" icon={<Download size={15} />} onClick={exportReportXlsx}>تصدير Excel</Button>
+                      <Button variant="secondary" onClick={() => window.print()}>طباعة / PDF</Button>
+                    </>
+                  )}
                   <button onClick={() => setShowReport(false)} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"><X size={18} /></button>
                 </div>
               </div>
@@ -2381,6 +2386,11 @@ export default function AssetList() {
                 </div>
                 {reportBusy ? (
                   <div className="py-12 text-center text-slate-400">جارٍ تجميع المصاريف...</div>
+                ) : reportError ? (
+                  <div className="py-12 text-center">
+                    <p className="text-red-700 font-semibold mb-3">تعذّر تحميل مصاريف الأصول — التقرير قد يكون ناقصًا/صفريًا. لا تعتمده ولا تطبعه.</p>
+                    <Button variant="secondary" onClick={openReport}>إعادة المحاولة</Button>
+                  </div>
                 ) : (
                   <>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-center text-xs">
