@@ -182,7 +182,7 @@ export default function CashBook() {
   const [form, setForm] = useState<EntryForm>(emptyForm())
 
   // القيود ('accounts-payable') وقائمة المشاريع ('projects-list' — تُشارَك مع صفحات أخرى)
-  const { data: entries = [], isLoading } = useQuery({ queryKey: ['accounts-payable'], queryFn: fetchEntries })
+  const { data: entries = [], isLoading, isError } = useQuery({ queryKey: ['accounts-payable'], queryFn: fetchEntries })
   const { data: projects = [] } = useQuery({ queryKey: ['projects-list'], queryFn: fetchProjectsList })
   const reload = () => queryClient.invalidateQueries({ queryKey: ['accounts-payable'] })
 
@@ -726,7 +726,13 @@ export default function CashBook() {
           </div>
           <span className="text-sm text-slate-500">{filtered.length} قيد</span>
         </div>
-        {isLoading ? (
+        {isError ? (
+          /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد قيود" المضلِّلة (قيود مالية قد لا تكون ظاهرة) */
+          <div className="p-8 text-center border-2 border-red-300 rounded-xl m-4">
+            <p className="text-red-700 text-sm font-semibold">تعذّر تحميل القيود — قد تكون القائمة والإجماليات ناقصة. لا تعتمد على هذه الشاشة.</p>
+            <button onClick={reload} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+          </div>
+        ) : isLoading ? (
           <div className="p-8 text-center text-slate-400">جاري التحميل...</div>
         ) : (
           <div className="overflow-x-auto">

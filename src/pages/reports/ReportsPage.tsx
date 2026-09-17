@@ -136,13 +136,23 @@ export default function ReportsPage() {
   const STATUS_LABELS: Record<string, string> = { active: 'نشط', completed: 'منتهي', on_hold: 'متوقف', cancelled: 'ملغى' }
   const STATUS_COLORS: Record<string, string> = { active: 'text-green-700 bg-green-50', completed: 'text-blue-700 bg-blue-50', on_hold: 'text-amber-700 bg-amber-50', cancelled: 'text-red-700 bg-red-50' }
 
+  // فشل التحميل: نُوقف عرض جسم التقرير كليًّا (وليس فقط تعطيل زر الطباعة) — فلو طبع المستخدم عبر
+  // المتصفّح (Ctrl+P) لا تُطبَع أرقام صفرية مضلِّلة، بل يُطبَع التحذير نفسه (بلا print:hidden).
+  if (isError) {
+    return (
+      <div className="p-6 print:p-4">
+        <div className="rounded-xl border-2 border-red-300 bg-red-50 p-5 text-red-800 text-sm font-semibold">
+          تعذّر تحميل بيانات التقرير — لا يمكن عرضه أو طباعته لأن الأرقام قد تكون ناقصة أو صفرية. حدّث الصفحة وأعد المحاولة.
+        </div>
+        <div className="mt-4 print:hidden">
+          <Button icon={<Printer size={16} />} onClick={() => window.location.reload()}>إعادة المحاولة</Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="p-6 print:p-4">
-      {isError && (
-        <div className="mb-6 rounded-xl border-2 border-red-300 bg-red-50 p-4 text-red-800 text-sm font-semibold print:hidden">
-          تعذّر تحميل بيانات التقرير — الأرقام قد تكون ناقصة/صفرية والطباعة معطّلة. حدّث الصفحة.
-        </div>
-      )}
       <div className="flex items-center justify-between mb-6 print:hidden">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">التقارير والإحصائيات</h1>

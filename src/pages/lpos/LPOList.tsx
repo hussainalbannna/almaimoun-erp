@@ -30,7 +30,7 @@ export default function LPOList() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const { data: lpos = [], isLoading } = useQuery({ queryKey: ['lpos-list'], queryFn: fetchLpos })
+  const { data: lpos = [], isLoading, isError } = useQuery({ queryKey: ['lpos-list'], queryFn: fetchLpos })
   const reload = () => queryClient.invalidateQueries({ queryKey: ['lpos-list'] })
 
   const filtered = useMemo(() => {
@@ -88,7 +88,14 @@ export default function LPOList() {
         ))}
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد أوامر شراء" المضلِّلة */
+        <div className="bg-white rounded-xl border-2 border-red-300 py-16 text-center">
+          <ShoppingCart size={40} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 text-sm font-semibold">تعذّر تحميل أوامر الشراء — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-primary-600 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : isLoading ? (
         <div className="flex justify-center py-16">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>

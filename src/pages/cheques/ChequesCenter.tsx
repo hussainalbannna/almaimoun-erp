@@ -148,7 +148,7 @@ export default function ChequesCenter() {
 
   const t = todayLocal()
 
-  const { data: cheques = [], isLoading } = useQuery({ queryKey: ['cheques'], queryFn: fetchAllCheques })
+  const { data: cheques = [], isLoading, isError } = useQuery({ queryKey: ['cheques'], queryFn: fetchAllCheques })
   const { data: projects = [] } = useQuery({ queryKey: ['projects-list'], queryFn: fetchProjectsList })
   // أي تعديل على الشيكات يُبطِل المفتاح فيتحدّث كل مستهلِك له تلقائياً
   const reload = () => queryClient.invalidateQueries({ queryKey: ['cheques'] })
@@ -467,7 +467,14 @@ export default function ChequesCenter() {
       </div>
 
       {/* الجدول */}
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد شيكات" المضلِّلة (شيكات مستحقة قد لا تظهر) */
+        <div className="bg-white rounded-xl border-2 border-red-300 p-12 text-center">
+          <Banknote size={40} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 font-semibold">تعذّر تحميل الشيكات — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">

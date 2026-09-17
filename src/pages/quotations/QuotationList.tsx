@@ -44,7 +44,7 @@ export default function QuotationList() {
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const { data: items = [], isLoading } = useQuery({ queryKey: ['quotations-list'], queryFn: fetchQuotations })
+  const { data: items = [], isLoading, isError } = useQuery({ queryKey: ['quotations-list'], queryFn: fetchQuotations })
   const reload = () => queryClient.invalidateQueries({ queryKey: ['quotations-list'] })
 
   const handleDelete = async () => {
@@ -112,7 +112,14 @@ export default function QuotationList() {
       </div>
 
       {/* القائمة */}
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل "لا توجد عروض أسعار" المضلِّلة */
+        <div className="bg-white rounded-xl border-2 border-red-300 p-12 text-center">
+          <FileText size={40} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 font-semibold">تعذّر تحميل عروض الأسعار — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <Button variant="outline" className="mt-4" onClick={reload}>إعادة المحاولة</Button>
+        </div>
+      ) : isLoading ? (
         <div className="text-center text-slate-400 py-12">جاري التحميل...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">

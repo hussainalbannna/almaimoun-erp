@@ -57,7 +57,7 @@ export default function InvoiceList() {
   const [groupBy, setGroupBy] = useState<'customer' | 'flat'>('customer')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
-  const { data: invoices = [], isLoading } = useQuery({ queryKey: ['invoices-list'], queryFn: fetchInvoicesWithBalance })
+  const { data: invoices = [], isLoading, isError } = useQuery({ queryKey: ['invoices-list'], queryFn: fetchInvoicesWithBalance })
   const reload = () => queryClient.invalidateQueries({ queryKey: ['invoices-list'] })
 
   const { filtered, totalAmount, paidAmount } = useMemo(() => {
@@ -234,7 +234,16 @@ export default function InvoiceList() {
       )}
 
       {/* Content */}
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: نعرض حالة خطأ صريحة بدل "لا توجد فواتير" المضلِّلة (قد تكون هناك فواتير لم تُجلب) */
+        <div className="bg-white rounded-xl border-2 border-red-300 py-16 text-center">
+          <FileText size={40} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 text-sm font-semibold">تعذّر تحميل الفواتير — قد تكون القائمة ناقصة. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-primary-600 hover:underline">
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : isLoading ? (
         <div className="flex justify-center py-16">
           <div className="animate-spin w-7 h-7 border-2 border-primary-600 border-t-transparent rounded-full" />
         </div>
