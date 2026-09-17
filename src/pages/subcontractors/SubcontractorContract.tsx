@@ -351,8 +351,7 @@ export default function SubcontractorContract() {
         check_number: payForm.payment_method === 'cheque' ? payForm.check_number : '',
         invoice_copy_path: invoicePath,
         payment_proof_path: proofPath,
-        has_invoice_copy: !!invoicePath,
-        has_payment_proof: !!proofPath,
+        // has_invoice_copy / has_payment_proof عمودان محسوبان تلقائيًا في القاعدة (GENERATED ALWAYS من المسارات) — لا يُكتبان يدويًا
         notes: `دفعة مرحلة ${payStage.seq}: ${payStage.description}`,
       }).select('id').single()
       if (error) throw error
