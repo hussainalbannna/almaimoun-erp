@@ -1,113 +1,182 @@
 -- ════════════════════════════════════════════════════════════════════════
 --  سجل التدقيق (Audit Log) — تتبّع كل حركة لكل مستخدم داخل النظام
---  مؤسسة الميمون للمقاولات · الحزمة S03
+--  مؤسسة الميمون للمقاولات · الحزمة S03 · النسخة 2 (مُحصّنة بعد مراجعة Codex)
 --
 --  الهدف: تسجيل كل إضافة/تعديل/حذف على كل جدول أعمال تلقائيًا:
---         من فعلها (المستخدم) · ماذا (الجدول والسجل) · متى · البيانات قبل/بعد.
---  الفائدة: (1) رؤية تحرّكات كل موظف حرفيًا. (2) استرجاع أي سجل حُذف بالخطأ
---           من نسخته الكاملة المحفوظة (old_data). قاعدة «لا شيء يختفي».
+--         من فعلها · دور المنفّذ · اتصال النظام · متى · القيم قبل/بعد.
+--  الفائدة: (1) رؤية تحرّكات كل موظف. (2) استرجاع بيانات أي صف حُذف بالخطأ من
+--           نسخته المحفوظة (old_data). ملاحظة صادقة: يُسترجَع «صف قاعدة البيانات»،
+--           لا محتوى ملفات المرفقات في التخزين (Storage) — تلك خطة منفصلة.
 --
---  المبدأ الأمني: السجل للقراءة فقط من التطبيق؛ لا يُعدّل ولا يُحذف من أحد —
---  تكتب فيه دالة المُشغِّل وحدها (SECURITY DEFINER) فيبقى دليلًا لا يُعبث به.
---  إضافي بالكامل: لا يغيّر أي سلوك قائم في النظام (خطر تشغيلي ضئيل جدًا).
+--  الحماية من العبث (تحصين v2):
+--   • RLS: قراءة فقط للمصادَقين، بلا سياسات كتابة/حذف.
+--   • ACL صريح: سحب كل صلاحيات الكتابة وTRUNCATE من PUBLIC/anon/authenticated/
+--     service_role، ومنح SELECT فقط للمصادَقين. الكتابة حصراً عبر دالة المُشغِّل
+--     (SECURITY DEFINER بمالك موثوق). حدّ الثقة: مالك القاعدة/المدير الخارق يبقى
+--     قادرًا على تغيير الكائنات — مقاومة عبث المدير الكاملة تحتاج سجلًا خارجيًا.
+--   • TRUNCATE ممنوع على الجداول المُدقَّقة (التطبيق يستخدم DELETE فيُسجَّل ويُسترجَع).
+--   • تغطية مستقبلية: مُشغِّل أحداث يُلحِق التدقيق بأي جدول جديد في public تلقائيًا.
+--
+--  سلوك مقصود (يُوثّق بصراحة): التدقيق متزامن داخل المعاملة (fail-closed) — لو تعذّر
+--  التسجيل تفشل العملية، فلا تمرّ كتابة غير مُسجَّلة. هذا تشديد مقصود لضمان الشمول.
 -- ════════════════════════════════════════════════════════════════════════
 
 -- ─── 1) جدول السجل ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.audit_log (
-  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  happened_at  timestamptz NOT NULL DEFAULT now(),
-  actor_id     uuid,        -- معرّف المستخدم المنفّذ (auth.uid()) — قد يكون NULL لعمليات النظام
-  actor_email  text,        -- بريد المنفّذ من رمز الجلسة (JWT) — لعرض بشري مباشر
-  actor_role   text,        -- دور قاعدة البيانات المنفِّذ (authenticated / service_role …)
-  action       text NOT NULL CHECK (action IN ('INSERT','UPDATE','DELETE')),
-  table_name   text NOT NULL,
-  record_id    text,        -- المعرّف الأساسي للسجل (نصًّا؛ يغطّي uuid وغيره)
-  old_data     jsonb,       -- نسخة السجل قبل التغيير (للتعديل/الحذف) — مصدر الاسترجاع
-  new_data     jsonb        -- نسخة السجل بعد التغيير (للإضافة/التعديل)
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  happened_at    timestamptz NOT NULL DEFAULT clock_timestamp(), -- وقت الصف الفعلي (لا بداية المعاملة)
+  txid           bigint NOT NULL DEFAULT txid_current(),         -- لتجميع تغييرات المعاملة الواحدة
+  actor_id       uuid,        -- auth.uid() من رمز الجلسة (JWT) — NULL لو لا مستخدم بشري
+  actor_email    text,        -- بريد المنفّذ من claims
+  actor_jwt_role text,        -- دور الرمز (authenticated …) — NULL لو لا JWT (لا نختلق مستخدمًا)
+  db_session_user text,       -- هوية اتصال القاعدة (authenticator/postgres…) — مصدر النظام
+  action         text NOT NULL CHECK (action IN ('INSERT','UPDATE','DELETE','TRUNCATE')),
+  table_name     text NOT NULL,
+  record_id      text,        -- قيمة id إن وُجدت؛ وإلا NULL (المفتاح الكامل محفوظ في old/new_data)
+  old_data       jsonb,       -- الصف قبل التغيير (تعديل/حذف) — مصدر استرجاع بيانات الصف
+  new_data       jsonb        -- الصف بعد التغيير (إضافة/تعديل)
 );
 
--- فهارس للبحث السريع في شاشة النشاط (حسب المستخدم/الجدول/الوقت)
 CREATE INDEX IF NOT EXISTS idx_audit_log_happened_at ON public.audit_log (happened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_log_actor       ON public.audit_log (actor_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_table_rec   ON public.audit_log (table_name, record_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_txid        ON public.audit_log (txid);
 
-COMMENT ON TABLE public.audit_log IS 'سجل تدقيق: كل إضافة/تعديل/حذف على جداول الأعمال — من، ماذا، متى، وقيم قبل/بعد. للقراءة فقط؛ لا يُعدّل/يُحذف.';
+COMMENT ON TABLE public.audit_log IS 'سجل تدقيق: كل إضافة/تعديل/حذف على جداول الأعمال — من، دوره، اتصال النظام، متى، وقيم قبل/بعد. للقراءة فقط؛ لا يُعدّل/يُحذف من أدوار التطبيق.';
 
--- ─── 2) حماية السجل (RLS): قراءة فقط للمستخدمين المصادَقين، ولا كتابة/حذف من أحد ─
+-- ─── 2) حماية السجل: RLS + ACL صريح ─────────────────────────────────────
 ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS audit_log_select ON public.audit_log;
-CREATE POLICY audit_log_select ON public.audit_log
-  FOR SELECT TO authenticated USING (true);
--- عمدًا: لا سياسات INSERT/UPDATE/DELETE — فلا يستطيع أي مستخدم الكتابة أو المحو.
--- الكتابة الوحيدة تأتي من دالة المُشغِّل أدناه (SECURITY DEFINER) التي تتجاوز RLS.
+-- ACL: انزع كل شيء من الأدوار العامة/التطبيق/الخدمة، ثم امنح SELECT فقط للمصادَقين.
+-- سحب ALL يشمل INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER — فلا عبث عبر مسار مخوّل.
+REVOKE ALL ON public.audit_log FROM PUBLIC;
+REVOKE ALL ON public.audit_log FROM anon;
+REVOKE ALL ON public.audit_log FROM authenticated;
+REVOKE ALL ON public.audit_log FROM service_role;
+GRANT SELECT ON public.audit_log TO authenticated;
 
--- ─── 3) دالة المُشغِّل: تلتقط الصف والمنفّذ وتكتب في السجل ────────────────────
+-- تسلسل عمود الهوية: لا حاجة له لأي دور تطبيق (الإدراج عبر الدالة المالكة) — ننزع صلاحياته
+DO $$
+DECLARE seq text := pg_get_serial_sequence('public.audit_log','id');
+BEGIN
+  IF seq IS NOT NULL THEN
+    EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, anon, authenticated, service_role;', seq);
+  END IF;
+END $$;
+
+-- RLS: قراءة فقط للمصادَقين (قرار المالك: متاح لكل الموظفين). لا سياسات كتابة/حذف عمدًا.
+DROP POLICY IF EXISTS audit_log_select ON public.audit_log;
+CREATE POLICY audit_log_select ON public.audit_log FOR SELECT TO authenticated USING (true);
+
+-- ─── 3) دالة التقاط الصف: تفصل هوية المستخدم (JWT) عن اتصال النظام ──────────
 CREATE OR REPLACE FUNCTION public.audit_capture()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = pg_catalog, pg_temp     -- مقيّد؛ كل كائنات public/auth مؤهَّلة بالاسم الكامل
 AS $$
 DECLARE
   v_claims jsonb := NULLIF(current_setting('request.jwt.claims', true), '')::jsonb;
-  v_actor  uuid  := auth.uid();
+  v_actor  uuid  := auth.uid();            -- من sub في claims — NULL لو لا JWT (لا نختلق)
   v_email  text  := v_claims ->> 'email';
-  v_role   text  := v_claims ->> 'role';
+  v_jwt    text  := v_claims ->> 'role';   -- دور الرمز؛ يبقى NULL للعمليات النظامية
+  v_sess   text  := session_user;          -- اتصال القاعدة (authenticator/postgres…) منفصل
   v_rec    text;
 BEGIN
-  -- دور المنفّذ: من مطالبة الرمز إن وُجدت، وإلا دور الجلسة الفعلي (عمليات النظام/الخدمة)
-  IF v_role IS NULL OR v_role = '' THEN
-    v_role := current_user;
-  END IF;
-
   IF TG_OP = 'DELETE' THEN
     v_rec := to_jsonb(OLD) ->> 'id';
-    INSERT INTO public.audit_log(actor_id, actor_email, actor_role, action, table_name, record_id, old_data, new_data)
-    VALUES (v_actor, v_email, v_role, 'DELETE', TG_TABLE_NAME, v_rec, to_jsonb(OLD), NULL);
+    INSERT INTO public.audit_log(actor_id,actor_email,actor_jwt_role,db_session_user,action,table_name,record_id,old_data,new_data)
+    VALUES (v_actor, v_email, v_jwt, v_sess, 'DELETE', TG_TABLE_NAME, v_rec, to_jsonb(OLD), NULL);
     RETURN OLD;
 
   ELSIF TG_OP = 'UPDATE' THEN
     v_rec := to_jsonb(NEW) ->> 'id';
-    INSERT INTO public.audit_log(actor_id, actor_email, actor_role, action, table_name, record_id, old_data, new_data)
-    VALUES (v_actor, v_email, v_role, 'UPDATE', TG_TABLE_NAME, v_rec, to_jsonb(OLD), to_jsonb(NEW));
+    INSERT INTO public.audit_log(actor_id,actor_email,actor_jwt_role,db_session_user,action,table_name,record_id,old_data,new_data)
+    VALUES (v_actor, v_email, v_jwt, v_sess, 'UPDATE', TG_TABLE_NAME, v_rec, to_jsonb(OLD), to_jsonb(NEW));
     RETURN NEW;
 
   ELSE -- INSERT
     v_rec := to_jsonb(NEW) ->> 'id';
-    INSERT INTO public.audit_log(actor_id, actor_email, actor_role, action, table_name, record_id, old_data, new_data)
-    VALUES (v_actor, v_email, v_role, 'INSERT', TG_TABLE_NAME, v_rec, NULL, to_jsonb(NEW));
+    INSERT INTO public.audit_log(actor_id,actor_email,actor_jwt_role,db_session_user,action,table_name,record_id,old_data,new_data)
+    VALUES (v_actor, v_email, v_jwt, v_sess, 'INSERT', TG_TABLE_NAME, v_rec, NULL, to_jsonb(NEW));
     RETURN NEW;
   END IF;
 END;
 $$;
+REVOKE EXECUTE ON FUNCTION public.audit_capture() FROM PUBLIC;
+COMMENT ON FUNCTION public.audit_capture() IS 'مُشغِّل صفّي: يكتب في audit_log لكل INSERT/UPDATE/DELETE مع فصل هوية JWT عن اتصال النظام.';
 
-COMMENT ON FUNCTION public.audit_capture() IS 'مُشغِّل التدقيق: يكتب صفًّا في audit_log لكل INSERT/UPDATE/DELETE مع المنفّذ والقيم قبل/بعد.';
+-- ─── 4) منع TRUNCATE على الجداول المُدقَّقة (يحمي قاعدة «لا شيء يختفي») ──────
+CREATE OR REPLACE FUNCTION public.audit_block_truncate()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+  RAISE EXCEPTION 'TRUNCATE ممنوع على الجدول المُدقَّق «%» — استخدم DELETE ليُسجَّل ويبقى قابلاً للاسترجاع.', TG_TABLE_NAME;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION public.audit_block_truncate() FROM PUBLIC;
 
--- ─── 4) ربط المُشغِّل بكل جداول الأعمال (ما عدا جدول السجل نفسه) ──────────────
---  نمرّ على كل الجداول الأساسية في public ونركّب مُشغِّلًا واحدًا بعد كل عملية.
---  نستثني audit_log (منعًا للتكرار اللانهائي). idempotent: نُسقط المُشغِّل قبل إنشائه.
+-- ─── 5) دالة ربط المُشغِّلات بجدول (تُستخدم للحالي والمستقبلي) ─────────────
+CREATE OR REPLACE FUNCTION public.audit_attach(p_table text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+  EXECUTE format('DROP TRIGGER IF EXISTS zz_audit ON public.%I;', p_table);
+  EXECUTE format('CREATE TRIGGER zz_audit AFTER INSERT OR UPDATE OR DELETE ON public.%I
+                    FOR EACH ROW EXECUTE FUNCTION public.audit_capture();', p_table);
+  EXECUTE format('DROP TRIGGER IF EXISTS zz_audit_truncate ON public.%I;', p_table);
+  EXECUTE format('CREATE TRIGGER zz_audit_truncate BEFORE TRUNCATE ON public.%I
+                    FOR EACH STATEMENT EXECUTE FUNCTION public.audit_block_truncate();', p_table);
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION public.audit_attach(text) FROM PUBLIC;
+
+-- ─── 6) ربط كل الجداول الموجودة الآن (ما عدا جدول السجل نفسه) ───────────────
 DO $$
-DECLARE
-  r record;
+DECLARE r record;
 BEGIN
   FOR r IN
     SELECT c.relname AS tbl
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relkind = 'r'                 -- جداول عادية فقط (لا Views)
-      AND c.relname <> 'audit_log'
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname <> 'audit_log'
   LOOP
-    EXECUTE format('DROP TRIGGER IF EXISTS zz_audit ON public.%I;', r.tbl);
-    EXECUTE format(
-      'CREATE TRIGGER zz_audit AFTER INSERT OR UPDATE OR DELETE ON public.%I
-         FOR EACH ROW EXECUTE FUNCTION public.audit_capture();',
-      r.tbl
-    );
+    PERFORM public.audit_attach(r.tbl);
+  END LOOP;
+END $$;
+
+-- ─── 7) تغطية مستقبلية: مُشغِّل أحداث يُلحِق التدقيق بأي جدول جديد في public ──
+CREATE OR REPLACE FUNCTION public.audit_on_ddl()
+RETURNS event_trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE obj record; v_name text; v_kind "char"; v_ns text;
+BEGIN
+  FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands() WHERE command_tag = 'CREATE TABLE'
+  LOOP
+    SELECT c.relname, c.relkind, n.nspname INTO v_name, v_kind, v_ns
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.oid = obj.objid;
+    -- جداول عادية في public فقط، ما عدا السجل
+    IF v_ns = 'public' AND v_kind = 'r' AND v_name <> 'audit_log' THEN
+      PERFORM public.audit_attach(v_name);
+    END IF;
   END LOOP;
 END;
 $$;
 
--- ملاحظة تشغيلية (خارج نطاق هذه الهجرة): يُنصح لاحقًا بسياسة احتفاظ (retention)
--- أو أرشفة دورية لـ audit_log إذا كبر حجمه، وبشاشة «نشاط الموظفين» للعرض فقط.
+DROP EVENT TRIGGER IF EXISTS audit_on_create_table;
+CREATE EVENT TRIGGER audit_on_create_table ON ddl_command_end
+  WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION public.audit_on_ddl();
+
+-- ملاحظات متابعة (خارج نطاق هذه الهجرة، موثّقة صراحةً):
+--  • أرشفة/احتفاظ (retention) لـ audit_log عند كبر الحجم + شاشة «نشاط الموظفين».
+--  • حفظ/أرشفة ملفات المرفقات في التخزين إن لزم استرجاعها (خطة مستقلة).
+--  • السجل لا يلتقط SELECT ولا المحاولات الفاشلة، ويتراجع مع rollback المعاملة (بحكم التصميم).
