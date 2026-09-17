@@ -8,6 +8,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 // ── هيكل التطبيق (يُحمّل مباشرةً لأنه يُعرض دائماً) ──
 import AppLayout from './components/layout/AppLayout'
 import ProtectedRoute from './components/layout/ProtectedRoute'
+import OwnerRoute from './components/layout/OwnerRoute'
 
 // ── الصفحات تُحمّل كسولياً (code-splitting): كل صفحة في حزمة منفصلة تُجلب عند فتحها فقط،
 //    ما يقلّص الحزمة الأولية بشكل كبير (المكتبات الثقيلة مثل pdfjs/tesseract/xlsx لم تعد تُحمّل عند الإقلاع). ──
@@ -74,6 +75,7 @@ const ClientStatement = lazy(() => import('./pages/statements/ClientStatement'))
 const ContactsDirectory = lazy(() => import('./pages/contacts/ContactsDirectory'))
 
 const DocumentsPage = lazy(() => import('./pages/documents/DocumentsPage'))
+const ActivityLog = lazy(() => import('./pages/activity/ActivityLog'))
 const Settings = lazy(() => import('./pages/settings/Settings'))
 
 const queryClient = new QueryClient({
@@ -208,6 +210,8 @@ export default function App() {
 
                 {/* أخرى */}
                 <Route path="documents" element={<DocumentsPage />} />
+                {/* سجل نشاط الموظفين — للمالك وحده (حارس واجهة + RLS في القاعدة) */}
+                <Route path="activity" element={<OwnerRoute><ActivityLog /></OwnerRoute>} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>

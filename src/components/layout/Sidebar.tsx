@@ -1,7 +1,10 @@
+import { useMemo } from 'react'
 import { NavLink } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { NAV_GROUPS } from '../../lib/navigation'
 import { prefetchRoute } from '../../lib/prefetchRoutes'
+import { useAuth } from '../../contexts/AuthContext'
+import { isOwner } from '../../lib/authz'
 
 // قائمة التنقّل تُقرأ من المصدر الموحّد (src/lib/navigation.ts) —
 // أي مسار جديد يُضاف هناك مرة واحدة فيظهر هنا وفي عنوان الهيدر معاً
@@ -12,6 +15,21 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
+  const { user } = useAuth()
+
+  // نُخفي عناصر "المالك فقط" (مثل سجل نشاط الموظفين) عن باقي المستخدمين في الواجهة.
+  // ملاحظة أمنية: هذا إخفاء بصري فقط؛ الحارس الفعلي هو RLS في القاعدة — لا تُقرأ
+  // بيانات السجل حتى لو وصل مستخدم آخر إلى المسار مباشرةً.
+  const groups = useMemo(() => {
+    const owner = isOwner(user?.email)
+    return NAV_GROUPS
+      .map(group => ({
+        ...group,
+        items: group.items.filter(item => !item.ownerOnly || owner),
+      }))
+      .filter(group => group.items.length > 0)
+  }, [user?.email])
+
   return (
     <>
       {open && (
@@ -56,7 +74,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Nav */}
         <nav className="flex-1 p-3 overflow-y-auto scrollbar-thin space-y-3" aria-label="التنقّل الرئيسي">
-          {NAV_GROUPS.map((group, gi) => (
+          {groups.map((group, gi) => (
             <div key={gi}>
               {group.label && (
                 <div className="text-xs font-semibold uppercase px-3 mb-1" style={{ color: '#c4925a55', letterSpacing: '0.08em' }}>
