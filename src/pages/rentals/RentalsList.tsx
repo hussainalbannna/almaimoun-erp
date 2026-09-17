@@ -127,7 +127,7 @@ export default function RentalsList() {
   // نموذج تسجيل دفعة
   const [payFor, setPayFor] = useState<Rental | null>(null)
 
-  const { data = EMPTY_RENTALS_DATA, isLoading } = useQuery({ queryKey: ['rentals-list'], queryFn: fetchRentalsData })
+  const { data = EMPTY_RENTALS_DATA, isLoading, isError } = useQuery({ queryKey: ['rentals-list'], queryFn: fetchRentalsData })
   const rentals = data.rentals
   const payments = data.payments
   const reload = () => queryClient.invalidateQueries({ queryKey: ['rentals-list'] })
@@ -245,7 +245,14 @@ export default function RentalsList() {
         ))}
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        /* فشل التحميل: حالة خطأ صريحة بدل عرض إجماليات/مستحقات/دفعات صفرية مضلِّلة */
+        <div className="bg-white rounded-xl border-2 border-red-300 p-12 text-center">
+          <Receipt size={40} className="mx-auto text-red-300 mb-3" />
+          <p className="text-red-700 font-semibold">تعذّر تحميل الإيجارات والدفعات — الإجماليات والمستحقات قد تكون ناقصة أو صفرية. لا تعتمد على هذه الشاشة.</p>
+          <button onClick={reload} className="mt-3 inline-block text-sm text-amber-700 hover:underline">إعادة المحاولة</button>
+        </div>
+      ) : isLoading ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">جاري التحميل...</div>
       ) : (
         <>
