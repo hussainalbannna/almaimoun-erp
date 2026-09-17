@@ -97,7 +97,10 @@ export async function safeSelect<T = Record<string, unknown>>(
       // ترتيب حتمي بالمعرّف (كسر تعادل يُلحَق بعد ترتيب المُستدعي) — بدونه قد يتكرّر أو يُسقَط صف بين دفعات الترقيم
       query = query.order('id', { ascending: true })
       const { data, error } = await query.range(from, from + PAGE - 1)
-      if (error) { console.error(`[${table}] خطأ في القراءة:`, error.message); break }
+      // فشل حقيقي دائم (طبقة النقل fetchWithRetry تكفّلت بإعادة محاولة أخطاء الشبكة/5xx المؤقتة أصلاً).
+      // نرمي الخطأ بدل إرجاع بيانات ناقصة بصمت: إرجاع صفوف أقلّ من الحقيقة أخطر من ظهور خطأ واضح
+      // (إجماليات مالية مغلوطة، تقارير مبتورة، بيانات «تختفي»). المُستدعي يعرض خطأً/إعادة محاولة.
+      if (error) throw new Error(`[${table}] فشل قراءة صفحة تبدأ من ${from}: ${error.message}`)
       const rows = (data ?? []) as T[]
       all.push(...rows)
       if (rows.length === 0) break
@@ -105,8 +108,9 @@ export async function safeSelect<T = Record<string, unknown>>(
     }
     return all
   } catch (e) {
-    console.error(`[${table}] استثناء:`, e)
-    return all
+    // لا نبتلع الخطأ ولا نُرجع نتيجة جزئية — نُسجّله ونعيد رميه ليتعامل معه المُستدعي بوضوح.
+    console.error(`[${table}] فشل الجلب الآمن:`, e)
+    throw e
   }
 }
 

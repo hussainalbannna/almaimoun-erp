@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Printer, TrendingUp, TrendingDown, BarChart2, FileText } from 'lucide-react'
-import { supabase } from '../../lib/supabase'
+import { supabase, safeSelect } from '../../lib/supabase'
 import { formatCurrency } from '../../lib/utils'
 import Button from '../../components/ui/Button'
 
@@ -45,9 +45,10 @@ async function fetchReportsData(year: number): Promise<ReportsData> {
   const [projRes, milRes, expRes, wRes, laborRes, adjRes] = await Promise.all([
     supabase.from('projects').select('id, project_name, contract_value, status'),
     supabase.from('project_milestones').select('project_id, amount, status'),
-    supabase.from('accounts_payable').select('amount, entry_date, category').gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`),
+    // ترقيم تلقائي: سنة نشطة قد تتجاوز 1000 صف من المصاريف/العمالة فتُقتطع بصمت ويُقلّل التقرير السنوي المصاريف
+    safeSelect<{ amount: number; entry_date: string; category: string }>('accounts_payable', 'amount, entry_date, category', q => q.gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`)).then(data => ({ data })),
     supabase.from('workers').select('id, worker_type, pay_type, actual_salary, daily_rate, basic_salary, social_allowance'),
-    supabase.from('project_labor_entries').select('amount, cost_date').gte('cost_date', `${year}-01-01`).lte('cost_date', `${year}-12-31`),
+    safeSelect<{ amount: number; cost_date: string }>('project_labor_entries', 'amount, cost_date', q => q.gte('cost_date', `${year}-01-01`).lte('cost_date', `${year}-12-31`)).then(data => ({ data })),
     supabase.from('payroll_adjustments').select('worker_id, month, overtime, present_days, daily_rate').eq('year', year),
   ])
 

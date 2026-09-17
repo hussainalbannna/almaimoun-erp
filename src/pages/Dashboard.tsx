@@ -78,10 +78,11 @@ async function fetchDashboardStats(): Promise<Stats> {
     // safeSelect يُرقّم تلقائيًا فلا يُقتطع الحضور عند 1000 صف (ينمو ~1000/شهر) → تكلفة العمالة دقيقة دائمًا
     safeSelect<{ project_id: string | null; worker_id: string; status: string | null }>('worker_attendance', 'project_id, worker_id, status').then(data => ({ data })),
     safe(supabase.from('workers').select('id, pay_type, daily_rate, actual_salary, basic_salary, social_allowance')),
-    safe(supabase.from('daily_logs').select('project_id, overtime_amount')),
-    safe(supabase.from('project_labor_entries').select('project_id, amount')),
+    // ترقيم تلقائي (تمنع اقتطاع 1000 صف بصمت): daily_logs تقارب الحدّ، والأوفرتايم/العمالة/دفعات الإيجار تنمو باستمرار
+    safeSelect<{ project_id: string | null; overtime_amount: number | null }>('daily_logs', 'project_id, overtime_amount').then(data => ({ data })),
+    safeSelect<{ project_id: string | null; amount: number | null }>('project_labor_entries', 'project_id, amount').then(data => ({ data })),
     safe(supabase.from('rentals').select('id, project_id')),
-    safe(supabase.from('rental_payments').select('rental_id, amount, payment_method')),
+    safeSelect<{ rental_id: string; amount: number | null; payment_method: string | null }>('rental_payments', 'rental_id, amount, payment_method').then(data => ({ data })),
     safe(supabase.from('variation_orders').select('project_id, status, billable, amount')),
   ])
   // جلب الشيكات محميّ كبقية الاستعلامات: فشله يُفرّغ الشيكات فقط ولا يُسقط اللوحة كلها
